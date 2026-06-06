@@ -31,7 +31,7 @@ class DataAssetService:
                 task_id=running_task.id,
             )
 
-        task = self.tasks.create_task(
+        task = self.tasks.reset_latest_task(
             SourceRefreshService.TASK_TYPE,
             "创建 source_update 任务，准备执行每日 source 数据更新。",
         )

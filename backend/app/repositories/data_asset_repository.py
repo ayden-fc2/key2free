@@ -32,6 +32,279 @@ SOURCE_TABLE_COLUMNS: dict[str, list[str]] = {
         "code_name",
         "updated_at",
     ],
+    "bar_1d_raw": [
+        "trade_date",
+        "trade_year",
+        "code",
+        "open",
+        "high",
+        "low",
+        "close",
+        "preclose",
+        "volume",
+        "amount",
+        "adjustflag",
+        "turn",
+        "tradestatus",
+        "pct_chg",
+        "pe_ttm",
+        "pb_mrq",
+        "ps_ttm",
+        "pcf_ncf_ttm",
+        "is_st",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "bar_5m_raw": [
+        "trade_date",
+        "trade_year",
+        "code",
+        "time_raw",
+        "bar_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "adjustflag",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "adjust_factor": [
+        "code",
+        "divid_operate_date",
+        "fore_adjust_factor",
+        "back_adjust_factor",
+        "adjust_factor",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "dividend": [
+        "code",
+        "query_year",
+        "query_year_type",
+        "divid_pre_notice_date",
+        "divid_agm_pum_date",
+        "divid_plan_announce_date",
+        "divid_plan_date",
+        "divid_regist_date",
+        "divid_operate_date",
+        "divid_pay_date",
+        "divid_stock_market_date",
+        "divid_cash_ps_before_tax",
+        "divid_cash_ps_after_tax",
+        "divid_stocks_ps",
+        "divid_cash_stock",
+        "divid_reserve_to_stock_ps",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "profit": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "roe_avg",
+        "np_margin",
+        "gp_margin",
+        "net_profit",
+        "eps_ttm",
+        "mb_revenue",
+        "total_share",
+        "liqa_share",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "operation": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "nr_turn_ratio",
+        "nr_turn_days",
+        "inv_turn_ratio",
+        "inv_turn_days",
+        "ca_turn_ratio",
+        "asset_turn_ratio",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "growth": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "yoy_equity",
+        "yoy_asset",
+        "yoyni",
+        "yoyeps_basic",
+        "yoypni",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "balance": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "current_ratio",
+        "quick_ratio",
+        "cash_ratio",
+        "yoy_liability",
+        "liability_to_asset",
+        "asset_to_equity",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "cash_flow": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "ca_to_asset",
+        "nca_to_asset",
+        "tangible_asset_to_asset",
+        "ebit_to_interest",
+        "cfo_to_or",
+        "cfo_to_np",
+        "cfo_to_gr",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "dupont": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "dupont_roe",
+        "dupont_asset_sto_equity",
+        "dupont_asset_turn",
+        "dupont_pnitoni",
+        "dupont_nitogr",
+        "dupont_tax_burden",
+        "dupont_intburden",
+        "dupont_ebittogr",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "performance_express": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "performance_exp_update_date",
+        "performance_express_total_asset",
+        "performance_express_net_asset",
+        "performance_express_eps_chg_pct",
+        "performance_express_roe_wa",
+        "performance_express_eps_diluted",
+        "performance_express_gryoy",
+        "performance_express_opyoy",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "forecast": [
+        "code",
+        "pub_date",
+        "stat_date",
+        "fiscal_year",
+        "fiscal_quarter",
+        "profit_forcast_type",
+        "profit_forcast_abstract",
+        "profit_forcast_chg_pct_up",
+        "profit_forcast_chg_pct_dwn",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "deposit_rate": [
+        "pub_date",
+        "demand_deposit_rate",
+        "fixed_deposit_rate3_month",
+        "fixed_deposit_rate6_month",
+        "fixed_deposit_rate1_year",
+        "fixed_deposit_rate2_year",
+        "fixed_deposit_rate3_year",
+        "fixed_deposit_rate5_year",
+        "installment_fixed_deposit_rate1_year",
+        "installment_fixed_deposit_rate3_year",
+        "installment_fixed_deposit_rate5_year",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "loan_rate": [
+        "pub_date",
+        "loan_rate6_month",
+        "loan_rate6_month_to1_year",
+        "loan_rate1_year_to3_year",
+        "loan_rate3_year_to5_year",
+        "loan_rate_above5_year",
+        "mortgate_rate_below5_year",
+        "mortgate_rate_above5_year",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "reserve_ratio": [
+        "pub_date",
+        "effective_date",
+        "big_institutions_ratio_pre",
+        "big_institutions_ratio_after",
+        "medium_institutions_ratio_pre",
+        "medium_institutions_ratio_after",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "money_supply_month": [
+        "stat_year",
+        "stat_month",
+        "m0_month",
+        "m0_yoy",
+        "m0_chain_relative",
+        "m1_month",
+        "m1_yoy",
+        "m1_chain_relative",
+        "m2_month",
+        "m2_yoy",
+        "m2_chain_relative",
+        "stat_date",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "money_supply_year": [
+        "stat_year",
+        "m0_year",
+        "m0_year_yoy",
+        "m1_year",
+        "m1_year_yoy",
+        "m2_year",
+        "m2_year_yoy",
+        "stat_date",
+        "ingest_run_id",
+        "loaded_at",
+    ],
+    "industry_snapshot": [
+        "update_date",
+        "code",
+        "code_name",
+        "industry",
+        "industry_classification",
+        "updated_at",
+    ],
+    "index_member_snapshot": [
+        "index_code",
+        "index_name",
+        "update_date",
+        "code",
+        "code_name",
+        "updated_at",
+    ],
 }
 
 
@@ -211,13 +484,19 @@ class DataAssetRepository:
                 select dataset_name, endpoint, tier, enabled, asset_scope,
                        chunk_strategy, replace_strategy, logical_key_json,
                        expected_columns_json, duckdb_schema_json,
-                       validation_rules_json, priority
-                from meta.dataset_catalog
+                       validation_rules_json, priority,
+                       (
+                           select watermark_value
+                           from meta.dataset_watermark w
+                           where w.dataset_name = c.dataset_name
+                             and w.asset_scope = c.asset_scope
+                       ) as current_watermark
+                from meta.dataset_catalog c
                 where enabled = 1
                 order by priority, dataset_name
                 """
             ).fetchall()
-        return [
+        catalog = [
             {
                 "dataset_name": dataset_name,
                 "endpoint": endpoint,
@@ -231,6 +510,7 @@ class DataAssetRepository:
                 "duckdb_schema": json.loads(duckdb_schema_json or "{}"),
                 "validation_rules": json.loads(validation_rules_json or "[]"),
                 "priority": priority,
+                "current_watermark": current_watermark,
             }
             for (
                 dataset_name,
@@ -245,7 +525,58 @@ class DataAssetRepository:
                 duckdb_schema_json,
                 validation_rules_json,
                 priority,
+                current_watermark,
             ) in rows
+        ]
+        for item in catalog:
+            if item["dataset_name"] in {
+                "bar_1d_raw",
+                "bar_5m_raw",
+                "adjust_factor",
+                "dividend",
+                "profit",
+                "operation",
+                "growth",
+                "balance",
+                "cash_flow",
+                "dupont",
+                "performance_express",
+                "forecast",
+            }:
+                item["asset_universe"] = self.get_asset_universe(item["asset_scope"])
+        return catalog
+
+    def get_asset_universe(self, asset_scope: str) -> list[dict[str, Any]]:
+        type_map = {
+            "equity_index_etf": (1, 2, 5),
+            "equity_etf": (1, 5),
+            "equity": (1,),
+        }
+        security_types = type_map.get(asset_scope)
+        if security_types is None:
+            raise ValueError(f"unsupported asset_scope: {asset_scope}")
+        placeholders = ", ".join(["?"] * len(security_types))
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                f"""
+                select code, ipo_date, out_date, security_type
+                from source.security_master
+                where security_type in ({placeholders})
+                  and coalesce(list_status, 1) in (0, 1)
+                  and code is not null
+                  and code <> ''
+                order by code
+                """,
+                list(security_types),
+            ).fetchall()
+        return [
+            {
+                "code": code,
+                "ipo_date": ipo_date,
+                "out_date": out_date,
+                "security_type": security_type,
+            }
+            for code, ipo_date, out_date, security_type in rows
         ]
 
     def create_run_log(self) -> int:
@@ -523,14 +854,135 @@ class DataAssetRepository:
         if replace_strategy == "full_table":
             connection.execute(f"delete from {table_name}")
         elif replace_strategy == "date_window":
+            if table_name.endswith((".trade_calendar",)):
+                date_column = "calendar_date"
+            elif table_name.endswith((".deposit_rate", ".loan_rate")):
+                date_column = "pub_date"
+            elif table_name.endswith(".reserve_ratio"):
+                date_column = "effective_date"
+            elif table_name.endswith((".money_supply_month", ".money_supply_year")):
+                date_column = "stat_date"
+            else:
+                raise ValueError(f"date_window unsupported table: {table_name}")
             connection.execute(
-                f"delete from {table_name} where calendar_date between ? and ?",
+                f"delete from {table_name} where {date_column} between ? and ?",
                 [scope["start_date"], scope["end_date"]],
             )
         elif replace_strategy == "single_date":
+            if table_name.endswith(".all_stock_snapshot"):
+                connection.execute(
+                    f"delete from {table_name} where trade_date = ?",
+                    [scope["trade_date"]],
+                )
+            elif table_name.endswith(".industry_snapshot"):
+                connection.execute(
+                    f"delete from {table_name} where update_date = ?",
+                    [scope["update_date"]],
+                )
+            else:
+                raise ValueError(f"single_date unsupported table: {table_name}")
+        elif replace_strategy == "code_or_code_year":
+            if "start_date" in scope and "end_date" in scope:
+                connection.execute(
+                    f"""
+                    delete from {table_name}
+                    where code = ? and trade_date between ? and ?
+                    """,
+                    [scope["code"], scope["start_date"], scope["end_date"]],
+                )
+            elif "trade_year" in scope:
+                connection.execute(
+                    f"delete from {table_name} where code = ? and trade_year = ?",
+                    [scope["code"], scope["trade_year"]],
+                )
+            else:
+                raise ValueError("code_or_code_year requires date window or trade_year")
+        elif replace_strategy == "code_year_or_quarter":
+            if "start_date" in scope and "end_date" in scope:
+                connection.execute(
+                    f"""
+                    delete from {table_name}
+                    where code = ? and trade_date between ? and ?
+                    """,
+                    [scope["code"], scope["start_date"], scope["end_date"]],
+                )
+            elif "trade_year" in scope:
+                connection.execute(
+                    f"delete from {table_name} where code = ? and trade_year = ?",
+                    [scope["code"], scope["trade_year"]],
+                )
+            else:
+                raise ValueError("code_year_or_quarter requires date window or trade_year")
+        elif replace_strategy == "code_date_window":
+            if table_name.endswith(".adjust_factor"):
+                connection.execute(
+                    f"""
+                    delete from {table_name}
+                    where code = ? and divid_operate_date between ? and ?
+                    """,
+                    [scope["code"], scope["start_date"], scope["end_date"]],
+                )
+            elif table_name.endswith(".performance_express"):
+                connection.execute(
+                    f"""
+                    delete from {table_name}
+                    where code = ?
+                      and (
+                          pub_date between ? and ?
+                          or performance_exp_update_date between ? and ?
+                      )
+                    """,
+                    [
+                        scope["code"],
+                        scope["start_date"],
+                        scope["end_date"],
+                        scope["start_date"],
+                        scope["end_date"],
+                    ],
+                )
+            elif table_name.endswith(".forecast"):
+                connection.execute(
+                    f"""
+                    delete from {table_name}
+                    where code = ?
+                      and (
+                          pub_date between ? and ?
+                          or stat_date between ? and ?
+                      )
+                    """,
+                    [
+                        scope["code"],
+                        scope["start_date"],
+                        scope["end_date"],
+                        scope["start_date"],
+                        scope["end_date"],
+                    ],
+                )
+            else:
+                raise ValueError(f"code_date_window unsupported table: {table_name}")
+        elif replace_strategy == "code_year_type":
             connection.execute(
-                f"delete from {table_name} where trade_date = ?",
-                [scope["trade_date"]],
+                f"""
+                delete from {table_name}
+                where code = ? and query_year = ? and query_year_type = ?
+                """,
+                [scope["code"], scope["year"], scope["year_type"]],
+            )
+        elif replace_strategy == "code_year_quarter":
+            connection.execute(
+                f"""
+                delete from {table_name}
+                where code = ? and fiscal_year = ? and fiscal_quarter = ?
+                """,
+                [scope["code"], scope["year"], scope["quarter"]],
+            )
+        elif replace_strategy == "index_code_date":
+            connection.execute(
+                f"""
+                delete from {table_name}
+                where index_code = ? and update_date = ?
+                """,
+                [scope["index_code"], scope["update_date"]],
             )
         else:
             raise ValueError(f"unsupported replace strategy: {replace_strategy}")
@@ -668,6 +1120,539 @@ class DataAssetRepository:
                     "detail": {
                         "trade_date": scope["trade_date"],
                         "missing_code": int(missing_code or 0),
+                    },
+                }
+            )
+        elif dataset_name == "bar_1d_raw":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or trade_date < ?
+                                 or trade_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or trade_date is null
+                                 or trade_year is null
+                                 or trade_year <> year(trade_date)
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["code"], scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": (
+                        int(out_of_scope or 0) == 0
+                        and int(missing_required or 0) == 0
+                    ),
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "bar_5m_raw":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or trade_date < ?
+                                 or trade_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or trade_date is null
+                                 or trade_year is null
+                                 or trade_year <> year(trade_date)
+                                 or time_raw is null
+                                 or time_raw = ''
+                                 or bar_time is null
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["code"], scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": (
+                        int(out_of_scope or 0) == 0
+                        and int(missing_required or 0) == 0
+                    ),
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "adjust_factor":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or divid_operate_date < ?
+                                 or divid_operate_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or divid_operate_date is null
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["code"], scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "dividend":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or query_year <> ?
+                                 or query_year_type <> ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or query_year is null
+                                 or query_year_type is null
+                                 or query_year_type = ''
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["code"], scope["year"], scope["year_type"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "year": scope["year"],
+                        "year_type": scope["year_type"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name in {
+            "profit",
+            "operation",
+            "growth",
+            "balance",
+            "cash_flow",
+            "dupont",
+        }:
+            if int(scope["quarter"]) == 4:
+                expected_stat_date = date(int(scope["year"]), 12, 31)
+            else:
+                expected_stat_date = date(
+                    int(scope["year"]),
+                    int(scope["quarter"]) * 3 + 1,
+                    1,
+                ) - date.resolution
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or fiscal_year <> ?
+                                 or fiscal_quarter <> ?
+                                 or stat_date <> ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or stat_date is null
+                                 or fiscal_year is null
+                                 or fiscal_quarter is null
+                                 or fiscal_year <> year(stat_date)
+                                 or fiscal_quarter <> quarter(stat_date)
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [
+                    scope["code"],
+                    scope["year"],
+                    scope["quarter"],
+                    expected_stat_date,
+                ],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "year": scope["year"],
+                        "quarter": scope["quarter"],
+                        "stat_date": expected_stat_date.isoformat(),
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name in {"performance_express", "forecast"}:
+            if dataset_name == "performance_express":
+                scope_condition = """
+                    (
+                        pub_date between ? and ?
+                        or performance_exp_update_date between ? and ?
+                    )
+                """
+            else:
+                scope_condition = """
+                    (
+                        pub_date between ? and ?
+                        or stat_date between ? and ?
+                    )
+                """
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when code <> ?
+                                 or not {scope_condition}
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when code is null
+                                 or code = ''
+                                 or pub_date is null
+                                 or stat_date is null
+                                 or fiscal_year is null
+                                 or fiscal_quarter is null
+                                 or fiscal_year <> year(stat_date)
+                                 or fiscal_quarter <> quarter(stat_date)
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [
+                    scope["code"],
+                    scope["start_date"],
+                    scope["end_date"],
+                    scope["start_date"],
+                    scope["end_date"],
+                ],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "code": scope["code"],
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name in {"deposit_rate", "loan_rate"}:
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when pub_date < ? or pub_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when pub_date is null
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "reserve_ratio":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when effective_date < ? or effective_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when pub_date is null
+                                 or effective_date is null
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "money_supply_month":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when stat_date < ? or stat_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when stat_year is null
+                                 or stat_month is null
+                                 or stat_date is null
+                                 or stat_year <> year(stat_date)
+                                 or stat_month <> month(stat_date)
+                                 or day(stat_date) <> 1
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "money_supply_year":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when stat_date < ? or stat_date > ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when stat_year is null
+                                 or stat_date is null
+                                 or stat_year <> year(stat_date)
+                                 or month(stat_date) <> 12
+                                 or day(stat_date) <> 31
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["start_date"], scope["end_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": int(out_of_scope or 0) == 0 and int(missing_required or 0) == 0,
+                    "sample_count": row_count,
+                    "detail": {
+                        "start_date": scope["start_date"],
+                        "end_date": scope["end_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "industry_snapshot":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when update_date <> ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when update_date is null
+                                 or code is null
+                                 or code = ''
+                                 or code_name is null
+                                 or code_name = ''
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["update_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": (
+                        row_count > 0
+                        and int(out_of_scope or 0) == 0
+                        and int(missing_required or 0) == 0
+                    ),
+                    "sample_count": row_count,
+                    "detail": {
+                        "update_date": scope["update_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
+                    },
+                }
+            )
+        elif dataset_name == "index_member_snapshot":
+            row_count, out_of_scope, missing_required = connection.execute(
+                f"""
+                select count(*),
+                       sum(
+                           case
+                               when index_code <> ?
+                                 or update_date <> ?
+                               then 1 else 0
+                           end
+                       ),
+                       sum(
+                           case
+                               when index_code is null
+                                 or index_code = ''
+                                 or index_name is null
+                                 or index_name = ''
+                                 or update_date is null
+                                 or code is null
+                                 or code = ''
+                                 or code_name is null
+                                 or code_name = ''
+                               then 1 else 0
+                           end
+                       )
+                from {relation_name}
+                """,
+                [scope["index_code"], scope["update_date"]],
+            ).fetchone()
+            results.append(
+                {
+                    "rule_name": "scope_row_count",
+                    "severity": "error",
+                    "passed": (
+                        row_count > 0
+                        and int(out_of_scope or 0) == 0
+                        and int(missing_required or 0) == 0
+                    ),
+                    "sample_count": row_count,
+                    "detail": {
+                        "index_code": scope["index_code"],
+                        "update_date": scope["update_date"],
+                        "out_of_scope": int(out_of_scope or 0),
+                        "missing_required": int(missing_required or 0),
                     },
                 }
             )

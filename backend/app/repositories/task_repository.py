@@ -65,6 +65,42 @@ class TaskRepository:
             raise RuntimeError("failed to create task")
         return task
 
+    def reset_latest_task(self, task_type: str, initial_log: str) -> TaskDTO:
+        with self.duckdb.connect(read_only=False) as connection:
+            existing = connection.execute(
+                """
+                select id
+                from meta.my_task
+                where type = ?
+                order by id desc
+                limit 1
+                """,
+                [task_type],
+            ).fetchone()
+            if existing is None:
+                row = connection.execute(
+                    """
+                    insert into meta.my_task(type, logs, status)
+                    values (?, ?, 'running')
+                    returning id, type, logs, status
+                    """,
+                    [task_type, self._format_log(initial_log)],
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    update meta.my_task
+                    set logs = ?, status = 'running'
+                    where id = ?
+                    returning id, type, logs, status
+                    """,
+                    [self._format_log(initial_log), existing[0]],
+                ).fetchone()
+        task = self._to_task(row)
+        if task is None:
+            raise RuntimeError("failed to reset task")
+        return task
+
     def append_log(self, task_id: int, message: str) -> None:
         with self.duckdb.connect(read_only=False) as connection:
             connection.execute(
