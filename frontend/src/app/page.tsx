@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Space, Table, Tabs, Tag, message } from "antd";
+import { Button, Modal, Space, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
 import {
+  getSourceUpdateTask,
   getStockDataAssetSummary,
   requestStockDataAssetRefresh,
 } from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
-import type { StockDatasetOverview } from "@/types/dataAsset";
+import type { DataAssetTask, StockDatasetOverview } from "@/types/dataAsset";
 import type { HealthState } from "@/types/health";
 import { formatDateTime } from "@/utils/format";
 
@@ -36,6 +37,11 @@ export default function Home() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<StockDatasetOverview[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [sourceUpdateTask, setSourceUpdateTask] = useState<DataAssetTask | null>(
+    null,
+  );
+  const [sourceUpdateModalOpen, setSourceUpdateModalOpen] = useState(false);
+  const sourceUpdateRunning = sourceUpdateTask?.status === "running";
   const [messageApi, contextHolder] = message.useMessage();
 
   useEffect(() => {
@@ -78,13 +84,85 @@ export default function Home() {
   }
 
   async function requestRefresh() {
+    if (sourceUpdateRunning) {
+      setSourceUpdateModalOpen(true);
+      return;
+    }
+
     try {
       const data = await requestStockDataAssetRefresh();
       messageApi.info(data.message);
+      if (data.task_id !== null) {
+        const task = await getSourceUpdateTask(data.task_id);
+        setSourceUpdateTask(task);
+        setSourceUpdateModalOpen(true);
+      }
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "更新请求失败");
     }
   }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchRunningSourceUpdateTask() {
+      try {
+        const task = await getSourceUpdateTask();
+        if (!cancelled && task.status === "running") {
+          setSourceUpdateTask(task);
+          setSourceUpdateModalOpen(true);
+        }
+      } catch {
+        // No previous source_update task exists yet.
+      }
+    }
+
+    fetchRunningSourceUpdateTask();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !sourceUpdateModalOpen ||
+      sourceUpdateTask?.id == null ||
+      !sourceUpdateRunning
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const taskId = sourceUpdateTask.id;
+
+    async function pollTask() {
+      try {
+        const task = await getSourceUpdateTask(taskId);
+        if (!cancelled) {
+          setSourceUpdateTask(task);
+          if (task.status !== "running") {
+            fetchStockDataAssets();
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          messageApi.error(error instanceof Error ? error.message : "任务查询失败");
+        }
+      }
+    }
+
+    const timer = window.setInterval(pollTask, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    messageApi,
+    sourceUpdateModalOpen,
+    sourceUpdateTask?.id,
+    sourceUpdateRunning,
+  ]);
 
   useEffect(() => {
     if (activeTab === "data-assets") {
@@ -114,11 +192,17 @@ export default function Home() {
       fixed: "left",
       render: (status: string) => {
         const color =
-          status === "ok" ? "green" : status === "warning" ? "orange" : "red";
+          status === "ok"
+            ? "green"
+            : status === "warning"
+              ? "orange"
+              : status === "unknown" || status === "empty"
+                ? "default"
+                : "red";
         return <Tag color={color}>{status}</Tag>;
       },
       title: "状态",
-      width: 100,
+      width: 140,
     },
     {
       dataIndex: "watermark",
@@ -139,6 +223,39 @@ export default function Home() {
       width: 210,
     },
     {
+      dataIndex: "latest_validation_at",
+      render: (value: string | null) => formatDateTime(value),
+      title: "最近校验",
+      width: 210,
+    },
+    {
+      dataIndex: "validation_failed_count",
+      render: (value: number) =>
+        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
+      title: "校验失败",
+      width: 110,
+    },
+    {
+      dataIndex: "latest_chunk_status",
+      render: (value: string | null) => value ?? "-",
+      title: "最近分片",
+      width: 120,
+    },
+    {
+      dataIndex: "chunk_failed_count",
+      render: (value: number) =>
+        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
+      title: "失败分片",
+      width: 110,
+    },
+    {
+      dataIndex: "open_repair_count",
+      render: (value: number) =>
+        value > 0 ? <Tag color="orange">{value}</Tag> : <Tag>0</Tag>,
+      title: "待修复",
+      width: 100,
+    },
+    {
       dataIndex: "endpoint",
       title: "接口",
       width: 173,
@@ -155,6 +272,37 @@ export default function Home() {
   return (
     <main className="app-shell">
       {contextHolder}
+      <Modal
+        footer={[
+          <Button
+            key="close"
+            onClick={() => setSourceUpdateModalOpen(false)}
+            type="primary"
+          >
+            关闭
+          </Button>,
+        ]}
+        open={sourceUpdateModalOpen}
+        title="source_update 更新任务"
+        width={760}
+        onCancel={() => setSourceUpdateModalOpen(false)}
+      >
+        <div className="task-modal-header">
+          <span>任务 ID: {sourceUpdateTask?.id ?? "-"}</span>
+          <Tag
+            color={
+              sourceUpdateTask?.status === "success"
+                ? "green"
+                : sourceUpdateTask?.status === "error"
+                  ? "red"
+                  : "blue"
+            }
+          >
+            {sourceUpdateTask?.status ?? "unknown"}
+          </Tag>
+        </div>
+        <pre className="task-log">{sourceUpdateTask?.logs || "等待任务日志..."}</pre>
+      </Modal>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">A</div>
@@ -211,6 +359,8 @@ export default function Home() {
                   </Button>
                   <Button
                     icon={<SyncOutlined />}
+                    disabled={sourceUpdateRunning}
+                    loading={sourceUpdateRunning}
                     onClick={requestRefresh}
                     type="primary"
                   >
@@ -224,7 +374,7 @@ export default function Home() {
                 loading={datasetsLoading}
                 pagination={false}
                 rowKey="dataset_name"
-                scroll={{ x: 1183 }}
+                scroll={{ x: 1733 }}
                 size="middle"
               />
             </div>

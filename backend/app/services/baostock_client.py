@@ -40,6 +40,14 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         result = bs.query_trade_dates(start_date=start_date, end_date=end_date)
         return self._collect_result(result)
 
+    def query_stock_basic(self) -> BaoStockResponse:
+        result = bs.query_stock_basic()
+        return self._collect_result(result)
+
+    def query_all_stock(self, *, day: str) -> BaoStockResponse:
+        result = bs.query_all_stock(day=day)
+        return self._collect_result(result)
+
     def query_history_k_data_plus(
         self,
         *,

@@ -222,6 +222,26 @@ button {
   font-weight: 700;
 }
 
+.task-modal-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.task-log {
+  background: #0f172a;
+  border-radius: 6px;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
 .placeholder p {
   color: var(--muted);
   margin: 8px 0 0;

@@ -7,6 +7,11 @@ export type StockDatasetOverview = {
   actual_max_date: string | null;
   updated_at: string | null;
   status: string;
+  latest_validation_at: string | null;
+  validation_failed_count: number;
+  latest_chunk_status: string | null;
+  chunk_failed_count: number;
+  open_repair_count: number;
 };
 
 export type StockDataAssetSummary = {
@@ -16,4 +21,12 @@ export type StockDataAssetSummary = {
 export type StockDataAssetRefresh = {
   status: string;
   message: string;
+  task_id: number | null;
+};
+
+export type DataAssetTask = {
+  id: number | null;
+  type: string;
+  logs: string;
+  status: "running" | "error" | "success" | string;
 };

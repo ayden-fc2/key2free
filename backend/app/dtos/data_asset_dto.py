@@ -14,6 +14,11 @@ class StockDatasetOverviewDTO:
     actual_max_date: Optional[str]
     updated_at: Optional[str]
     status: str
+    latest_validation_at: Optional[str]
+    validation_failed_count: int
+    latest_chunk_status: Optional[str]
+    chunk_failed_count: int
+    open_repair_count: int
 
 
 @dataclass(frozen=True)
@@ -25,3 +30,12 @@ class StockDataAssetSummaryDTO:
 class StockDataAssetRefreshDTO:
     status: str
     message: str
+    task_id: int | None = None
+
+
+@dataclass(frozen=True)
+class TaskDTO:
+    id: int | None
+    type: str
+    logs: str
+    status: str
