@@ -1,6 +1,7 @@
 # OS / editor
 .DS_Store
 .obsidian/workspace.json
+**/.obsidian/workspace.json
 
 # Python
 .venv/
