@@ -1,3 +1,24 @@
+## 本项目入库命名
+
+BaoStock 历史 K 线接口返回的数据在本项目中按以下规则入库和派生：
+
+| 数据 | 表/视图 | 用途 |
+| --- | --- | --- |
+| 日线原始行情 | `source.bar_1d_raw` | 保存 BaoStock `frequency=d`、`adjustflag=3` 的原始日 K 数据 |
+| 5分钟原始行情 | `source.bar_5m_raw` | 保存 BaoStock `frequency=5`、`adjustflag=3` 的原始分钟 K 数据 |
+| 周线行情 | `mart.bar_1w` | 由 `source.bar_1d_raw` 聚合生成 |
+| 月线行情 | `mart.bar_1m` | 由 `source.bar_1d_raw` 聚合生成 |
+| 年线行情 | `mart.bar_1y` | 由 `source.bar_1d_raw` 聚合生成 |
+| 15分钟行情 | `mart.bar_15m` | 由 `source.bar_5m_raw` 聚合生成 |
+| 30分钟行情 | `mart.bar_30m` | 由 `source.bar_5m_raw` 聚合生成 |
+| 60分钟行情 | `mart.bar_60m` | 由 `source.bar_5m_raw` 聚合生成 |
+| 日线前复权行情 | `mart.bar_1d_qfq` | 由 `source.bar_1d_raw` 和 `source.adjust_factor` 计算生成 |
+| 日线后复权行情 | `mart.bar_1d_hfq` | 由 `source.bar_1d_raw` 和 `source.adjust_factor` 计算生成 |
+| 5分钟前复权行情 | `mart.bar_5m_qfq` | 由 `source.bar_5m_raw` 和 `source.adjust_factor` 计算生成 |
+| 5分钟后复权行情 | `mart.bar_5m_hfq` | 由 `source.bar_5m_raw` 和 `source.adjust_factor` 计算生成 |
+
+同步脚本只应直接维护 `source.bar_1d_raw`、`source.bar_5m_raw` 和 `source.adjust_factor`。`mart` 下的 K 线资产由计算视图或后续计算任务生成，不直接调用 BaoStock 写入。
+
 注意：
 
 
@@ -219,4 +240,3 @@ volume	成交数量	单位：股； 时间范围内的累计成交数量
 amount	成交金额	精度：小数点后4位；单位：人民币元； 时间范围内的累计成交金额
 
 adjustflag	复权状态	不复权、前复权、后复权
-

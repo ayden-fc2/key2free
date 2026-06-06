@@ -9,28 +9,28 @@ from app.repositories.duckdb_repository import DuckDBRepository
 
 class DataAssetRepository:
     DATASET_TABLES: dict[str, dict[str, str]] = {
-        "sourcedata_security_master": {"table_name": "dim.sourcedata_security_master", "date_column": "updated_at"},
-        "sourcedata_trade_calendar": {"table_name": "dim.sourcedata_trade_calendar", "date_column": "calendar_date"},
-        "sourcedata_all_stock_snapshot": {"table_name": "dim.sourcedata_all_stock_snapshot", "date_column": "trade_date"},
-        "sourcedata_bar_1d_raw": {"table_name": "fact.sourcedata_bar_1d_raw", "date_column": "trade_date"},
-        "sourcedata_bar_5m_raw": {"table_name": "fact.sourcedata_bar_5m_raw", "date_column": "trade_date"},
-        "sourcedata_adjust_factor": {"table_name": "fact.sourcedata_adjust_factor", "date_column": "divid_operate_date"},
-        "sourcedata_dividend": {"table_name": "fact.sourcedata_dividend", "date_column": "divid_operate_date"},
-        "sourcedata_profit": {"table_name": "fin.sourcedata_profit", "date_column": "stat_date"},
-        "sourcedata_operation": {"table_name": "fin.sourcedata_operation", "date_column": "stat_date"},
-        "sourcedata_growth": {"table_name": "fin.sourcedata_growth", "date_column": "stat_date"},
-        "sourcedata_balance": {"table_name": "fin.sourcedata_balance", "date_column": "stat_date"},
-        "sourcedata_cash_flow": {"table_name": "fin.sourcedata_cash_flow", "date_column": "stat_date"},
-        "sourcedata_dupont": {"table_name": "fin.sourcedata_dupont", "date_column": "stat_date"},
-        "sourcedata_performance_express": {"table_name": "fin.sourcedata_performance_express", "date_column": "pub_date"},
-        "sourcedata_forecast": {"table_name": "fin.sourcedata_forecast", "date_column": "pub_date"},
-        "sourcedata_deposit_rate": {"table_name": "macro.sourcedata_deposit_rate", "date_column": "pub_date"},
-        "sourcedata_loan_rate": {"table_name": "macro.sourcedata_loan_rate", "date_column": "pub_date"},
-        "sourcedata_reserve_ratio": {"table_name": "macro.sourcedata_reserve_ratio", "date_column": "effective_date"},
-        "sourcedata_money_supply_month": {"table_name": "macro.sourcedata_money_supply_month", "date_column": "stat_date"},
-        "sourcedata_money_supply_year": {"table_name": "macro.sourcedata_money_supply_year", "date_column": "stat_date"},
-        "sourcedata_industry_snapshot": {"table_name": "dim.sourcedata_industry_snapshot", "date_column": "update_date"},
-        "sourcedata_index_member_snapshot": {"table_name": "dim.sourcedata_index_member_snapshot", "date_column": "update_date"},
+        "security_master": {"table_name": "source.security_master", "date_column": "updated_at"},
+        "trade_calendar": {"table_name": "source.trade_calendar", "date_column": "calendar_date"},
+        "all_stock_snapshot": {"table_name": "source.all_stock_snapshot", "date_column": "trade_date"},
+        "bar_1d_raw": {"table_name": "source.bar_1d_raw", "date_column": "trade_date"},
+        "bar_5m_raw": {"table_name": "source.bar_5m_raw", "date_column": "trade_date"},
+        "adjust_factor": {"table_name": "source.adjust_factor", "date_column": "divid_operate_date"},
+        "dividend": {"table_name": "source.dividend", "date_column": "divid_operate_date"},
+        "profit": {"table_name": "source.profit", "date_column": "stat_date"},
+        "operation": {"table_name": "source.operation", "date_column": "stat_date"},
+        "growth": {"table_name": "source.growth", "date_column": "stat_date"},
+        "balance": {"table_name": "source.balance", "date_column": "stat_date"},
+        "cash_flow": {"table_name": "source.cash_flow", "date_column": "stat_date"},
+        "dupont": {"table_name": "source.dupont", "date_column": "stat_date"},
+        "performance_express": {"table_name": "source.performance_express", "date_column": "pub_date"},
+        "forecast": {"table_name": "source.forecast", "date_column": "pub_date"},
+        "deposit_rate": {"table_name": "source.deposit_rate", "date_column": "pub_date"},
+        "loan_rate": {"table_name": "source.loan_rate", "date_column": "pub_date"},
+        "reserve_ratio": {"table_name": "source.reserve_ratio", "date_column": "effective_date"},
+        "money_supply_month": {"table_name": "source.money_supply_month", "date_column": "stat_date"},
+        "money_supply_year": {"table_name": "source.money_supply_year", "date_column": "stat_date"},
+        "industry_snapshot": {"table_name": "source.industry_snapshot", "date_column": "update_date"},
+        "index_member_snapshot": {"table_name": "source.index_member_snapshot", "date_column": "update_date"},
     }
 
     def __init__(self) -> None:
@@ -41,14 +41,14 @@ class DataAssetRepository:
             catalog_rows = connection.execute(
                 """
                 select dataset_name, endpoint, enabled, priority
-                from meta.service_dataset_catalog
+                from meta.dataset_catalog
                 order by case when enabled = 1 then 0 else 1 end, priority, dataset_name
                 """
             ).fetchall()
             watermark_rows = connection.execute(
                 """
                 select dataset_name, watermark_value, updated_at
-                from meta.service_dataset_watermark
+                from meta.dataset_watermark
                 """
             ).fetchall()
             watermarks = {

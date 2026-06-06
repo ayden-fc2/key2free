@@ -9,80 +9,9 @@ from typing import Any, ClassVar, Optional
 # Keep entity table names aligned with the current DuckDB schema.
 
 @dataclass(frozen=True)
-class DimServiceSecurityCapability:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "service_security_capability"
-    table_type: ClassVar[str] = "BASE TABLE"
-    security_type: Optional[int] = None
-    dataset_name: Optional[str] = None
-    frequency: Optional[str] = None
-    supported: Optional[int] = None
-    supported_from: Optional[date] = None
-    note: Optional[str] = None
-
-@dataclass(frozen=True)
-class DimSourcedataAllStockSnapshot:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "sourcedata_all_stock_snapshot"
-    table_type: ClassVar[str] = "BASE TABLE"
-    trade_date: Optional[date] = None
-    code: Optional[str] = None
-    code_name: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class DimSourcedataIndexMemberSnapshot:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "sourcedata_index_member_snapshot"
-    table_type: ClassVar[str] = "BASE TABLE"
-    index_code: Optional[str] = None
-    index_name: Optional[str] = None
-    update_date: Optional[date] = None
-    code: Optional[str] = None
-    code_name: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class DimSourcedataIndustrySnapshot:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "sourcedata_industry_snapshot"
-    table_type: ClassVar[str] = "BASE TABLE"
-    update_date: Optional[date] = None
-    code: Optional[str] = None
-    code_name: Optional[str] = None
-    industry: Optional[str] = None
-    industry_classification: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class DimSourcedataSecurityMaster:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "sourcedata_security_master"
-    table_type: ClassVar[str] = "BASE TABLE"
-    code: Optional[str] = None
-    code_name: Optional[str] = None
-    ipo_date: Optional[date] = None
-    out_date: Optional[date] = None
-    security_type: Optional[int] = None
-    list_status: Optional[int] = None
-    first_seen_date: Optional[date] = None
-    last_seen_date: Optional[date] = None
-    updated_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class DimSourcedataTradeCalendar:
-    schema_name: ClassVar[str] = "dim"
-    table_name: ClassVar[str] = "sourcedata_trade_calendar"
-    table_type: ClassVar[str] = "BASE TABLE"
-    calendar_date: Optional[date] = None
-    is_trading_day: Optional[int] = None
-    exchange: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class FactSourcedataAdjustFactor:
-    schema_name: ClassVar[str] = "fact"
-    table_name: ClassVar[str] = "sourcedata_adjust_factor"
+class SourceAdjustFactor:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "adjust_factor"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     divid_operate_date: Optional[date] = None
@@ -93,9 +22,38 @@ class FactSourcedataAdjustFactor:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FactSourcedataBar1dRaw:
-    schema_name: ClassVar[str] = "fact"
-    table_name: ClassVar[str] = "sourcedata_bar_1d_raw"
+class SourceAllStockSnapshot:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "all_stock_snapshot"
+    table_type: ClassVar[str] = "BASE TABLE"
+    trade_date: Optional[date] = None
+    code: Optional[str] = None
+    code_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceBalance:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "balance"
+    table_type: ClassVar[str] = "BASE TABLE"
+    code: Optional[str] = None
+    pub_date: Optional[date] = None
+    stat_date: Optional[date] = None
+    fiscal_year: Optional[int] = None
+    fiscal_quarter: Optional[int] = None
+    current_ratio: Optional[float] = None
+    quick_ratio: Optional[float] = None
+    cash_ratio: Optional[float] = None
+    yoy_liability: Optional[float] = None
+    liability_to_asset: Optional[float] = None
+    asset_to_equity: Optional[float] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceBar1dRaw:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "bar_1d_raw"
     table_type: ClassVar[str] = "BASE TABLE"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -120,9 +78,9 @@ class FactSourcedataBar1dRaw:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FactSourcedataBar5mRaw:
-    schema_name: ClassVar[str] = "fact"
-    table_name: ClassVar[str] = "sourcedata_bar_5m_raw"
+class SourceBar5mRaw:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "bar_5m_raw"
     table_type: ClassVar[str] = "BASE TABLE"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -140,9 +98,48 @@ class FactSourcedataBar5mRaw:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FactSourcedataDividend:
-    schema_name: ClassVar[str] = "fact"
-    table_name: ClassVar[str] = "sourcedata_dividend"
+class SourceCashFlow:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "cash_flow"
+    table_type: ClassVar[str] = "BASE TABLE"
+    code: Optional[str] = None
+    pub_date: Optional[date] = None
+    stat_date: Optional[date] = None
+    fiscal_year: Optional[int] = None
+    fiscal_quarter: Optional[int] = None
+    ca_to_asset: Optional[float] = None
+    nca_to_asset: Optional[float] = None
+    tangible_asset_to_asset: Optional[float] = None
+    ebit_to_interest: Optional[float] = None
+    cfo_to_or: Optional[float] = None
+    cfo_to_np: Optional[float] = None
+    cfo_to_gr: Optional[float] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceDepositRate:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "deposit_rate"
+    table_type: ClassVar[str] = "BASE TABLE"
+    pub_date: Optional[date] = None
+    demand_deposit_rate: Optional[float] = None
+    fixed_deposit_rate3_month: Optional[float] = None
+    fixed_deposit_rate6_month: Optional[float] = None
+    fixed_deposit_rate1_year: Optional[float] = None
+    fixed_deposit_rate2_year: Optional[float] = None
+    fixed_deposit_rate3_year: Optional[float] = None
+    fixed_deposit_rate5_year: Optional[float] = None
+    installment_fixed_deposit_rate1_year: Optional[float] = None
+    installment_fixed_deposit_rate3_year: Optional[float] = None
+    installment_fixed_deposit_rate5_year: Optional[float] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceDividend:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "dividend"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     query_year: Optional[int] = None
@@ -164,48 +161,9 @@ class FactSourcedataDividend:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataBalance:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_balance"
-    table_type: ClassVar[str] = "BASE TABLE"
-    code: Optional[str] = None
-    pub_date: Optional[date] = None
-    stat_date: Optional[date] = None
-    fiscal_year: Optional[int] = None
-    fiscal_quarter: Optional[int] = None
-    current_ratio: Optional[float] = None
-    quick_ratio: Optional[float] = None
-    cash_ratio: Optional[float] = None
-    yoy_liability: Optional[float] = None
-    liability_to_asset: Optional[float] = None
-    asset_to_equity: Optional[float] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class FinSourcedataCashFlow:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_cash_flow"
-    table_type: ClassVar[str] = "BASE TABLE"
-    code: Optional[str] = None
-    pub_date: Optional[date] = None
-    stat_date: Optional[date] = None
-    fiscal_year: Optional[int] = None
-    fiscal_quarter: Optional[int] = None
-    ca_to_asset: Optional[float] = None
-    nca_to_asset: Optional[float] = None
-    tangible_asset_to_asset: Optional[float] = None
-    ebit_to_interest: Optional[float] = None
-    cfo_to_or: Optional[float] = None
-    cfo_to_np: Optional[float] = None
-    cfo_to_gr: Optional[float] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class FinSourcedataDupont:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_dupont"
+class SourceDupont:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "dupont"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -224,9 +182,9 @@ class FinSourcedataDupont:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataForecast:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_forecast"
+class SourceForecast:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "forecast"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -241,9 +199,9 @@ class FinSourcedataForecast:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataGrowth:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_growth"
+class SourceGrowth:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "growth"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -259,9 +217,85 @@ class FinSourcedataGrowth:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataOperation:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_operation"
+class SourceIndexMemberSnapshot:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "index_member_snapshot"
+    table_type: ClassVar[str] = "BASE TABLE"
+    index_code: Optional[str] = None
+    index_name: Optional[str] = None
+    update_date: Optional[date] = None
+    code: Optional[str] = None
+    code_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceIndustrySnapshot:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "industry_snapshot"
+    table_type: ClassVar[str] = "BASE TABLE"
+    update_date: Optional[date] = None
+    code: Optional[str] = None
+    code_name: Optional[str] = None
+    industry: Optional[str] = None
+    industry_classification: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceLoanRate:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "loan_rate"
+    table_type: ClassVar[str] = "BASE TABLE"
+    pub_date: Optional[date] = None
+    loan_rate6_month: Optional[float] = None
+    loan_rate6_month_to1_year: Optional[float] = None
+    loan_rate1_year_to3_year: Optional[float] = None
+    loan_rate3_year_to5_year: Optional[float] = None
+    loan_rate_above5_year: Optional[float] = None
+    mortgate_rate_below5_year: Optional[float] = None
+    mortgate_rate_above5_year: Optional[float] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceMoneySupplyMonth:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "money_supply_month"
+    table_type: ClassVar[str] = "BASE TABLE"
+    stat_year: Optional[int] = None
+    stat_month: Optional[int] = None
+    m0_month: Optional[float] = None
+    m0_yoy: Optional[float] = None
+    m0_chain_relative: Optional[float] = None
+    m1_month: Optional[float] = None
+    m1_yoy: Optional[float] = None
+    m1_chain_relative: Optional[float] = None
+    m2_month: Optional[float] = None
+    m2_yoy: Optional[float] = None
+    m2_chain_relative: Optional[float] = None
+    stat_date: Optional[date] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceMoneySupplyYear:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "money_supply_year"
+    table_type: ClassVar[str] = "BASE TABLE"
+    stat_year: Optional[int] = None
+    m0_year: Optional[float] = None
+    m0_year_yoy: Optional[float] = None
+    m1_year: Optional[float] = None
+    m1_year_yoy: Optional[float] = None
+    m2_year: Optional[float] = None
+    m2_year_yoy: Optional[float] = None
+    stat_date: Optional[date] = None
+    ingest_run_id: Optional[int] = None
+    loaded_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class SourceOperation:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "operation"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -278,9 +312,9 @@ class FinSourcedataOperation:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataPerformanceExpress:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_performance_express"
+class SourcePerformanceExpress:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "performance_express"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -299,9 +333,9 @@ class FinSourcedataPerformanceExpress:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class FinSourcedataProfit:
-    schema_name: ClassVar[str] = "fin"
-    table_name: ClassVar[str] = "sourcedata_profit"
+class SourceProfit:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "profit"
     table_type: ClassVar[str] = "BASE TABLE"
     code: Optional[str] = None
     pub_date: Optional[date] = None
@@ -320,80 +354,9 @@ class FinSourcedataProfit:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MacroSourcedataDepositRate:
-    schema_name: ClassVar[str] = "macro"
-    table_name: ClassVar[str] = "sourcedata_deposit_rate"
-    table_type: ClassVar[str] = "BASE TABLE"
-    pub_date: Optional[date] = None
-    demand_deposit_rate: Optional[float] = None
-    fixed_deposit_rate3_month: Optional[float] = None
-    fixed_deposit_rate6_month: Optional[float] = None
-    fixed_deposit_rate1_year: Optional[float] = None
-    fixed_deposit_rate2_year: Optional[float] = None
-    fixed_deposit_rate3_year: Optional[float] = None
-    fixed_deposit_rate5_year: Optional[float] = None
-    installment_fixed_deposit_rate1_year: Optional[float] = None
-    installment_fixed_deposit_rate3_year: Optional[float] = None
-    installment_fixed_deposit_rate5_year: Optional[float] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class MacroSourcedataLoanRate:
-    schema_name: ClassVar[str] = "macro"
-    table_name: ClassVar[str] = "sourcedata_loan_rate"
-    table_type: ClassVar[str] = "BASE TABLE"
-    pub_date: Optional[date] = None
-    loan_rate6_month: Optional[float] = None
-    loan_rate6_month_to1_year: Optional[float] = None
-    loan_rate1_year_to3_year: Optional[float] = None
-    loan_rate3_year_to5_year: Optional[float] = None
-    loan_rate_above5_year: Optional[float] = None
-    mortgate_rate_below5_year: Optional[float] = None
-    mortgate_rate_above5_year: Optional[float] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class MacroSourcedataMoneySupplyMonth:
-    schema_name: ClassVar[str] = "macro"
-    table_name: ClassVar[str] = "sourcedata_money_supply_month"
-    table_type: ClassVar[str] = "BASE TABLE"
-    stat_year: Optional[int] = None
-    stat_month: Optional[int] = None
-    m0_month: Optional[float] = None
-    m0_yoy: Optional[float] = None
-    m0_chain_relative: Optional[float] = None
-    m1_month: Optional[float] = None
-    m1_yoy: Optional[float] = None
-    m1_chain_relative: Optional[float] = None
-    m2_month: Optional[float] = None
-    m2_yoy: Optional[float] = None
-    m2_chain_relative: Optional[float] = None
-    stat_date: Optional[date] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class MacroSourcedataMoneySupplyYear:
-    schema_name: ClassVar[str] = "macro"
-    table_name: ClassVar[str] = "sourcedata_money_supply_year"
-    table_type: ClassVar[str] = "BASE TABLE"
-    stat_year: Optional[int] = None
-    m0_year: Optional[float] = None
-    m0_year_yoy: Optional[float] = None
-    m1_year: Optional[float] = None
-    m1_year_yoy: Optional[float] = None
-    m2_year: Optional[float] = None
-    m2_year_yoy: Optional[float] = None
-    stat_date: Optional[date] = None
-    ingest_run_id: Optional[int] = None
-    loaded_at: Optional[datetime] = None
-
-@dataclass(frozen=True)
-class MacroSourcedataReserveRatio:
-    schema_name: ClassVar[str] = "macro"
-    table_name: ClassVar[str] = "sourcedata_reserve_ratio"
+class SourceReserveRatio:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "reserve_ratio"
     table_type: ClassVar[str] = "BASE TABLE"
     pub_date: Optional[date] = None
     effective_date: Optional[date] = None
@@ -405,19 +368,34 @@ class MacroSourcedataReserveRatio:
     loaded_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MainServiceMyTask:
-    schema_name: ClassVar[str] = "main"
-    table_name: ClassVar[str] = "service_my_task"
+class SourceSecurityMaster:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "security_master"
     table_type: ClassVar[str] = "BASE TABLE"
-    id: int = None
-    type: str = None
-    logs: Optional[str] = None
-    status: str = None
+    code: Optional[str] = None
+    code_name: Optional[str] = None
+    ipo_date: Optional[date] = None
+    out_date: Optional[date] = None
+    security_type: Optional[int] = None
+    list_status: Optional[int] = None
+    first_seen_date: Optional[date] = None
+    last_seen_date: Optional[date] = None
+    updated_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar15m:
+class SourceTradeCalendar:
+    schema_name: ClassVar[str] = "source"
+    table_name: ClassVar[str] = "trade_calendar"
+    table_type: ClassVar[str] = "BASE TABLE"
+    calendar_date: Optional[date] = None
+    is_trading_day: Optional[int] = None
+    exchange: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+@dataclass(frozen=True)
+class MartBar15m:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_15m"
+    table_name: ClassVar[str] = "bar_15m"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -427,13 +405,13 @@ class MartCalculatedBar15m:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar1dHfq:
+class MartBar1dHfq:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_1d_hfq"
+    table_name: ClassVar[str] = "bar_1d_hfq"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -456,9 +434,9 @@ class MartCalculatedBar1dHfq:
     adjust_factor_value: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar1dQfq:
+class MartBar1dQfq:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_1d_qfq"
+    table_name: ClassVar[str] = "bar_1d_qfq"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -481,9 +459,9 @@ class MartCalculatedBar1dQfq:
     adjust_factor_value: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar1m:
+class MartBar1m:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_1m"
+    table_name: ClassVar[str] = "bar_1m"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -492,16 +470,16 @@ class MartCalculatedBar1m:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
     adjustflag: Optional[int] = None
     turn: Optional[float] = None
     pct_chg: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar1w:
+class MartBar1w:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_1w"
+    table_name: ClassVar[str] = "bar_1w"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -510,16 +488,16 @@ class MartCalculatedBar1w:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
     adjustflag: Optional[int] = None
     turn: Optional[float] = None
     pct_chg: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar1y:
+class MartBar1y:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_1y"
+    table_name: ClassVar[str] = "bar_1y"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -528,16 +506,16 @@ class MartCalculatedBar1y:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
     adjustflag: Optional[int] = None
     turn: Optional[float] = None
     pct_chg: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar30m:
+class MartBar30m:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_30m"
+    table_name: ClassVar[str] = "bar_30m"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -547,13 +525,13 @@ class MartCalculatedBar30m:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar5mHfq:
+class MartBar5mHfq:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_5m_hfq"
+    table_name: ClassVar[str] = "bar_5m_hfq"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -569,9 +547,9 @@ class MartCalculatedBar5mHfq:
     adjust_factor_value: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar5mQfq:
+class MartBar5mQfq:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_5m_qfq"
+    table_name: ClassVar[str] = "bar_5m_qfq"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -587,9 +565,9 @@ class MartCalculatedBar5mQfq:
     adjust_factor_value: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedBar60m:
+class MartBar60m:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_bar_60m"
+    table_name: ClassVar[str] = "bar_60m"
     table_type: ClassVar[str] = "VIEW"
     trade_date: Optional[date] = None
     trade_year: Optional[int] = None
@@ -599,13 +577,13 @@ class MartCalculatedBar60m:
     high: Optional[float] = None
     low: Optional[float] = None
     close: Optional[float] = None
-    volume: Optional[int] = None
+    volume: Optional[Any] = None
     amount: Optional[float] = None
 
 @dataclass(frozen=True)
-class MartCalculatedUniverseDaily:
+class MartUniverseDaily:
     schema_name: ClassVar[str] = "mart"
-    table_name: ClassVar[str] = "calculated_universe_daily"
+    table_name: ClassVar[str] = "universe_daily"
     table_type: ClassVar[str] = "BASE TABLE"
     trade_date: Optional[date] = None
     code: Optional[str] = None
@@ -619,12 +597,12 @@ class MartCalculatedUniverseDaily:
     is_zz500: Optional[int] = None
 
 @dataclass(frozen=True)
-class MetaServiceApiQuotaDaily:
+class MetaApiQuotaDaily:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_api_quota_daily"
+    table_name: ClassVar[str] = "api_quota_daily"
     table_type: ClassVar[str] = "BASE TABLE"
-    quota_date: date = None
-    quota_channel: str = None
+    quota_date: Optional[date] = None
+    quota_channel: Optional[str] = None
     request_count: Optional[int] = None
     retry_count: Optional[int] = None
     login_count: Optional[int] = None
@@ -634,12 +612,12 @@ class MetaServiceApiQuotaDaily:
     last_run_id: Optional[int] = None
 
 @dataclass(frozen=True)
-class MetaServiceChunkState:
+class MetaChunkState:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_chunk_state"
+    table_name: ClassVar[str] = "chunk_state"
     table_type: ClassVar[str] = "BASE TABLE"
-    dataset_name: str = None
-    chunk_key: str = None
+    dataset_name: Optional[str] = None
+    chunk_key: Optional[str] = None
     scope_json: Optional[str] = None
     status: Optional[str] = None
     attempts: Optional[int] = None
@@ -654,11 +632,11 @@ class MetaServiceChunkState:
     lease_token: Optional[str] = None
 
 @dataclass(frozen=True)
-class MetaServiceDatasetCatalog:
+class MetaDatasetCatalog:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_dataset_catalog"
+    table_name: ClassVar[str] = "dataset_catalog"
     table_type: ClassVar[str] = "BASE TABLE"
-    dataset_name: str = None
+    dataset_name: Optional[str] = None
     endpoint: Optional[str] = None
     tier: Optional[str] = None
     enabled: Optional[int] = None
@@ -672,22 +650,32 @@ class MetaServiceDatasetCatalog:
     priority: Optional[int] = None
 
 @dataclass(frozen=True)
-class MetaServiceDatasetWatermark:
+class MetaDatasetWatermark:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_dataset_watermark"
+    table_name: ClassVar[str] = "dataset_watermark"
     table_type: ClassVar[str] = "BASE TABLE"
-    dataset_name: str = None
-    asset_scope: str = None
+    dataset_name: Optional[str] = None
+    asset_scope: Optional[str] = None
     watermark_value: Optional[str] = None
     repair_backfill_from: Optional[str] = None
     updated_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MetaServiceRepairManifest:
+class MetaMyTask:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_repair_manifest"
+    table_name: ClassVar[str] = "my_task"
     table_type: ClassVar[str] = "BASE TABLE"
-    repair_id: str = None
+    id: Optional[int] = None
+    type: Optional[str] = None
+    logs: Optional[str] = None
+    status: Optional[str] = None
+
+@dataclass(frozen=True)
+class MetaRepairManifest:
+    schema_name: ClassVar[str] = "meta"
+    table_name: ClassVar[str] = "repair_manifest"
+    table_type: ClassVar[str] = "BASE TABLE"
+    repair_id: Optional[str] = None
     dataset_name: Optional[str] = None
     scope_json: Optional[str] = None
     reason: Optional[str] = None
@@ -697,11 +685,11 @@ class MetaServiceRepairManifest:
     closed_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MetaServiceRunLog:
+class MetaRunLog:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_run_log"
+    table_name: ClassVar[str] = "run_log"
     table_type: ClassVar[str] = "BASE TABLE"
-    run_id: int = None
+    run_id: Optional[int] = None
     command: Optional[str] = None
     tier: Optional[str] = None
     started_at: Optional[datetime] = None
@@ -717,9 +705,9 @@ class MetaServiceRunLog:
     error_summary: Optional[str] = None
 
 @dataclass(frozen=True)
-class MetaServiceSchemaSnapshot:
+class MetaSchemaSnapshot:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_schema_snapshot"
+    table_name: ClassVar[str] = "schema_snapshot"
     table_type: ClassVar[str] = "BASE TABLE"
     dataset_name: Optional[str] = None
     endpoint: Optional[str] = None
@@ -729,9 +717,21 @@ class MetaServiceSchemaSnapshot:
     captured_at: Optional[datetime] = None
 
 @dataclass(frozen=True)
-class MetaServiceValidationResult:
+class MetaSecurityCapability:
     schema_name: ClassVar[str] = "meta"
-    table_name: ClassVar[str] = "service_validation_result"
+    table_name: ClassVar[str] = "security_capability"
+    table_type: ClassVar[str] = "BASE TABLE"
+    security_type: Optional[int] = None
+    dataset_name: Optional[str] = None
+    frequency: Optional[str] = None
+    supported: Optional[int] = None
+    supported_from: Optional[date] = None
+    note: Optional[str] = None
+
+@dataclass(frozen=True)
+class MetaValidationResult:
+    schema_name: ClassVar[str] = "meta"
+    table_name: ClassVar[str] = "validation_result"
     table_type: ClassVar[str] = "BASE TABLE"
     run_id: Optional[int] = None
     dataset_name: Optional[str] = None
@@ -743,48 +743,50 @@ class MetaServiceValidationResult:
     detail_json: Optional[str] = None
     created_at: Optional[datetime] = None
 
-DUCKDB_ENTITIES: dict[str, type[Any]] = {
-    f"{DimServiceSecurityCapability.schema_name}.{DimServiceSecurityCapability.table_name}": DimServiceSecurityCapability,
-    f"{DimSourcedataAllStockSnapshot.schema_name}.{DimSourcedataAllStockSnapshot.table_name}": DimSourcedataAllStockSnapshot,
-    f"{DimSourcedataIndexMemberSnapshot.schema_name}.{DimSourcedataIndexMemberSnapshot.table_name}": DimSourcedataIndexMemberSnapshot,
-    f"{DimSourcedataIndustrySnapshot.schema_name}.{DimSourcedataIndustrySnapshot.table_name}": DimSourcedataIndustrySnapshot,
-    f"{DimSourcedataSecurityMaster.schema_name}.{DimSourcedataSecurityMaster.table_name}": DimSourcedataSecurityMaster,
-    f"{DimSourcedataTradeCalendar.schema_name}.{DimSourcedataTradeCalendar.table_name}": DimSourcedataTradeCalendar,
-    f"{FactSourcedataAdjustFactor.schema_name}.{FactSourcedataAdjustFactor.table_name}": FactSourcedataAdjustFactor,
-    f"{FactSourcedataBar1dRaw.schema_name}.{FactSourcedataBar1dRaw.table_name}": FactSourcedataBar1dRaw,
-    f"{FactSourcedataBar5mRaw.schema_name}.{FactSourcedataBar5mRaw.table_name}": FactSourcedataBar5mRaw,
-    f"{FactSourcedataDividend.schema_name}.{FactSourcedataDividend.table_name}": FactSourcedataDividend,
-    f"{FinSourcedataBalance.schema_name}.{FinSourcedataBalance.table_name}": FinSourcedataBalance,
-    f"{FinSourcedataCashFlow.schema_name}.{FinSourcedataCashFlow.table_name}": FinSourcedataCashFlow,
-    f"{FinSourcedataDupont.schema_name}.{FinSourcedataDupont.table_name}": FinSourcedataDupont,
-    f"{FinSourcedataForecast.schema_name}.{FinSourcedataForecast.table_name}": FinSourcedataForecast,
-    f"{FinSourcedataGrowth.schema_name}.{FinSourcedataGrowth.table_name}": FinSourcedataGrowth,
-    f"{FinSourcedataOperation.schema_name}.{FinSourcedataOperation.table_name}": FinSourcedataOperation,
-    f"{FinSourcedataPerformanceExpress.schema_name}.{FinSourcedataPerformanceExpress.table_name}": FinSourcedataPerformanceExpress,
-    f"{FinSourcedataProfit.schema_name}.{FinSourcedataProfit.table_name}": FinSourcedataProfit,
-    f"{MacroSourcedataDepositRate.schema_name}.{MacroSourcedataDepositRate.table_name}": MacroSourcedataDepositRate,
-    f"{MacroSourcedataLoanRate.schema_name}.{MacroSourcedataLoanRate.table_name}": MacroSourcedataLoanRate,
-    f"{MacroSourcedataMoneySupplyMonth.schema_name}.{MacroSourcedataMoneySupplyMonth.table_name}": MacroSourcedataMoneySupplyMonth,
-    f"{MacroSourcedataMoneySupplyYear.schema_name}.{MacroSourcedataMoneySupplyYear.table_name}": MacroSourcedataMoneySupplyYear,
-    f"{MacroSourcedataReserveRatio.schema_name}.{MacroSourcedataReserveRatio.table_name}": MacroSourcedataReserveRatio,
-    f"{MainServiceMyTask.schema_name}.{MainServiceMyTask.table_name}": MainServiceMyTask,
-    f"{MartCalculatedBar15m.schema_name}.{MartCalculatedBar15m.table_name}": MartCalculatedBar15m,
-    f"{MartCalculatedBar1dHfq.schema_name}.{MartCalculatedBar1dHfq.table_name}": MartCalculatedBar1dHfq,
-    f"{MartCalculatedBar1dQfq.schema_name}.{MartCalculatedBar1dQfq.table_name}": MartCalculatedBar1dQfq,
-    f"{MartCalculatedBar1m.schema_name}.{MartCalculatedBar1m.table_name}": MartCalculatedBar1m,
-    f"{MartCalculatedBar1w.schema_name}.{MartCalculatedBar1w.table_name}": MartCalculatedBar1w,
-    f"{MartCalculatedBar1y.schema_name}.{MartCalculatedBar1y.table_name}": MartCalculatedBar1y,
-    f"{MartCalculatedBar30m.schema_name}.{MartCalculatedBar30m.table_name}": MartCalculatedBar30m,
-    f"{MartCalculatedBar5mHfq.schema_name}.{MartCalculatedBar5mHfq.table_name}": MartCalculatedBar5mHfq,
-    f"{MartCalculatedBar5mQfq.schema_name}.{MartCalculatedBar5mQfq.table_name}": MartCalculatedBar5mQfq,
-    f"{MartCalculatedBar60m.schema_name}.{MartCalculatedBar60m.table_name}": MartCalculatedBar60m,
-    f"{MartCalculatedUniverseDaily.schema_name}.{MartCalculatedUniverseDaily.table_name}": MartCalculatedUniverseDaily,
-    f"{MetaServiceApiQuotaDaily.schema_name}.{MetaServiceApiQuotaDaily.table_name}": MetaServiceApiQuotaDaily,
-    f"{MetaServiceChunkState.schema_name}.{MetaServiceChunkState.table_name}": MetaServiceChunkState,
-    f"{MetaServiceDatasetCatalog.schema_name}.{MetaServiceDatasetCatalog.table_name}": MetaServiceDatasetCatalog,
-    f"{MetaServiceDatasetWatermark.schema_name}.{MetaServiceDatasetWatermark.table_name}": MetaServiceDatasetWatermark,
-    f"{MetaServiceRepairManifest.schema_name}.{MetaServiceRepairManifest.table_name}": MetaServiceRepairManifest,
-    f"{MetaServiceRunLog.schema_name}.{MetaServiceRunLog.table_name}": MetaServiceRunLog,
-    f"{MetaServiceSchemaSnapshot.schema_name}.{MetaServiceSchemaSnapshot.table_name}": MetaServiceSchemaSnapshot,
-    f"{MetaServiceValidationResult.schema_name}.{MetaServiceValidationResult.table_name}": MetaServiceValidationResult,
+DUCKDB_ENTITY_REGISTRY: dict[str, type[Any]] = {
+    f"{SourceAdjustFactor.schema_name}.{SourceAdjustFactor.table_name}": SourceAdjustFactor,
+    f"{SourceAllStockSnapshot.schema_name}.{SourceAllStockSnapshot.table_name}": SourceAllStockSnapshot,
+    f"{SourceBalance.schema_name}.{SourceBalance.table_name}": SourceBalance,
+    f"{SourceBar1dRaw.schema_name}.{SourceBar1dRaw.table_name}": SourceBar1dRaw,
+    f"{SourceBar5mRaw.schema_name}.{SourceBar5mRaw.table_name}": SourceBar5mRaw,
+    f"{SourceCashFlow.schema_name}.{SourceCashFlow.table_name}": SourceCashFlow,
+    f"{SourceDepositRate.schema_name}.{SourceDepositRate.table_name}": SourceDepositRate,
+    f"{SourceDividend.schema_name}.{SourceDividend.table_name}": SourceDividend,
+    f"{SourceDupont.schema_name}.{SourceDupont.table_name}": SourceDupont,
+    f"{SourceForecast.schema_name}.{SourceForecast.table_name}": SourceForecast,
+    f"{SourceGrowth.schema_name}.{SourceGrowth.table_name}": SourceGrowth,
+    f"{SourceIndexMemberSnapshot.schema_name}.{SourceIndexMemberSnapshot.table_name}": SourceIndexMemberSnapshot,
+    f"{SourceIndustrySnapshot.schema_name}.{SourceIndustrySnapshot.table_name}": SourceIndustrySnapshot,
+    f"{SourceLoanRate.schema_name}.{SourceLoanRate.table_name}": SourceLoanRate,
+    f"{SourceMoneySupplyMonth.schema_name}.{SourceMoneySupplyMonth.table_name}": SourceMoneySupplyMonth,
+    f"{SourceMoneySupplyYear.schema_name}.{SourceMoneySupplyYear.table_name}": SourceMoneySupplyYear,
+    f"{SourceOperation.schema_name}.{SourceOperation.table_name}": SourceOperation,
+    f"{SourcePerformanceExpress.schema_name}.{SourcePerformanceExpress.table_name}": SourcePerformanceExpress,
+    f"{SourceProfit.schema_name}.{SourceProfit.table_name}": SourceProfit,
+    f"{SourceReserveRatio.schema_name}.{SourceReserveRatio.table_name}": SourceReserveRatio,
+    f"{SourceSecurityMaster.schema_name}.{SourceSecurityMaster.table_name}": SourceSecurityMaster,
+    f"{SourceTradeCalendar.schema_name}.{SourceTradeCalendar.table_name}": SourceTradeCalendar,
+    f"{MartBar15m.schema_name}.{MartBar15m.table_name}": MartBar15m,
+    f"{MartBar1dHfq.schema_name}.{MartBar1dHfq.table_name}": MartBar1dHfq,
+    f"{MartBar1dQfq.schema_name}.{MartBar1dQfq.table_name}": MartBar1dQfq,
+    f"{MartBar1m.schema_name}.{MartBar1m.table_name}": MartBar1m,
+    f"{MartBar1w.schema_name}.{MartBar1w.table_name}": MartBar1w,
+    f"{MartBar1y.schema_name}.{MartBar1y.table_name}": MartBar1y,
+    f"{MartBar30m.schema_name}.{MartBar30m.table_name}": MartBar30m,
+    f"{MartBar5mHfq.schema_name}.{MartBar5mHfq.table_name}": MartBar5mHfq,
+    f"{MartBar5mQfq.schema_name}.{MartBar5mQfq.table_name}": MartBar5mQfq,
+    f"{MartBar60m.schema_name}.{MartBar60m.table_name}": MartBar60m,
+    f"{MartUniverseDaily.schema_name}.{MartUniverseDaily.table_name}": MartUniverseDaily,
+    f"{MetaApiQuotaDaily.schema_name}.{MetaApiQuotaDaily.table_name}": MetaApiQuotaDaily,
+    f"{MetaChunkState.schema_name}.{MetaChunkState.table_name}": MetaChunkState,
+    f"{MetaDatasetCatalog.schema_name}.{MetaDatasetCatalog.table_name}": MetaDatasetCatalog,
+    f"{MetaDatasetWatermark.schema_name}.{MetaDatasetWatermark.table_name}": MetaDatasetWatermark,
+    f"{MetaMyTask.schema_name}.{MetaMyTask.table_name}": MetaMyTask,
+    f"{MetaRepairManifest.schema_name}.{MetaRepairManifest.table_name}": MetaRepairManifest,
+    f"{MetaRunLog.schema_name}.{MetaRunLog.table_name}": MetaRunLog,
+    f"{MetaSchemaSnapshot.schema_name}.{MetaSchemaSnapshot.table_name}": MetaSchemaSnapshot,
+    f"{MetaSecurityCapability.schema_name}.{MetaSecurityCapability.table_name}": MetaSecurityCapability,
+    f"{MetaValidationResult.schema_name}.{MetaValidationResult.table_name}": MetaValidationResult,
 }
+
+DUCKDB_ENTITIES = DUCKDB_ENTITY_REGISTRY
