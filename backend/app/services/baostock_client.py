@@ -20,7 +20,16 @@ class BaoStockResponse:
 
 
 class BaoStockError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        error_msg: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.error_msg = error_msg
 
 
 class BaoStockTimeoutError(BaoStockError):
@@ -33,16 +42,25 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
     DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 
     def __enter__(self) -> "BaoStockClient":
-        socket.setdefaulttimeout(self._request_timeout_seconds())
-        login_result = self._run_with_timeout(bs.login)
-        if login_result.error_code != "0":
-            raise BaoStockError(
-                f"BaoStock login failed: {login_result.error_code} {login_result.error_msg}"
-            )
+        self.reconnect()
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         bs.logout()
+
+    def reconnect(self) -> None:
+        try:
+            bs.logout()
+        except Exception:
+            pass
+        socket.setdefaulttimeout(self._request_timeout_seconds())
+        login_result = self._run_with_timeout(bs.login)
+        if login_result.error_code != "0":
+            raise BaoStockError(
+                f"BaoStock login failed: {login_result.error_code} {login_result.error_msg}",
+                error_code=login_result.error_code,
+                error_msg=login_result.error_msg,
+            )
 
     def query_trade_dates(
         self,

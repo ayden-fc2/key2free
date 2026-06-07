@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 
-from app.services.baostock_client import BaoStockClient, BaoStockResponse
+from app.services.baostock_client import BaoStockClient, BaoStockError, BaoStockResponse
 
 
 @dataclass(frozen=True)
@@ -1292,9 +1292,11 @@ class IndexMemberSnapshotAdapter:
 
 def raise_if_error(response: BaoStockResponse) -> None:
     if response.error_code != "0":
-        from app.services.baostock_client import BaoStockError
-
-        raise BaoStockError(f"{response.error_code} {response.error_msg}")
+        raise BaoStockError(
+            f"{response.error_code} {response.error_msg}",
+            error_code=response.error_code,
+            error_msg=response.error_msg,
+        )
 
 
 def parse_date(value: Any) -> date | None:

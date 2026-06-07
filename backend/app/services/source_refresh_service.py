@@ -40,7 +40,7 @@ class ChunkFetchError(RuntimeError):
     pass
 
 
-class ChunkRetryableTimeoutError(ChunkFetchError):
+class ChunkRetryableBaoStockError(ChunkFetchError):
     def __init__(self, message: str, *, worker_thread: Any | None = None) -> None:
         super().__init__(message)
         self.worker_thread = worker_thread
@@ -54,6 +54,10 @@ class AdapterBudgetSkipped(RuntimeError):
         self.dataset_name = dataset_name
         self.planned_chunks = planned_chunks
         self.remaining_requests = remaining_requests
+
+
+class SourceRefreshRetryExhausted(RuntimeError):
+    pass
 
 
 class SourceRefreshCancelled(RuntimeError):
@@ -70,6 +74,8 @@ class SourceRefreshService:
         self.data_assets = DataAssetRepository()
         self.tasks = TaskRepository()
         self.cancel_event = cancel_event
+        self._run_retry_count = 0
+        self._run_login_count = 0
 
     def run(self, task_id: int) -> None:
         run_id: int | None = None
@@ -83,6 +89,8 @@ class SourceRefreshService:
         blacklisted = False
         today = date.today()
         max_requests_per_run = self._max_requests_per_run()
+        self._run_retry_count = 0
+        self._run_login_count = 0
         try:
             run_id = self.data_assets.create_run_log()
             self.tasks.append_log(task_id, f"创建 run: {run_id}")
@@ -113,7 +121,7 @@ class SourceRefreshService:
             self.tasks.append_log(task_id, f"读取 enabled source catalog: {len(catalog)} 个")
 
             with BaoStockClient() as client:
-                login_count += 1
+                self._run_login_count += 1
                 trade_item = self._get_catalog_item(catalog, "trade_calendar")
                 if trade_item is None:
                     raise RuntimeError("enabled source catalog missing trade_calendar")
@@ -261,6 +269,8 @@ class SourceRefreshService:
                         chunk_failed += 1
                         self.tasks.append_log(task_id, f"{dataset_name} 同步失败: {exc}")
 
+            retry_count = self._run_retry_count
+            login_count = self._run_login_count
             if run_id is not None:
                 self.data_assets.upsert_quota_state(
                     quota_date=today,
@@ -300,7 +310,20 @@ class SourceRefreshService:
                 run_id,
                 today,
                 request_count,
-                retry_count,
+                self._run_retry_count,
+                login_count,
+                chunk_success,
+                chunk_failed,
+                blacklisted,
+                exc,
+            )
+        except SourceRefreshRetryExhausted as exc:
+            self._finish_error(
+                task_id,
+                run_id,
+                today,
+                request_count,
+                self._run_retry_count,
                 login_count,
                 chunk_success,
                 chunk_failed,
@@ -313,7 +336,7 @@ class SourceRefreshService:
                 run_id,
                 today,
                 request_count,
-                retry_count,
+                self._run_retry_count,
                 login_count,
                 chunk_success,
                 chunk_failed,
@@ -326,7 +349,7 @@ class SourceRefreshService:
                 run_id,
                 today,
                 request_count,
-                retry_count,
+                self._run_retry_count,
                 login_count,
                 chunk_success,
                 chunk_failed,
@@ -476,6 +499,8 @@ class SourceRefreshService:
                 )
             except SourceRefreshCancelled:
                 raise
+            except SourceRefreshRetryExhausted:
+                raise
             except ChunkFetchError as exc:
                 self._append_stage_log(
                     task_id,
@@ -525,6 +550,8 @@ class SourceRefreshService:
                             total_chunks=len(fallback_chunks),
                         )
                     except SourceRefreshCancelled:
+                        raise
+                    except SourceRefreshRetryExhausted:
                         raise
                     except Exception as fallback_exc:
                         raise AdapterRunError(
@@ -1061,10 +1088,23 @@ class SourceRefreshService:
                 error_code=type(exc).__name__,
                 error_message=str(exc),
             )
-            raise ChunkRetryableTimeoutError(
+            raise ChunkRetryableBaoStockError(
                 str(exc),
                 worker_thread=exc.worker_thread,
             ) from exc
+        except BaoStockError as exc:
+            self.data_assets.upsert_chunk_state(
+                dataset_name=chunk.dataset_name,
+                chunk_key=chunk.chunk_key,
+                scope=chunk.scope,
+                status="failed",
+                run_id=run_id,
+                error_code=exc.error_code or type(exc).__name__,
+                error_message=str(exc),
+            )
+            if self._is_retryable_baostock_error(exc):
+                raise ChunkRetryableBaoStockError(str(exc)) from exc
+            raise ChunkFetchError(str(exc)) from exc
         except Exception as exc:
             self.data_assets.upsert_chunk_state(
                 dataset_name=chunk.dataset_name,
@@ -1121,24 +1161,35 @@ class SourceRefreshService:
                 )
             except SourceRefreshCancelled:
                 raise
-            except ChunkRetryableTimeoutError as exc:
+            except ChunkRetryableBaoStockError as exc:
                 if attempt >= max_attempts:
-                    raise
+                    raise SourceRefreshRetryExhausted(
+                        f"{chunk.dataset_name} chunk {chunk_index}/{total_chunks} "
+                        f"BaoStock 请求异常重试耗尽 ({max_attempts}/{max_attempts}): {exc}"
+                    ) from exc
+                self._run_retry_count += 1
                 self._append_stage_log(
                     task_id,
                     chunk.dataset_name,
                     "retry",
                     (
-                        f"chunk {chunk_index}/{total_chunks} BaoStock 超时，"
+                        f"chunk {chunk_index}/{total_chunks} BaoStock 请求异常，"
                         f"等待 {retry_delay_seconds}s 后重试 "
                         f"({attempt + 1}/{max_attempts}): {exc}"
                     ),
                 )
                 self._sleep_with_cancel(retry_delay_seconds)
                 if exc.worker_thread is not None and exc.worker_thread.is_alive():
-                    raise ChunkFetchError(
+                    raise SourceRefreshRetryExhausted(
                         "BaoStock 超时请求仍未结束，停止重试以避免重复调用。"
                     ) from exc
+                self._reconnect_baostock_client(
+                    client=client,
+                    task_id=task_id,
+                    dataset_name=chunk.dataset_name,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
+                )
         raise RuntimeError("unreachable chunk retry state")
 
     def _raise_if_cancelled(self) -> None:
@@ -1153,6 +1204,29 @@ class SourceRefreshService:
             if remaining <= 0:
                 return
             time.sleep(min(1.0, remaining))
+
+    def _reconnect_baostock_client(
+        self,
+        *,
+        client: BaoStockClient,
+        task_id: int | None,
+        dataset_name: str,
+        chunk_index: int,
+        total_chunks: int,
+    ) -> None:
+        self._append_stage_log(
+            task_id,
+            dataset_name,
+            "retry",
+            f"chunk {chunk_index}/{total_chunks} 重建 BaoStock 会话",
+        )
+        try:
+            client.reconnect()
+        except BaoStockError as exc:
+            raise SourceRefreshRetryExhausted(
+                f"BaoStock 会话重建失败: {exc}"
+            ) from exc
+        self._run_login_count += 1
 
     def _chunk_max_attempts(self) -> int:
         raw_value = os.getenv("SOURCE_UPDATE_CHUNK_MAX_ATTEMPTS")
@@ -1171,6 +1245,23 @@ class SourceRefreshService:
             return max(int(raw_value), 0)
         except ValueError:
             return self.DEFAULT_CHUNK_RETRY_DELAY_SECONDS
+
+    def _is_retryable_baostock_error(self, exc: BaoStockError) -> bool:
+        error_code = (exc.error_code or "").strip()
+        if error_code in {"10002007"}:
+            return True
+
+        message = f"{exc.error_msg or ''} {exc}".lower()
+        retryable_fragments = (
+            "网络接收错误",
+            "网络",
+            "timeout",
+            "timed out",
+            "connection",
+            "reset",
+            "temporarily",
+        )
+        return any(fragment in message for fragment in retryable_fragments)
 
     def _get_fallback_chunks(
         self,
