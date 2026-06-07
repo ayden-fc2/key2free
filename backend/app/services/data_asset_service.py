@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 
 from app.dtos.data_asset_dto import (
     StockDataAssetRefreshDTO,
@@ -15,16 +15,19 @@ from app.services.source_refresh_service import SourceRefreshService
 class SourceUpdateTaskRegistry:
     _lock = Lock()
     _threads: dict[int, Thread] = {}
+    _cancel_events: dict[int, Event] = {}
 
     @classmethod
-    def register(cls, task_id: int, thread: Thread) -> None:
+    def register(cls, task_id: int, thread: Thread, cancel_event: Event) -> None:
         with cls._lock:
             cls._threads[task_id] = thread
+            cls._cancel_events[task_id] = cancel_event
 
     @classmethod
     def unregister(cls, task_id: int) -> None:
         with cls._lock:
             cls._threads.pop(task_id, None)
+            cls._cancel_events.pop(task_id, None)
 
     @classmethod
     def is_active(cls, task_id: int) -> bool:
@@ -35,6 +38,15 @@ class SourceUpdateTaskRegistry:
             if thread.ident is None:
                 return True
             return thread.is_alive()
+
+    @classmethod
+    def cancel(cls, task_id: int) -> bool:
+        with cls._lock:
+            cancel_event = cls._cancel_events.get(task_id)
+            if cancel_event is None:
+                return False
+            cancel_event.set()
+            return True
 
 
 class DataAssetService:
@@ -65,10 +77,11 @@ class DataAssetService:
             raise RuntimeError("source_update task id is empty")
 
         task_id = task.id
+        cancel_event = Event()
 
         def run_source_update() -> None:
             try:
-                SourceRefreshService().run(task_id)
+                SourceRefreshService(cancel_event=cancel_event).run(task_id)
             finally:
                 SourceUpdateTaskRegistry.unregister(task_id)
 
@@ -76,7 +89,7 @@ class DataAssetService:
             target=run_source_update,
             daemon=True,
         )
-        SourceUpdateTaskRegistry.register(task_id, thread)
+        SourceUpdateTaskRegistry.register(task_id, thread, cancel_event)
         thread.start()
 
         return StockDataAssetRefreshDTO(
@@ -90,6 +103,28 @@ class DataAssetService:
         if task_id is not None:
             return self.tasks.get_task(task_id)
         return self.tasks.get_latest_task_by_type(SourceRefreshService.TASK_TYPE)
+
+    def stop_source_update_task(self, task_id: int | None = None) -> TaskDTO | None:
+        task = (
+            self.tasks.get_task(task_id)
+            if task_id is not None
+            else self.tasks.get_running_task_by_type(SourceRefreshService.TASK_TYPE)
+        )
+        if task is None:
+            return None
+        if task.id is None:
+            raise RuntimeError("source_update task id is empty")
+        if task.status != "running":
+            return task
+
+        cancellation_requested = SourceUpdateTaskRegistry.cancel(task.id)
+        message = (
+            "手动停止 source_update：已发送取消信号，任务将在当前 chunk 结束后退出。"
+            if cancellation_requested
+            else "手动停止 source_update：未找到活动后台线程，已直接标记为 error。"
+        )
+        self.tasks.finish_task(task.id, "error", message)
+        return self.tasks.get_task(task.id)
 
     def _clear_stale_running_task(self, task_id: int | None = None) -> None:
         task = (

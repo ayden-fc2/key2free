@@ -26,3 +26,13 @@ def get_source_update_task(task_id: Optional[int] = Query(default=None)) -> dict
     if task is None:
         raise HTTPException(status_code=404, detail="source_update task not found")
     return asdict(task)
+
+
+@router.post("/source-update-task/stop")
+def stop_source_update_task(
+    task_id: Optional[int] = Query(default=None),
+) -> dict:
+    task = DataAssetService().stop_source_update_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="source_update task not found")
+    return asdict(task)

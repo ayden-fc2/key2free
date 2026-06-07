@@ -750,6 +750,21 @@ class DataAssetRepository:
             ).fetchone()
         return None if row is None else row[0]
 
+    def get_dataset_actual_max_date(self, dataset_name: str) -> str | None:
+        physical = self.DATASET_TABLES.get(dataset_name)
+        if physical is None:
+            return None
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                f"""
+                select max({physical["date_column"]})
+                from {physical["table_name"]}
+                """
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
     def replace_source_rows(
         self,
         *,
@@ -791,11 +806,13 @@ class DataAssetRepository:
         table_name = f"source.{dataset_name}"
         values = [[row.get(column) for column in columns] for row in rows]
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute("begin transaction")
             staging_table_name = f"temp.staging_{dataset_name}"
+            staging_relation_name = f"staging_{dataset_name}"
             try:
+                connection.execute(f"drop table if exists {staging_table_name}")
+                connection.execute("begin transaction")
                 connection.execute(
-                    f"create temp table staging_{dataset_name} as "
+                    f"create temp table {staging_relation_name} as "
                     f"select {', '.join(columns)} from {table_name} where false"
                 )
                 if values:
@@ -841,6 +858,8 @@ class DataAssetRepository:
             except Exception:
                 connection.execute("rollback")
                 raise
+            finally:
+                connection.execute(f"drop table if exists {staging_table_name}")
         return len(rows), validation_results
 
     def _delete_source_scope(
@@ -1741,6 +1760,36 @@ class DataAssetRepository:
                     status,
                 ],
             )
+
+    def get_completed_chunk_keys(
+        self,
+        dataset_name: str,
+        chunks: list[Any],
+    ) -> set[str]:
+        if not chunks:
+            return set()
+
+        expected_scopes = {chunk.chunk_key: chunk.scope for chunk in chunks}
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select chunk_key, scope_json
+                from meta.chunk_state
+                where dataset_name = ?
+                  and status in ('success', 'split_success')
+                """,
+                [dataset_name],
+            ).fetchall()
+
+        completed = set()
+        for chunk_key, scope_json in rows:
+            try:
+                stored_scope = json.loads(scope_json or "{}")
+            except json.JSONDecodeError:
+                continue
+            if expected_scopes.get(chunk_key) == stored_scope:
+                completed.add(chunk_key)
+        return completed
 
     def write_validation_result(
         self,

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+import os
+from queue import Empty, Queue
+import socket
+from threading import Thread
 from typing import Any, Iterator
 
 import baostock as bs
@@ -19,9 +23,18 @@ class BaoStockError(RuntimeError):
     pass
 
 
+class BaoStockTimeoutError(BaoStockError):
+    def __init__(self, message: str, *, worker_thread: Thread) -> None:
+        super().__init__(message)
+        self.worker_thread = worker_thread
+
+
 class BaoStockClient(AbstractContextManager["BaoStockClient"]):
+    DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+
     def __enter__(self) -> "BaoStockClient":
-        login_result = bs.login()
+        socket.setdefaulttimeout(self._request_timeout_seconds())
+        login_result = self._run_with_timeout(bs.login)
         if login_result.error_code != "0":
             raise BaoStockError(
                 f"BaoStock login failed: {login_result.error_code} {login_result.error_msg}"
@@ -37,16 +50,17 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_trade_dates(start_date=start_date, end_date=end_date)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_trade_dates,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def query_stock_basic(self) -> BaoStockResponse:
-        result = bs.query_stock_basic()
-        return self._collect_result(result)
+        return self._query_with_timeout(bs.query_stock_basic)
 
     def query_all_stock(self, *, day: str) -> BaoStockResponse:
-        result = bs.query_all_stock(day=day)
-        return self._collect_result(result)
+        return self._query_with_timeout(bs.query_all_stock, day=day)
 
     def query_history_k_data_plus(
         self,
@@ -58,7 +72,8 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         frequency: str = "d",
         adjustflag: str = "3",
     ) -> BaoStockResponse:
-        result = bs.query_history_k_data_plus(
+        return self._query_with_timeout(
+            bs.query_history_k_data_plus,
             code=code,
             fields=fields,
             start_date=start_date,
@@ -66,7 +81,6 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
             frequency=frequency,
             adjustflag=adjustflag,
         )
-        return self._collect_result(result)
 
     def query_adjust_factor(
         self,
@@ -75,12 +89,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_adjust_factor(
+        return self._query_with_timeout(
+            bs.query_adjust_factor,
             code=code,
             start_date=start_date,
             end_date=end_date,
         )
-        return self._collect_result(result)
 
     def query_dividend_data(
         self,
@@ -89,12 +103,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         year_type: str,
     ) -> BaoStockResponse:
-        result = bs.query_dividend_data(
+        return self._query_with_timeout(
+            bs.query_dividend_data,
             code=code,
             year=year,
             yearType=year_type,
         )
-        return self._collect_result(result)
 
     def query_profit_data(
         self,
@@ -103,8 +117,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_profit_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_profit_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_operation_data(
         self,
@@ -113,8 +131,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_operation_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_operation_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_growth_data(
         self,
@@ -123,8 +145,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_growth_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_growth_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_balance_data(
         self,
@@ -133,8 +159,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_balance_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_balance_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_cash_flow_data(
         self,
@@ -143,8 +173,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_cash_flow_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_cash_flow_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_dupont_data(
         self,
@@ -153,8 +187,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         year: int,
         quarter: int,
     ) -> BaoStockResponse:
-        result = bs.query_dupont_data(code=code, year=year, quarter=quarter)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_dupont_data,
+            code=code,
+            year=year,
+            quarter=quarter,
+        )
 
     def query_performance_express_report(
         self,
@@ -163,12 +201,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_performance_express_report(
+        return self._query_with_timeout(
+            bs.query_performance_express_report,
             code=code,
             start_date=start_date,
             end_date=end_date,
         )
-        return self._collect_result(result)
 
     def query_forecast_report(
         self,
@@ -177,12 +215,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_forecast_report(
+        return self._query_with_timeout(
+            bs.query_forecast_report,
             code=code,
             start_date=start_date,
             end_date=end_date,
         )
-        return self._collect_result(result)
 
     def query_deposit_rate_data(
         self,
@@ -190,8 +228,11 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_deposit_rate_data(start_date=start_date, end_date=end_date)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_deposit_rate_data,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def query_loan_rate_data(
         self,
@@ -199,8 +240,11 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_loan_rate_data(start_date=start_date, end_date=end_date)
-        return self._collect_result(result)
+        return self._query_with_timeout(
+            bs.query_loan_rate_data,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def query_required_reserve_ratio_data(
         self,
@@ -209,12 +253,12 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         end_date: str,
         year_type: str = "0",
     ) -> BaoStockResponse:
-        result = bs.query_required_reserve_ratio_data(
+        return self._query_with_timeout(
+            bs.query_required_reserve_ratio_data,
             start_date=start_date,
             end_date=end_date,
             yearType=year_type,
         )
-        return self._collect_result(result)
 
     def query_money_supply_data_month(
         self,
@@ -222,11 +266,11 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_money_supply_data_month(
+        return self._query_with_timeout(
+            bs.query_money_supply_data_month,
             start_date=start_date,
             end_date=end_date,
         )
-        return self._collect_result(result)
 
     def query_money_supply_data_year(
         self,
@@ -234,11 +278,11 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         start_date: str,
         end_date: str,
     ) -> BaoStockResponse:
-        result = bs.query_money_supply_data_year(
+        return self._query_with_timeout(
+            bs.query_money_supply_data_year,
             start_date=start_date,
             end_date=end_date,
         )
-        return self._collect_result(result)
 
     def query_stock_industry(
         self,
@@ -246,8 +290,7 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         date: str,
         code: str = "",
     ) -> BaoStockResponse:
-        result = bs.query_stock_industry(code=code, date=date)
-        return self._collect_result(result)
+        return self._query_with_timeout(bs.query_stock_industry, code=code, date=date)
 
     def query_index_members(
         self,
@@ -263,8 +306,42 @@ class BaoStockClient(AbstractContextManager["BaoStockClient"]):
         endpoint = endpoint_map.get(index_code)
         if endpoint is None:
             raise BaoStockError(f"unsupported index_code: {index_code}")
-        result = endpoint(date=date)
-        return self._collect_result(result)
+        return self._query_with_timeout(endpoint, date=date)
+
+    def _query_with_timeout(self, query_fn: Any, **kwargs: Any) -> BaoStockResponse:
+        return self._run_with_timeout(lambda: self._collect_result(query_fn(**kwargs)))
+
+    def _run_with_timeout(self, call: Any) -> Any:
+        timeout_seconds = self._request_timeout_seconds()
+        result_queue: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+        def target() -> None:
+            try:
+                result_queue.put((True, call()))
+            except Exception as exc:
+                result_queue.put((False, exc))
+
+        thread = Thread(target=target, daemon=True)
+        thread.start()
+        try:
+            succeeded, value = result_queue.get(timeout=timeout_seconds)
+        except Empty as exc:
+            raise BaoStockTimeoutError(
+                f"BaoStock request timed out after {timeout_seconds:g}s",
+                worker_thread=thread,
+            ) from exc
+        if succeeded:
+            return value
+        raise value
+
+    def _request_timeout_seconds(self) -> float:
+        raw_value = os.getenv("BAOSTOCK_REQUEST_TIMEOUT_SECONDS")
+        if raw_value is None or raw_value.strip() == "":
+            return self.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        try:
+            return max(float(raw_value), 1.0)
+        except ValueError:
+            return self.DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     def _collect_result(self, result: Any) -> BaoStockResponse:
         rows = []

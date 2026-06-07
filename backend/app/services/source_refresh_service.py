@@ -3,11 +3,16 @@ from __future__ import annotations
 import os
 import time
 from datetime import date, timedelta
+from threading import Event
 from typing import Any
 
 from app.repositories.data_asset_repository import DataAssetRepository
 from app.repositories.task_repository import TaskRepository
-from app.services.baostock_client import BaoStockClient, BaoStockError
+from app.services.baostock_client import (
+    BaoStockClient,
+    BaoStockError,
+    BaoStockTimeoutError,
+)
 from app.services.source_adapters import (
     ADAPTER_REGISTRY,
     AdapterNotImplementedError,
@@ -35,6 +40,12 @@ class ChunkFetchError(RuntimeError):
     pass
 
 
+class ChunkRetryableTimeoutError(ChunkFetchError):
+    def __init__(self, message: str, *, worker_thread: Any | None = None) -> None:
+        super().__init__(message)
+        self.worker_thread = worker_thread
+
+
 class AdapterBudgetSkipped(RuntimeError):
     def __init__(self, *, dataset_name: str, planned_chunks: int, remaining_requests: int) -> None:
         super().__init__(
@@ -45,13 +56,20 @@ class AdapterBudgetSkipped(RuntimeError):
         self.remaining_requests = remaining_requests
 
 
+class SourceRefreshCancelled(RuntimeError):
+    pass
+
+
 class SourceRefreshService:
     TASK_TYPE = "source_update"
     DEFAULT_MAX_REQUESTS_PER_RUN = 50000
+    DEFAULT_CHUNK_MAX_ATTEMPTS = 3
+    DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 600
 
-    def __init__(self) -> None:
+    def __init__(self, cancel_event: Event | None = None) -> None:
         self.data_assets = DataAssetRepository()
         self.tasks = TaskRepository()
+        self.cancel_event = cancel_event
 
     def run(self, task_id: int) -> None:
         run_id: int | None = None
@@ -152,6 +170,8 @@ class SourceRefreshService:
                         stop_reason = "request_budget_exhausted"
                         self.tasks.append_log(task_id, f"跳过 {bootstrap_dataset}: {exc}")
                         break
+                    except SourceRefreshCancelled:
+                        raise
                     except AdapterRunError as exc:
                         request_count += exc.request_count
                         chunk_success += len(exc.partial_results)
@@ -227,6 +247,8 @@ class SourceRefreshService:
                         chunk_skipped += 1
                         stop_reason = "request_budget_exhausted"
                         self.tasks.append_log(task_id, f"跳过 {dataset_name}: {exc}")
+                    except SourceRefreshCancelled:
+                        raise
                     except AdapterRunError as exc:
                         request_count += exc.request_count
                         chunk_success += len(exc.partial_results)
@@ -285,6 +307,19 @@ class SourceRefreshService:
                 blacklisted,
                 exc,
             )
+        except SourceRefreshCancelled as exc:
+            self._finish_error(
+                task_id,
+                run_id,
+                today,
+                request_count,
+                retry_count,
+                login_count,
+                chunk_success,
+                chunk_failed,
+                blacklisted,
+                exc,
+            )
         except Exception as exc:
             self._finish_error(
                 task_id,
@@ -330,12 +365,6 @@ class SourceRefreshService:
             "plan",
             f"完成，chunks={len(chunks)}, elapsed={self._elapsed(plan_started_at)}",
         )
-        if max_requests is not None and len(chunks) > max_requests:
-            raise AdapterBudgetSkipped(
-                dataset_name=dataset_name,
-                planned_chunks=len(chunks),
-                remaining_requests=max_requests,
-            )
         plan_validations = self._validate_chunk_plan(
             item=item,
             runtime=runtime,
@@ -365,10 +394,63 @@ class SourceRefreshService:
                 request_count=0,
             )
 
+        completed_chunk_keys = self.data_assets.get_completed_chunk_keys(
+            dataset_name,
+            chunks,
+        )
+        planned_chunk_count = len(chunks)
+        if completed_chunk_keys:
+            chunks = [
+                chunk
+                for chunk in chunks
+                if chunk.chunk_key not in completed_chunk_keys
+            ]
+        self._append_stage_log(
+            task_id,
+            dataset_name,
+            "resume",
+            (
+                f"断点续跑: planned={planned_chunk_count}, "
+                f"completed={len(completed_chunk_keys)}, remaining={len(chunks)}"
+            ),
+        )
+        if max_requests is not None and len(chunks) > max_requests:
+            raise AdapterBudgetSkipped(
+                dataset_name=dataset_name,
+                planned_chunks=len(chunks),
+                remaining_requests=max_requests,
+            )
+
+        if planned_chunk_count > 0 and not chunks:
+            watermark_value = self.data_assets.get_dataset_actual_max_date(dataset_name)
+            if watermark_value is not None:
+                self.data_assets.update_watermark(
+                    dataset_name=dataset_name,
+                    asset_scope=item["asset_scope"],
+                    watermark_value=watermark_value,
+                )
+                self._append_stage_log(
+                    task_id,
+                    dataset_name,
+                    "watermark",
+                    f"全部分片已完成，水位按现有数据推进到 {watermark_value}",
+                )
+                return [
+                    AdapterResult(
+                        dataset_name=dataset_name,
+                        chunk_key="resume_completed",
+                        scope={"mode": "resume_completed"},
+                        rows=[],
+                        watermark=watermark_value,
+                        request_count=0,
+                    )
+                ]
+
         results = []
         request_count = 0
         total_chunks = len(chunks)
         for chunk_index, chunk in enumerate(chunks, start=1):
+            self._raise_if_cancelled()
             chunk_started_at = time.perf_counter()
             if self._should_log_chunk(chunk_index, total_chunks):
                 self._append_stage_log(
@@ -381,14 +463,19 @@ class SourceRefreshService:
                     ),
                 )
             try:
-                result = self._run_chunk(
+                result = self._run_chunk_with_retries(
                     client=client,
                     run_id=run_id,
                     item=item,
                     runtime=runtime,
                     chunk=chunk,
                     adapter=adapter,
+                    task_id=task_id,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
                 )
+            except SourceRefreshCancelled:
+                raise
             except ChunkFetchError as exc:
                 self._append_stage_log(
                     task_id,
@@ -426,14 +513,19 @@ class SourceRefreshService:
                         ),
                     )
                     try:
-                        fallback_result = self._run_chunk(
+                        fallback_result = self._run_chunk_with_retries(
                             client=client,
                             run_id=run_id,
                             item=item,
                             runtime=runtime,
                             chunk=fallback_chunk,
                             adapter=adapter,
+                            task_id=task_id,
+                            chunk_index=fallback_index,
+                            total_chunks=len(fallback_chunks),
                         )
+                    except SourceRefreshCancelled:
+                        raise
                     except Exception as fallback_exc:
                         raise AdapterRunError(
                             dataset_name=dataset_name,
@@ -945,6 +1037,7 @@ class SourceRefreshService:
         chunk: Any,
         adapter: Any,
     ) -> AdapterResult:
+        self._raise_if_cancelled()
         self._mark_running(
             run_id=run_id,
             dataset_name=chunk.dataset_name,
@@ -958,6 +1051,20 @@ class SourceRefreshService:
                 runtime=runtime,
                 chunk=chunk,
             )
+        except BaoStockTimeoutError as exc:
+            self.data_assets.upsert_chunk_state(
+                dataset_name=chunk.dataset_name,
+                chunk_key=chunk.chunk_key,
+                scope=chunk.scope,
+                status="failed",
+                run_id=run_id,
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise ChunkRetryableTimeoutError(
+                str(exc),
+                worker_thread=exc.worker_thread,
+            ) from exc
         except Exception as exc:
             self.data_assets.upsert_chunk_state(
                 dataset_name=chunk.dataset_name,
@@ -986,6 +1093,84 @@ class SourceRefreshService:
             validation_results=validation_results,
         )
         return result
+
+    def _run_chunk_with_retries(
+        self,
+        *,
+        client: BaoStockClient,
+        run_id: int,
+        item: dict[str, Any],
+        runtime: AdapterRuntime,
+        chunk: Any,
+        adapter: Any,
+        task_id: int | None,
+        chunk_index: int,
+        total_chunks: int,
+    ) -> AdapterResult:
+        max_attempts = self._chunk_max_attempts()
+        retry_delay_seconds = self._chunk_retry_delay_seconds()
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._run_chunk(
+                    client=client,
+                    run_id=run_id,
+                    item=item,
+                    runtime=runtime,
+                    chunk=chunk,
+                    adapter=adapter,
+                )
+            except SourceRefreshCancelled:
+                raise
+            except ChunkRetryableTimeoutError as exc:
+                if attempt >= max_attempts:
+                    raise
+                self._append_stage_log(
+                    task_id,
+                    chunk.dataset_name,
+                    "retry",
+                    (
+                        f"chunk {chunk_index}/{total_chunks} BaoStock 超时，"
+                        f"等待 {retry_delay_seconds}s 后重试 "
+                        f"({attempt + 1}/{max_attempts}): {exc}"
+                    ),
+                )
+                self._sleep_with_cancel(retry_delay_seconds)
+                if exc.worker_thread is not None and exc.worker_thread.is_alive():
+                    raise ChunkFetchError(
+                        "BaoStock 超时请求仍未结束，停止重试以避免重复调用。"
+                    ) from exc
+        raise RuntimeError("unreachable chunk retry state")
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise SourceRefreshCancelled("source_update 已被用户手动停止。")
+
+    def _sleep_with_cancel(self, seconds: int) -> None:
+        deadline = time.monotonic() + seconds
+        while True:
+            self._raise_if_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(1.0, remaining))
+
+    def _chunk_max_attempts(self) -> int:
+        raw_value = os.getenv("SOURCE_UPDATE_CHUNK_MAX_ATTEMPTS")
+        if raw_value is None or raw_value.strip() == "":
+            return self.DEFAULT_CHUNK_MAX_ATTEMPTS
+        try:
+            return max(int(raw_value), 1)
+        except ValueError:
+            return self.DEFAULT_CHUNK_MAX_ATTEMPTS
+
+    def _chunk_retry_delay_seconds(self) -> int:
+        raw_value = os.getenv("SOURCE_UPDATE_CHUNK_RETRY_DELAY_SECONDS")
+        if raw_value is None or raw_value.strip() == "":
+            return self.DEFAULT_CHUNK_RETRY_DELAY_SECONDS
+        try:
+            return max(int(raw_value), 0)
+        except ValueError:
+            return self.DEFAULT_CHUNK_RETRY_DELAY_SECONDS
 
     def _get_fallback_chunks(
         self,

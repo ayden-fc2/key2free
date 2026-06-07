@@ -9,6 +9,7 @@ import {
   getSourceUpdateTask,
   getStockDataAssetSummary,
   requestStockDataAssetRefresh,
+  stopSourceUpdateTask,
 } from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
 import type { DataAssetTask, StockDatasetOverview } from "@/types/dataAsset";
@@ -41,6 +42,7 @@ export default function Home() {
     null,
   );
   const [sourceUpdateModalOpen, setSourceUpdateModalOpen] = useState(false);
+  const [sourceUpdateStopping, setSourceUpdateStopping] = useState(false);
   const sourceUpdateRunning = sourceUpdateTask?.status === "running";
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -99,6 +101,24 @@ export default function Home() {
       }
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "更新请求失败");
+    }
+  }
+
+  async function stopRefresh() {
+    if (sourceUpdateTask?.id == null || !sourceUpdateRunning) {
+      return;
+    }
+
+    setSourceUpdateStopping(true);
+    try {
+      const task = await stopSourceUpdateTask(sourceUpdateTask.id);
+      setSourceUpdateTask(task);
+      messageApi.warning("更新任务已停止");
+      fetchStockDataAssets();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "停止任务失败");
+    } finally {
+      setSourceUpdateStopping(false);
     }
   }
 
@@ -274,6 +294,15 @@ export default function Home() {
       {contextHolder}
       <Modal
         footer={[
+          <Button
+            danger
+            disabled={!sourceUpdateRunning}
+            key="stop"
+            loading={sourceUpdateStopping}
+            onClick={stopRefresh}
+          >
+            停止
+          </Button>,
           <Button
             key="close"
             onClick={() => setSourceUpdateModalOpen(false)}
