@@ -4,9 +4,9 @@ from datetime import date
 from typing import Any
 
 from app.dtos.signal_dto import DailySignalItemDTO, DailySignalResultDTO
+from app.entities.stock_data_context import StockDataContext
 from app.repositories.signal_repository import SignalRepository
 from app.services.strategy_registry import get_strategy
-from 策略.demo.strategy import SignalStrategyInput
 
 
 class SignalServiceError(ValueError):
@@ -45,14 +45,12 @@ class SignalService:
             if universe is None:
                 continue
             handled_codes.add(code)
-            current_bar = self._find_current_bar(bars, trade_date)
             self._append_signal_if_triggered(
                 signal_items=signal_items,
                 code=code,
                 trade_date=trade_date,
                 universe=universe,
                 bars=bars,
-                current_bar=current_bar,
                 signal_strategy=strategy.signal_strategy,
             )
 
@@ -65,7 +63,6 @@ class SignalService:
                 trade_date=trade_date,
                 universe=universe,
                 bars=[],
-                current_bar=None,
                 signal_strategy=strategy.signal_strategy,
             )
 
@@ -85,17 +82,15 @@ class SignalService:
         trade_date: date,
         universe: dict[str, Any],
         bars: list[dict[str, Any]],
-        current_bar: dict[str, Any] | None,
         signal_strategy: Any,
     ) -> None:
-        payload = SignalStrategyInput(
+        context = StockDataContext(
             code=code,
             trade_date=trade_date,
             universe=universe,
             bars_1d_qfq=bars,
-            current_bar_1d_qfq=current_bar,
         )
-        if not signal_strategy(payload):
+        if not signal_strategy(context):
             return
         signal_items.append(
             DailySignalItemDTO(
@@ -103,20 +98,8 @@ class SignalService:
                 code_name=self._optional_string(universe.get("code_name")),
                 trade_date=trade_date.isoformat(),
                 universe=universe,
-                current_bar_1d_qfq=current_bar,
             )
         )
-
-    def _find_current_bar(
-        self,
-        bars: list[dict[str, Any]],
-        trade_date: date,
-    ) -> dict[str, Any] | None:
-        target = trade_date.isoformat()
-        for item in reversed(bars):
-            if item.get("trade_date") == target:
-                return item
-        return None
 
     def _optional_string(self, value: Any) -> str | None:
         return value if isinstance(value, str) else None

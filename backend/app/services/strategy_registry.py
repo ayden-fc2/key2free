@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from 策略.demo import (
+from app.entities.stock_data_context import StockDataContext
+from strategies.demo import (
     demo_entry_strategy,
     demo_exit_strategy,
     demo_signal_strategy,
 )
-from 策略.demo.strategy import SignalStrategyInput
 
 
 class SignalStrategyFn(Protocol):
-    def __call__(self, payload: SignalStrategyInput) -> bool:
+    def __call__(self, context: StockDataContext) -> bool:
         ...
 
 

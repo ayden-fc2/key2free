@@ -16,7 +16,6 @@ class DailySignalItemDTO:
     code_name: str | None
     trade_date: str
     universe: dict[str, Any]
-    current_bar_1d_qfq: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -26,4 +25,3 @@ class DailySignalResultDTO:
     universe_count: int
     signal_count: int
     signals: list[DailySignalItemDTO]
-
