@@ -222,6 +222,12 @@ button {
   font-weight: 700;
 }
 
+.panel-subtitle {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
 .task-modal-header {
   align-items: center;
   display: flex;

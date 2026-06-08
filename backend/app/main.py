@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.data_assets import router as data_assets_router
 from app.api.v1.health import router as health_router
+from app.api.v1.signals import router as signals_router
 from app.core.config import settings
 
 
@@ -18,3 +19,4 @@ app.add_middleware(
 
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(data_assets_router, prefix="/api/v1")
+app.include_router(signals_router, prefix="/api/v1")

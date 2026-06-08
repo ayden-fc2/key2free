@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, Modal, Space, Table, Tabs, Tag, message } from "antd";
+import { Button, DatePicker, Modal, Select, Space, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
@@ -14,12 +14,14 @@ import {
   stopSourceUpdateTask,
 } from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
+import { getDailySignals } from "@/lib/api/signals";
 import type {
   DataAssetTask,
   MartDatasetOverview,
   StockDatasetOverview,
 } from "@/types/dataAsset";
 import type { HealthState } from "@/types/health";
+import type { DailySignalItem, DailySignalResult } from "@/types/signal";
 import { formatDateTime } from "@/utils/format";
 
 const tabs = [
@@ -31,13 +33,15 @@ const tabs = [
 
 const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string }[]> = {
   "backtest-stats": [{ key: "placeholder", label: "占位" }],
-  "daily-signals": [{ key: "placeholder", label: "占位" }],
+  "daily-signals": [{ key: "daily", label: "当日信号" }],
   "data-assets": [
     { key: "source", label: "源数据" },
     { key: "mart", label: "后处理数据" },
   ],
   strategies: [{ key: "placeholder", label: "占位" }],
 };
+
+const strategyOptions = [{ label: "demo", value: "demo" }];
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>(
@@ -57,6 +61,11 @@ export default function Home() {
   const [sourceUpdateModalOpen, setSourceUpdateModalOpen] = useState(false);
   const [sourceUpdateStopping, setSourceUpdateStopping] = useState(false);
   const sourceUpdateRunning = sourceUpdateTask?.status === "running";
+  const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
+  const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
+  const [dailySignalLoading, setDailySignalLoading] = useState(false);
+  const [dailySignalResult, setDailySignalResult] =
+    useState<DailySignalResult | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
 
   useEffect(() => {
@@ -157,6 +166,27 @@ export default function Home() {
       messageApi.error(error instanceof Error ? error.message : "停止任务失败");
     } finally {
       setSourceUpdateStopping(false);
+    }
+  }
+
+  async function fetchDailySignals() {
+    if (dailySignalDate === null) {
+      messageApi.warning("请选择交易日期");
+      return;
+    }
+
+    setDailySignalLoading(true);
+    try {
+      const data = await getDailySignals({
+        strategy_name: dailySignalStrategy,
+        trade_date: dailySignalDate,
+      });
+      setDailySignalResult(data);
+      messageApi.success(`当日信号计算完成，共 ${data.signal_count} 只`);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "信号查询失败");
+    } finally {
+      setDailySignalLoading(false);
     }
   }
 
@@ -324,8 +354,7 @@ export default function Home() {
     {
       align: "right",
       dataIndex: "row_count",
-      render: (value: number | null, record) =>
-        record.table_type === "VIEW" ? <Tag>视图</Tag> : value?.toLocaleString() ?? "-",
+      render: (value: number | null) => value?.toLocaleString() ?? "-",
       title: "行数",
       width: 130,
     },
@@ -405,6 +434,40 @@ export default function Home() {
       dataIndex: "row_count",
       render: (value: number | null) => value?.toLocaleString() ?? "-",
       title: "行数",
+      width: 130,
+    },
+  ];
+
+  const dailySignalColumns: ColumnsType<DailySignalItem> = [
+    {
+      dataIndex: "code",
+      fixed: "left",
+      title: "代码",
+      width: 140,
+    },
+    {
+      dataIndex: "code_name",
+      render: (value: string | null) => value ?? "-",
+      title: "名称",
+      width: 160,
+    },
+    {
+      dataIndex: "trade_date",
+      title: "交易日",
+      width: 140,
+    },
+    {
+      dataIndex: "current_bar_1d_qfq",
+      render: (value: Record<string, unknown> | null) =>
+        typeof value?.close === "number" ? value.close.toFixed(2) : "-",
+      title: "T日收盘",
+      width: 120,
+    },
+    {
+      dataIndex: "current_bar_1d_qfq",
+      render: (value: Record<string, unknown> | null) =>
+        typeof value?.pct_chg === "number" ? `${value.pct_chg.toFixed(2)}%` : "-",
+      title: "T日涨跌幅",
       width: 130,
     },
   ];
@@ -570,6 +633,54 @@ export default function Home() {
                 />
               </div>
             )}
+          </section>
+        ) : activeTab === "daily-signals" ? (
+          <section className="content-panel">
+            <div className="table-panel">
+              <div className="table-toolbar">
+                <div>
+                  <div className="placeholder-title">当日信号</div>
+                  <div className="panel-subtitle">
+                    universe: {dailySignalResult?.universe_count ?? "-"} / signals:{" "}
+                    {dailySignalResult?.signal_count ?? "-"}
+                  </div>
+                </div>
+                <Space>
+                  <DatePicker
+                    onChange={(_, dateString) =>
+                      setDailySignalDate(
+                        typeof dateString === "string" && dateString.length > 0
+                          ? dateString
+                          : null,
+                      )
+                    }
+                    placeholder="选择交易日"
+                  />
+                  <Select
+                    options={strategyOptions}
+                    value={dailySignalStrategy}
+                    onChange={setDailySignalStrategy}
+                    style={{ width: 140 }}
+                  />
+                  <Button
+                    loading={dailySignalLoading}
+                    onClick={fetchDailySignals}
+                    type="primary"
+                  >
+                    获取当日信号
+                  </Button>
+                </Space>
+              </div>
+              <Table
+                columns={dailySignalColumns}
+                dataSource={dailySignalResult?.signals ?? []}
+                loading={dailySignalLoading}
+                pagination={{ pageSize: 50, showSizeChanger: true }}
+                rowKey="code"
+                scroll={{ x: 690 }}
+                size="middle"
+              />
+            </div>
           </section>
         ) : (
           <section className="placeholder">
