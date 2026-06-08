@@ -33,8 +33,16 @@ def refresh_mart_data_assets() -> dict:
 
 
 @router.post("/stocks/refresh")
-def request_stock_data_asset_refresh() -> dict:
-    return asdict(DataAssetService().request_stock_data_asset_refresh())
+def request_stock_data_asset_refresh(
+    dataset_names: Optional[str] = Query(default=None),
+    target_date: Optional[str] = Query(default=None),
+) -> dict:
+    return asdict(
+        DataAssetService().request_stock_data_asset_refresh(
+            target_date=target_date,
+            dataset_names=dataset_names,
+        )
+    )
 
 
 @router.get("/source-update-task")

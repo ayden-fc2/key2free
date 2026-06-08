@@ -46,7 +46,44 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
   strategies: [{ key: "placeholder", label: "占位" }],
 };
 
+const dailyRecommendedSourceTables = [
+  "trade_calendar",
+  "security_master",
+  "all_stock_snapshot",
+  "bar_1d_raw",
+  "bar_5m_raw",
+  "adjust_factor",
+  "performance_express",
+  "forecast",
+];
+
+const weeklyRecommendedSourceTables = [
+  "dividend",
+  "profit",
+  "operation",
+  "growth",
+  "balance",
+  "cash_flow",
+  "dupont",
+  "deposit_rate",
+  "loan_rate",
+  "reserve_ratio",
+  "money_supply_month",
+  "money_supply_year",
+  "industry_snapshot",
+  "index_member_snapshot",
+];
+
 const strategyOptions = [{ label: "demo", value: "demo" }];
+
+function defaultTargetDate() {
+  const day = new Date();
+  day.setDate(day.getDate() - 1);
+  const year = day.getFullYear();
+  const month = String(day.getMonth() + 1).padStart(2, "0");
+  const date = String(day.getDate()).padStart(2, "0");
+  return `${year}-${month}-${date}`;
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>(
@@ -65,6 +102,12 @@ export default function Home() {
   );
   const [sourceUpdateModalOpen, setSourceUpdateModalOpen] = useState(false);
   const [sourceUpdateStopping, setSourceUpdateStopping] = useState(false);
+  const [sourceUpdateTargetDate, setSourceUpdateTargetDate] = useState(
+    defaultTargetDate,
+  );
+  const [selectedSourceTables, setSelectedSourceTables] = useState<string[]>(
+    dailyRecommendedSourceTables,
+  );
   const sourceUpdateRunning = sourceUpdateTask?.status === "running";
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
   const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
@@ -147,9 +190,16 @@ export default function Home() {
       setSourceUpdateModalOpen(true);
       return;
     }
+    if (selectedSourceTables.length === 0) {
+      messageApi.warning("请选择至少一个 source 表");
+      return;
+    }
 
     try {
-      const data = await requestStockDataAssetRefresh();
+      const data = await requestStockDataAssetRefresh(
+        selectedSourceTables,
+        sourceUpdateTargetDate,
+      );
       messageApi.info(data.message);
       if (data.task_id !== null) {
         const task = await getSourceUpdateTask(data.task_id);
@@ -159,6 +209,17 @@ export default function Home() {
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "更新请求失败");
     }
+  }
+
+  function toggleSourceTable(datasetName: string, checked: boolean) {
+    setSelectedSourceTables((current) => {
+      if (checked) {
+        return current.includes(datasetName)
+          ? current
+          : [...current, datasetName];
+      }
+      return current.filter((name) => name !== datasetName);
+    });
   }
 
   async function stopRefresh() {
@@ -596,6 +657,14 @@ export default function Home() {
                 <div className="table-toolbar">
                   <div className="placeholder-title">源数据总览</div>
                   <Space>
+                    <input
+                      className="target-date-input"
+                      disabled={sourceUpdateRunning}
+                      onChange={(event) => setSourceUpdateTargetDate(event.target.value)}
+                      title="source_update target date"
+                      type="date"
+                      value={sourceUpdateTargetDate}
+                    />
                     <Button
                       icon={<ReloadOutlined />}
                       loading={datasetsLoading}
@@ -605,14 +674,46 @@ export default function Home() {
                     </Button>
                     <Button
                       icon={<SyncOutlined />}
-                      disabled={sourceUpdateRunning}
-                      loading={sourceUpdateRunning}
                       onClick={requestRefresh}
                       type="primary"
                     >
                       更新
                     </Button>
                   </Space>
+                </div>
+                <div className="source-table-picker">
+                  <div className="source-table-group">
+                    <span className="source-table-group-label">日频推荐</span>
+                    {dailyRecommendedSourceTables.map((datasetName) => (
+                      <label className="source-table-option" key={datasetName}>
+                        <input
+                          checked={selectedSourceTables.includes(datasetName)}
+                          disabled={sourceUpdateRunning}
+                          onChange={(event) =>
+                            toggleSourceTable(datasetName, event.target.checked)
+                          }
+                          type="checkbox"
+                        />
+                        <span>{datasetName}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="source-table-group">
+                    <span className="source-table-group-label">周频推荐</span>
+                    {weeklyRecommendedSourceTables.map((datasetName) => (
+                      <label className="source-table-option" key={datasetName}>
+                        <input
+                          checked={selectedSourceTables.includes(datasetName)}
+                          disabled={sourceUpdateRunning}
+                          onChange={(event) =>
+                            toggleSourceTable(datasetName, event.target.checked)
+                          }
+                          type="checkbox"
+                        />
+                        <span>{datasetName}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
                 <Table
                   columns={dataAssetColumns}

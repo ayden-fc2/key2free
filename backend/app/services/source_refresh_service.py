@@ -70,10 +70,17 @@ class SourceRefreshService:
     DEFAULT_CHUNK_MAX_ATTEMPTS = 3
     DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 600
 
-    def __init__(self, cancel_event: Event | None = None) -> None:
+    def __init__(
+        self,
+        cancel_event: Event | None = None,
+        dataset_names: list[str] | None = None,
+        target_date: date | None = None,
+    ) -> None:
         self.data_assets = DataAssetRepository()
         self.tasks = TaskRepository()
         self.cancel_event = cancel_event
+        self.dataset_names = set(dataset_names) if dataset_names else None
+        self.target_date = target_date
         self._run_retry_count = 0
         self._run_login_count = 0
 
@@ -88,6 +95,7 @@ class SourceRefreshService:
         stop_reason: str | None = None
         blacklisted = False
         today = date.today()
+        target_date = self.target_date or (today - timedelta(days=1))
         max_requests_per_run = self._max_requests_per_run()
         self._run_retry_count = 0
         self._run_login_count = 0
@@ -96,8 +104,16 @@ class SourceRefreshService:
             self.tasks.append_log(task_id, f"创建 run: {run_id}")
             self.tasks.append_log(
                 task_id,
-                f"本轮 BaoStock 请求预算: {max_requests_per_run}",
+                (
+                    f"本轮 BaoStock 请求预算: {max_requests_per_run}; "
+                    f"目标基准日期: {target_date}"
+                ),
             )
+            if self.dataset_names is not None:
+                self.tasks.append_log(
+                    task_id,
+                    f"本轮指定 source 表: {', '.join(sorted(self.dataset_names))}",
+                )
 
             quota_state = self.data_assets.get_quota_state(today)
             if quota_state and quota_state["blacklisted"]:
@@ -137,16 +153,19 @@ class SourceRefreshService:
                 trade_window = self._format_scope(trade_results[-1].scope)
                 chunk_success += len(trade_results)
 
-                latest_trading_day = self.data_assets.get_latest_trading_day(today)
+                latest_trading_day = self.data_assets.get_latest_trading_day(target_date)
                 if latest_trading_day is None:
-                    latest_trading_day = today
+                    latest_trading_day = target_date
                     self.tasks.append_log(
                         task_id,
-                        "未能从 source.trade_calendar 找到最近交易日，临时使用今日作为目标日期。",
+                        "未能从 source.trade_calendar 找到最近交易日，临时使用目标基准日期。",
                     )
                 self.tasks.append_log(task_id, f"目标交易日: {latest_trading_day}")
 
                 for bootstrap_dataset in ("security_master", "all_stock_snapshot"):
+                    if not self._should_run_dataset(bootstrap_dataset):
+                        self.tasks.append_log(task_id, f"跳过 {bootstrap_dataset}: 未选择。")
+                        continue
                     item = self._get_catalog_item(catalog, bootstrap_dataset)
                     if item is None:
                         continue
@@ -198,6 +217,9 @@ class SourceRefreshService:
                 for item in catalog:
                     dataset_name = item["dataset_name"]
                     if dataset_name in {"trade_calendar", "security_master", "all_stock_snapshot"}:
+                        continue
+                    if not self._should_run_dataset(dataset_name):
+                        self.tasks.append_log(task_id, f"跳过 {dataset_name}: 未选择。")
                         continue
                     if stop_reason == "request_budget_exhausted":
                         chunk_skipped += 1
@@ -1348,6 +1370,11 @@ class SourceRefreshService:
             if item["dataset_name"] == dataset_name:
                 return item
         return None
+
+    def _should_run_dataset(self, dataset_name: str) -> bool:
+        if self.dataset_names is None:
+            return True
+        return dataset_name in self.dataset_names
 
     def _append_stage_log(
         self,

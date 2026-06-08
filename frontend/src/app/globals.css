@@ -277,6 +277,48 @@ button {
   margin-top: 4px;
 }
 
+.target-date-input {
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  color: var(--text);
+  height: 32px;
+  padding: 4px 10px;
+}
+
+.target-date-input:disabled {
+  background: #f5f5f5;
+  color: var(--muted);
+}
+
+.source-table-picker {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.source-table-group {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.source-table-group-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 58px;
+}
+
+.source-table-option {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+}
+
 .task-modal-header {
   align-items: center;
   display: flex;

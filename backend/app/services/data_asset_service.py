@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from threading import Event, Lock, Thread
 
 from app.dtos.data_asset_dto import (
@@ -75,7 +76,13 @@ class DataAssetService:
             refreshed_count=result.refreshed_count,
         )
 
-    def request_stock_data_asset_refresh(self) -> StockDataAssetRefreshDTO:
+    def request_stock_data_asset_refresh(
+        self,
+        target_date: str | None = None,
+        dataset_names: str | None = None,
+    ) -> StockDataAssetRefreshDTO:
+        parsed_target_date = self._parse_target_date(target_date)
+        parsed_dataset_names = self._parse_dataset_names(dataset_names)
         self._clear_stale_running_task()
         running_task = self.tasks.get_running_task_by_type(SourceRefreshService.TASK_TYPE)
         if running_task is not None:
@@ -87,7 +94,11 @@ class DataAssetService:
 
         task = self.tasks.reset_latest_task(
             SourceRefreshService.TASK_TYPE,
-            "创建 source_update 任务，准备执行每日 source 数据更新。",
+            (
+                "创建 source_update 任务，准备执行每日 source 数据更新。"
+                f" target_date={parsed_target_date.isoformat() if parsed_target_date else 'yesterday'}"
+                f" dataset_names={','.join(parsed_dataset_names) if parsed_dataset_names else 'all'}"
+            ),
         )
         if task.id is None:
             raise RuntimeError("source_update task id is empty")
@@ -97,7 +108,11 @@ class DataAssetService:
 
         def run_source_update() -> None:
             try:
-                SourceRefreshService(cancel_event=cancel_event).run(task_id)
+                SourceRefreshService(
+                    cancel_event=cancel_event,
+                    dataset_names=parsed_dataset_names,
+                    target_date=parsed_target_date,
+                ).run(task_id)
             finally:
                 SourceUpdateTaskRegistry.unregister(task_id)
 
@@ -113,6 +128,20 @@ class DataAssetService:
             message="source_update 任务已创建。",
             task_id=task.id,
         )
+
+    def _parse_target_date(self, target_date: str | None) -> date | None:
+        if target_date is None or target_date.strip() == "":
+            return None
+        try:
+            return date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise ValueError("target_date must be YYYY-MM-DD") from exc
+
+    def _parse_dataset_names(self, dataset_names: str | None) -> list[str] | None:
+        if dataset_names is None or dataset_names.strip() == "":
+            return None
+        names = [name.strip() for name in dataset_names.split(",") if name.strip()]
+        return names or None
 
     def get_source_update_task(self, task_id: int | None = None) -> TaskDTO | None:
         self._clear_stale_running_task(task_id)
