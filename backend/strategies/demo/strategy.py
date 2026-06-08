@@ -6,6 +6,10 @@ from app.entities.stock_data_context import StockDataContext
 
 
 HISTORY_WINDOW = 430
+MA20_WINDOW = 20
+MA20_SLOPE_WINDOW = 10
+MIN_MA20_SLOPE_IMPROVING_DAYS = 3
+MAX_MA20_SLOPE_IMPROVING_DAYS = 5
 MA30_WINDOW = 30
 MA30_SLOPE_WINDOW = 10
 MA30_STRUCTURE_DAYS = 400
@@ -14,8 +18,10 @@ MAX_MA30_TURN_POINTS = 8
 RECENT_TURN_POINTS = 5
 RECENT_LOW_COUNT = 4
 MIN_LOW_STRUCTURE_SPAN_DAYS = 200
-LOW_CHANGE_ATR_MULTIPLE = 0.3
+STRUCTURE_NOISE_ATR_MULTIPLE = 0.6
 RECENT_SUPPORT_LOOKBACK = 6
+RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE = STRUCTURE_NOISE_ATR_MULTIPLE
+RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE = STRUCTURE_NOISE_ATR_MULTIPLE * 2
 ATR30_WINDOW = 30
 
 ATR14_WINDOW = 14
@@ -23,6 +29,7 @@ VOLUME_AVG_WINDOW = 10
 LONG_BODY_MIN_RATIO = 0.7
 LONG_BODY_ATR_MULTIPLE = 0.8
 SMALL_CANDLE_ATR_MULTIPLE = 0.6
+BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO = 0.7
 
 MACD_DIVERGENCE_LOOKBACK = 120
 PIVOT_NEIGHBOR_WINDOW = 3
@@ -130,7 +137,9 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
     if low_pattern not in ALLOWED_LOW_PATTERNS:
         return False
 
-    if not _is_recent_low_near_last_structure_low(lows, low_points[-1]):
+    if not _is_recent_low_inside_last_structure_low_zone(lows, low_points[-1]):
+        return False
+    if not _is_recent_ma20_slope_improving(closes):
         return False
 
     return not _has_bearish_macd_divergence(closes)
@@ -173,7 +182,7 @@ def _classify_low_changes(low_points: list[tuple[int, float, float]]) -> tuple[s
         low_points[1:],
     ):
         delta = next_low - previous_low
-        threshold = next_atr * LOW_CHANGE_ATR_MULTIPLE
+        threshold = next_atr * STRUCTURE_NOISE_ATR_MULTIPLE
         if delta > threshold:
             changes.append("涨")
         elif delta < -threshold:
@@ -183,7 +192,7 @@ def _classify_low_changes(low_points: list[tuple[int, float, float]]) -> tuple[s
     return tuple(changes)
 
 
-def _is_recent_low_near_last_structure_low(
+def _is_recent_low_inside_last_structure_low_zone(
     lows: list[float | None],
     last_low_point: tuple[int, float, float],
 ) -> bool:
@@ -191,7 +200,29 @@ def _is_recent_low_near_last_structure_low(
     if len(recent_lows) < RECENT_SUPPORT_LOOKBACK or any(value is None for value in recent_lows):
         return False
     _low_index, low_value, low_atr = last_low_point
-    return min(value for value in recent_lows if value is not None) <= low_value + low_atr * LOW_CHANGE_ATR_MULTIPLE
+    recent_low = min(value for value in recent_lows if value is not None)
+    lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
+    upper_bound = low_value + low_atr * RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE
+    return lower_bound <= recent_low <= upper_bound
+
+
+def _is_recent_ma20_slope_improving(closes: list[float | None]) -> bool:
+    ma20 = _moving_average(closes, MA20_WINDOW)
+    slopes = _rolling_linear_slopes(ma20, MA20_SLOPE_WINDOW)
+    recent_slopes = slopes[-MAX_MA20_SLOPE_IMPROVING_DAYS:]
+    if len(recent_slopes) < MAX_MA20_SLOPE_IMPROVING_DAYS:
+        return False
+    if any(value is None for value in recent_slopes):
+        return False
+
+    suffix_length = 1
+    for index in range(len(recent_slopes) - 1, 0, -1):
+        current = recent_slopes[index]
+        previous = recent_slopes[index - 1]
+        if current is None or previous is None or current <= previous:
+            break
+        suffix_length += 1
+    return suffix_length >= MIN_MA20_SLOPE_IMPROVING_DAYS
 
 
 def _passes_kline_filter(bars: list[dict[str, Any]]) -> bool:
@@ -414,6 +445,7 @@ def _is_bullish_engulfing(
         _is_bullish(current)
         and _is_bearish(previous)
         and _is_long_body(current, atr14, current_index)
+        and previous["body"] >= current["body"] * BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO
         and current_low <= previous_low
         and current_high >= previous_high
     )
