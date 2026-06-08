@@ -24,6 +24,7 @@ class DailySignalItemDTO:
     code_name: str | None
     trade_date: str
     universe: dict[str, Any]
+    signal: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

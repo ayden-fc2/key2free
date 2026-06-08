@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from app.dtos.signal_dto import (
@@ -132,7 +133,9 @@ class SignalService:
             universe=universe,
             bars_1d_qfq=bars,
         )
-        if not signal_strategy(context):
+        signal_result = signal_strategy(context)
+        signal_payload = self._normalize_signal_result(signal_result)
+        if signal_payload is None:
             return
         signal_items.append(
             DailySignalItemDTO(
@@ -140,6 +143,7 @@ class SignalService:
                 code_name=self._optional_string(universe.get("code_name")),
                 trade_date=trade_date.isoformat(),
                 universe=universe,
+                signal=signal_payload,
             )
         )
 
@@ -167,6 +171,29 @@ class SignalService:
 
     def _optional_string(self, value: Any) -> str | None:
         return value if isinstance(value, str) else None
+
+    def _normalize_signal_result(self, value: Any) -> dict[str, Any] | None:
+        if isinstance(value, bool):
+            return {"triggered": True} if value else None
+        if is_dataclass(value):
+            payload = asdict(value)
+        elif isinstance(value, dict):
+            payload = dict(value)
+        else:
+            triggered = getattr(value, "triggered", None)
+            if triggered is None:
+                return None
+            payload = {
+                "triggered": triggered,
+                "min_stop_loss": getattr(value, "min_stop_loss", None),
+                "reference_take_profit": getattr(value, "reference_take_profit", None),
+                "signal_atr30": getattr(value, "signal_atr30", None),
+                "ideal_buy_price": getattr(value, "ideal_buy_price", None),
+                "max_watch_days": getattr(value, "max_watch_days", None),
+            }
+        if not payload.get("triggered"):
+            return None
+        return payload
 
     def _normalize_codes(self, codes: list[str]) -> list[str]:
         seen: set[str] = set()

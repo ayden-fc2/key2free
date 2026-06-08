@@ -3,6 +3,16 @@ export type DailySignalItem = {
   code_name: string | null;
   trade_date: string;
   universe: Record<string, unknown>;
+  signal?: SignalDecision | null;
+};
+
+export type SignalDecision = {
+  triggered: boolean;
+  min_stop_loss: number | null;
+  reference_take_profit: number | null;
+  signal_atr30: number | null;
+  ideal_buy_price: number | null;
+  max_watch_days: number | null;
 };
 
 export type Bar1dQfq = {

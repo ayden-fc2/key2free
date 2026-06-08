@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from app.entities.stock_data_context import StockDataContext
+from app.entities.stock_data_context import SignalDecision, StockDataContext
 
 
 HISTORY_WINDOW = 430
+MAX_WATCH_DAYS = 2
 MA20_WINDOW = 20
 MA20_SLOPE_WINDOW = 10
 MAX_MA20_SLOPE_IMPROVING_DAYS = 5
@@ -43,39 +45,113 @@ MIN_PRICE_HIGHER_HIGH_RATIO = 0.01
 MIN_MACD_WEAKEN_RATIO = 0.05
 MACD_ZERO_EPSILON = 1e-9
 
+LOW_CHANGE_FLAT = "震"
+LOW_CHANGE_RISE = "涨"
+LOW_CHANGE_FALL = "跌"
+
 ALLOWED_LOW_PATTERNS = {
-    ("震", "震", "震"),
-    ("跌", "震", "涨"),
-    ("跌", "涨", "震"),
-    ("跌", "涨", "涨"),
-    ("震", "涨", "涨"),
-    ("涨", "震", "涨"),
-    ("涨", "涨", "震"),
-    ("震", "震", "涨"),
-    ("涨", "震", "震"),
-    ("震", "涨", "震"),
-    ("涨", "涨", "涨"),
+    (LOW_CHANGE_FLAT, LOW_CHANGE_FLAT, LOW_CHANGE_FLAT),
+    (LOW_CHANGE_FALL, LOW_CHANGE_FLAT, LOW_CHANGE_RISE),
+    (LOW_CHANGE_FALL, LOW_CHANGE_RISE, LOW_CHANGE_FLAT),
+    (LOW_CHANGE_FALL, LOW_CHANGE_RISE, LOW_CHANGE_RISE),
+    (LOW_CHANGE_FLAT, LOW_CHANGE_RISE, LOW_CHANGE_RISE),
+    (LOW_CHANGE_RISE, LOW_CHANGE_FLAT, LOW_CHANGE_RISE),
+    (LOW_CHANGE_RISE, LOW_CHANGE_RISE, LOW_CHANGE_FLAT),
+    (LOW_CHANGE_FLAT, LOW_CHANGE_FLAT, LOW_CHANGE_RISE),
+    (LOW_CHANGE_RISE, LOW_CHANGE_FLAT, LOW_CHANGE_FLAT),
+    (LOW_CHANGE_FLAT, LOW_CHANGE_RISE, LOW_CHANGE_FLAT),
+    (LOW_CHANGE_RISE, LOW_CHANGE_RISE, LOW_CHANGE_RISE),
 }
-def demo_signal_strategy(context: StockDataContext) -> bool:
+@dataclass(frozen=True)
+class _TrendSignalContext:
+    l4_low: float
+    l4_atr30: float
+    l3_l4_high: float
+
+
+def demo_signal_strategy(context: StockDataContext) -> SignalDecision:
     if not _passes_universe_filter(context):
-        return False
-    if not _passes_trend_filter(context.bars_1d_qfq):
-        return False
+        return SignalDecision(triggered=False)
+    trend_context = _resolve_trend_signal_context(context.bars_1d_qfq)
+    if trend_context is None:
+        return SignalDecision(triggered=False)
     if not _passes_kline_filter(context.bars_1d_qfq):
-        return False
-    return True
+        return SignalDecision(triggered=False)
+    return SignalDecision(
+        triggered=True,
+        min_stop_loss=trend_context.l4_low - trend_context.l4_atr30,
+        reference_take_profit=trend_context.l3_l4_high - 1.618 * trend_context.l4_atr30,
+        signal_atr30=trend_context.l4_atr30,
+        ideal_buy_price=trend_context.l4_low + trend_context.l4_atr30,
+        max_watch_days=MAX_WATCH_DAYS,
+    )
 
 
 def demo_universe_filter(context: StockDataContext) -> bool:
     return _passes_universe_filter(context)
 
 
-def demo_entry_strategy(*_args: Any, **_kwargs: Any) -> int:
+def demo_entry_strategy(
+    *,
+    open_price: Any,
+    close_price: Any,
+    high_price: Any,
+    low_price: Any,
+    min_stop_loss: Any,
+    reference_take_profit: Any,
+    signal_atr30: Any,
+    ideal_buy_price: Any,
+) -> float | int:
+    open_value = _to_float(open_price)
+    high_value = _to_float(high_price)
+    low_value = _to_float(low_price)
+    ideal_buy_value = _to_float(ideal_buy_price)
+    if open_value is None or high_value is None or low_value is None or ideal_buy_value is None:
+        return -1
+    if open_value <= 0 or high_value <= 0 or low_value <= 0 or ideal_buy_value <= 0:
+        return -1
+    if open_value > ideal_buy_value:
+        return open_value
+    if _is_price_inside_range(ideal_buy_value, low_value, high_value):
+        return ideal_buy_value
     return -1
 
 
-def demo_exit_strategy(*_args: Any, **_kwargs: Any) -> int:
+def demo_exit_strategy(
+    *,
+    open_price: Any,
+    close_price: Any,
+    high_price: Any,
+    low_price: Any,
+    buy_date: Any,
+    min_stop_loss: Any,
+    reference_take_profit: Any,
+    signal_atr30: Any,
+) -> float | int:
+    open_value = _to_float(open_price)
+    high_value = _to_float(high_price)
+    low_value = _to_float(low_price)
+    min_stop_value = _to_float(min_stop_loss)
+    take_profit_value = _to_float(reference_take_profit)
+    atr_value = _to_float(signal_atr30)
+    if open_value is None or high_value is None or low_value is None:
+        return -1
+    if open_value <= 0 or high_value <= 0 or low_value <= 0:
+        return -1
+
+    if min_stop_value is not None and _is_price_inside_range(min_stop_value, low_value, high_value):
+        return min_stop_value
+    if take_profit_value is not None and _is_price_inside_range(take_profit_value, low_value, high_value):
+        return take_profit_value
+    if atr_value is not None and atr_value > 0:
+        atr_stop = open_value - atr_value * 0.618
+        if _is_price_inside_range(atr_stop, low_value, high_value):
+            return atr_stop
     return -1
+
+
+def _is_price_inside_range(price: float, low_value: float, high_value: float) -> bool:
+    return price > 0 and low_value <= price <= high_value
 
 
 def _passes_universe_filter(context: StockDataContext) -> bool:
@@ -94,19 +170,23 @@ def _passes_universe_filter(context: StockDataContext) -> bool:
 
 
 def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
+    return _resolve_trend_signal_context(bars) is not None
+
+
+def _resolve_trend_signal_context(bars: list[dict[str, Any]]) -> _TrendSignalContext | None:
     if len(bars) < HISTORY_WINDOW:
-        return False
+        return None
 
     window_bars = bars[-HISTORY_WINDOW:]
     closes = [_to_float(item.get("close")) for item in window_bars]
     highs = [_to_float(item.get("high")) for item in window_bars]
     lows = [_to_float(item.get("low")) for item in window_bars]
     if any(value is None for value in closes):
-        return False
+        return None
     if any(value is None for value in highs):
-        return False
+        return None
     if any(value is None for value in lows):
-        return False
+        return None
 
     ma30 = _moving_average(closes, MA30_WINDOW)
     atr30 = _average_true_range(highs, lows, closes, ATR30_WINDOW)
@@ -116,7 +196,7 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
         if value is not None
     ]
     if len(ma30_points) < MA30_STRUCTURE_DAYS:
-        return False
+        return None
 
     ma30_points = ma30_points[-MA30_STRUCTURE_DAYS:]
     ma30_indices = [item[0] for item in ma30_points]
@@ -124,7 +204,7 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
     ma30_slopes = _rolling_linear_slopes(ma30_values, MA30_SLOPE_WINDOW)
     turn_positions = _find_negative_to_positive_turn_points(ma30_slopes)
     if not (MIN_MA30_TURN_POINTS <= len(turn_positions) <= MAX_MA30_TURN_POINTS):
-        return False
+        return None
 
     recent_turn_indices = [ma30_indices[position] for position in turn_positions[-RECENT_TURN_POINTS:]]
     low_points = _extract_interval_low_points(
@@ -133,24 +213,33 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
         turn_indices=recent_turn_indices,
     )
     if low_points is None:
-        return False
+        return None
     if low_points[-1][0] - low_points[0][0] < MIN_LOW_STRUCTURE_SPAN_DAYS:
-        return False
+        return None
 
     low_pattern = _classify_low_changes(low_points)
     if low_pattern not in ALLOWED_LOW_PATTERNS:
-        return False
+        return None
 
     if not _is_recent_low_inside_last_structure_low_zone(lows, low_points[-1]):
-        return False
+        return None
     if not _is_current_close_near_l4(lows, closes, low_points[-1], low_pattern):
-        return False
+        return None
     if not _is_post_l4_price_above_support(lows, closes, low_points[-1]):
-        return False
+        return None
     if not _is_recent_ma20_slope_improving(closes):
-        return False
+        return None
 
-    return True
+    l3_index = low_points[-2][0]
+    l4_index, l4_low, l4_atr30 = low_points[-1]
+    l3_l4_high = _max_between(highs, l3_index, l4_index)
+    if l3_l4_high is None:
+        return None
+    return _TrendSignalContext(
+        l4_low=l4_low,
+        l4_atr30=l4_atr30,
+        l3_l4_high=l3_l4_high,
+    )
 
 
 def _extract_interval_low_points(
@@ -192,11 +281,11 @@ def _classify_low_changes(low_points: list[tuple[int, float, float]]) -> tuple[s
         delta = next_low - previous_low
         threshold = next_atr * STRUCTURE_NOISE_ATR_MULTIPLE
         if delta > threshold:
-            changes.append("涨")
+            changes.append(LOW_CHANGE_RISE)
         elif delta < -threshold:
-            changes.append("跌")
+            changes.append(LOW_CHANGE_FALL)
         else:
-            changes.append("震")
+            changes.append(LOW_CHANGE_FLAT)
     return tuple(changes)
 
 
@@ -244,6 +333,15 @@ def _resolve_recent_low(lows: list[float | None]) -> float | None:
     return min(value for value in recent_lows if value is not None)
 
 
+def _max_between(values: list[float | None], start_index: int, end_index: int) -> float | None:
+    if start_index > end_index:
+        start_index, end_index = end_index, start_index
+    segment = values[start_index : end_index + 1]
+    if not segment or any(value is None for value in segment):
+        return None
+    return max(value for value in segment if value is not None)
+
+
 def _is_post_l4_price_above_support(
     lows: list[float | None],
     closes: list[float | None],
@@ -267,7 +365,7 @@ def _is_post_l4_price_above_support(
 
 
 def _low_pattern_rise_count(low_pattern: tuple[str, ...]) -> int:
-    return sum(1 for item in low_pattern if item == "ХЗ")
+    return sum(1 for item in low_pattern if item == LOW_CHANGE_RISE)
 
 
 def _is_recent_ma20_slope_improving(closes: list[float | None]) -> bool:
@@ -647,15 +745,26 @@ def _find_negative_to_positive_turn_points(slopes: list[float | None]) -> list[i
 
 def _moving_average(values: list[float | None], window: int) -> list[float | None]:
     result: list[float | None] = []
+    window_sum = 0.0
+    none_count = 0
     for index in range(len(values)):
-        if index + 1 < window:
+        value = values[index]
+        if value is None:
+            none_count += 1
+        else:
+            window_sum += value
+
+        if index >= window:
+            expired = values[index - window]
+            if expired is None:
+                none_count -= 1
+            else:
+                window_sum -= expired
+
+        if index + 1 < window or none_count > 0:
             result.append(None)
             continue
-        window_values = values[index + 1 - window : index + 1]
-        if any(value is None for value in window_values):
-            result.append(None)
-            continue
-        result.append(sum(value for value in window_values if value is not None) / window)
+        result.append(window_sum / window)
     return result
 
 
@@ -687,21 +796,39 @@ def _rolling_linear_slopes(
     values: list[float | None],
     window: int,
 ) -> list[float | None]:
+    if window <= 1:
+        return [None for _ in values]
     result: list[float | None] = []
-    x_values = list(range(window))
-    x_mean = sum(x_values) / window
-    denominator = sum((x - x_mean) ** 2 for x in x_values)
+    x_mean = (window - 1) / 2
+    denominator = sum((x - x_mean) ** 2 for x in range(window))
+    window_sum = 0.0
+    weighted_sum = 0.0
+    none_count = 0
     for index in range(len(values)):
-        if index + 1 < window:
+        value = values[index]
+        if index < window:
+            if value is None:
+                none_count += 1
+            else:
+                window_sum += value
+                weighted_sum += index * value
+        else:
+            expired = values[index - window]
+            if expired is None:
+                none_count -= 1
+            else:
+                window_sum -= expired
+            weighted_sum -= window_sum
+            if value is None:
+                none_count += 1
+            else:
+                window_sum += value
+                weighted_sum += (window - 1) * value
+
+        if index + 1 < window or none_count > 0:
             result.append(None)
             continue
-        window_values = values[index + 1 - window : index + 1]
-        if any(value is None for value in window_values):
-            result.append(None)
-            continue
-        y_values = [value for value in window_values if value is not None]
-        y_mean = sum(y_values) / window
-        numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(x_values, y_values))
+        numerator = weighted_sum - x_mean * window_sum
         result.append(numerator / denominator)
     return result
 

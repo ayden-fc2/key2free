@@ -37,20 +37,28 @@ backend/strategies/demo/
 
 | 函数 | 类型 | 当前行为 |
 | --- | --- | --- |
-| `demo_signal_strategy` | 信号策略 | 接收 `StockDataContext`，执行成分筛选、趋势筛选和 K 线筛选。 |
+| `demo_signal_strategy` | 信号策略 | 接收 `StockDataContext`，执行成分筛选、趋势筛选和 K 线筛选，并返回 `SignalDecision`。 |
 | `demo_universe_filter` | 成分预过滤 | 只基于 `universe_daily` 的 `T` 日字段筛普通 A 股，用于在读取历史 K 线前缩小股票池。 |
-| `demo_entry_strategy` | 入场策略 | 当前占位，统一返回 `-1`。 |
-| `demo_exit_strategy` | 出场策略 | 当前占位，统一返回 `-1`。 |
+| `demo_entry_strategy` | 入场策略 | 开盘价高于理想买入价时按开盘价买入；否则理想买入价落在当日高低价区间内时按理想买入价买入；否则返回 `-1`。 |
+| `demo_exit_strategy` | 出场策略 | 依次检查最低止损、参考止盈、`open_price - signal_atr30 * 0.618` 是否落在当日高低价区间内，命中则按对应价格卖出；否则返回 `-1`。 |
 
 ##### 5. 筛选结构
 
-`demo_signal_strategy` 按顺序执行以下筛选，任一层不通过则返回 `False`：
+`demo_signal_strategy` 按顺序执行以下筛选，任一层不通过则返回 `SignalDecision(triggered=False)`：
 
 1. 成分筛选。
 2. 趋势筛选。
 3. K 线筛选。
 
-只有三层全部通过时，才返回 `True`。
+只有三层全部通过时，才返回 `SignalDecision(triggered=True, ...)`。demo 的信号决策字段定义：
+
+| 字段 | demo 取值 |
+| --- | --- |
+| `min_stop_loss` | `L4 - ATR30(L4)` |
+| `reference_take_profit` | `L3` 到 `L4` 区间中间最高价 `- 1.618 * ATR30(L4)` |
+| `signal_atr30` | `ATR30(L4)` |
+| `ideal_buy_price` | `L4 + ATR30(L4)` |
+| `max_watch_days` | `2` |
 
 ## 二、信号规则
 
@@ -99,7 +107,7 @@ backend/strategies/demo/
 前端当日信号页拿到 demo 信号后，会再批量拉取这些股票在数据库中的全量 `StockDataContext`，并通过可复用图表组件渲染日 K、MA5/MA10/MA20/MA30、MACD 和成交量。图表默认显示最后 60 个交易日，三个视图共享缩放拖动。
 
 ```python
-def demo_signal_strategy(context: StockDataContext) -> bool:
+def demo_signal_strategy(context: StockDataContext) -> SignalDecision:
     ...
 ```
 
@@ -127,5 +135,5 @@ def demo_signal_strategy(context: StockDataContext) -> bool:
 - 新策略应复制 `demo` 的目录结构。
 - 每个策略必须提供信号策略、入场策略、出场策略三个函数。
 - 策略注册名应稳定，前端和后端都用注册名识别策略。
-- 信号策略只判断是否爆信号，不处理资金、仓位、成交、止盈止损。
-- 入场策略和出场策略当前仍是占位接口，等回测模块确定输入输出后再补充。
+- 信号策略返回标准 `SignalDecision`，只提供是否爆信号和策略参考价，不处理资金、仓位、成交等交易动作。
+- 入场策略和出场策略使用回测模块传入的当日 OHLC 与信号参数，返回 `-1` 或成交价格；资金、仓位、手续费和订单写入由回测模块统一处理。

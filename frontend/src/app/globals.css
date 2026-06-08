@@ -256,6 +256,39 @@ button {
   gap: 12px;
 }
 
+.signal-metrics {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  overflow: hidden;
+}
+
+.signal-metric {
+  background: #fbfcfd;
+  border-right: 1px solid var(--panel-border);
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.signal-metric:last-child {
+  border-right: 0;
+}
+
+.signal-metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.signal-metric strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .empty-chart {
   align-items: center;
   border: 1px dashed var(--panel-border);
@@ -322,6 +355,38 @@ button {
 .source-table-option-disabled {
   color: var(--muted);
   opacity: 0.55;
+}
+
+.backtest-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.backtest-form {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  padding: 16px;
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.form-field > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.backtest-summary {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 12px;
 }
 
 .disabled-asset-row > td {
@@ -417,5 +482,17 @@ button {
     border-top: 1px solid var(--panel-border);
     padding-left: 0;
     padding-top: 18px;
+  }
+
+  .signal-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal-metric {
+    border-bottom: 1px solid var(--panel-border);
+  }
+
+  .backtest-form {
+    grid-template-columns: 1fr;
   }
 }
