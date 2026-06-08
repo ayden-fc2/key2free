@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from app.dtos.signal_dto import DailySignalItemDTO, DailySignalResultDTO
+from app.dtos.signal_dto import (
+    DailySignalItemDTO,
+    DailySignalResultDTO,
+    StockDataContextDTO,
+    StockDataContextResultDTO,
+)
 from app.entities.stock_data_context import StockDataContext
 from app.repositories.signal_repository import SignalRepository
 from app.services.strategy_registry import get_strategy
@@ -74,6 +79,37 @@ class SignalService:
             signals=signal_items,
         )
 
+    def get_stock_data_contexts(
+        self,
+        *,
+        codes: list[str],
+    ) -> StockDataContextResultDTO:
+        normalized_codes = self._normalize_codes(codes)
+        if not normalized_codes:
+            return StockDataContextResultDTO(
+                contexts=[],
+            )
+
+        universe_rows = self.repository.get_latest_universe_by_codes(codes=normalized_codes)
+        universe_by_code = {
+            str(row["code"]): row
+            for row in universe_rows
+            if isinstance(row.get("code"), str)
+        }
+        bars_by_code = self.repository.get_full_bar_1d_qfq_history(codes=normalized_codes)
+
+        contexts = [
+            StockDataContextDTO(
+                code=code,
+                trade_date=self._resolve_context_trade_date(bars_by_code.get(code, [])),
+                universe=universe_by_code[code],
+                bars_1d_qfq=bars_by_code.get(code, []),
+            )
+            for code in normalized_codes
+            if code in universe_by_code
+        ]
+        return StockDataContextResultDTO(contexts=contexts)
+
     def _append_signal_if_triggered(
         self,
         *,
@@ -103,3 +139,20 @@ class SignalService:
 
     def _optional_string(self, value: Any) -> str | None:
         return value if isinstance(value, str) else None
+
+    def _normalize_codes(self, codes: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for code in codes:
+            item = code.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    def _resolve_context_trade_date(self, bars: list[dict[str, Any]]) -> str:
+        if not bars:
+            return ""
+        value = bars[-1].get("trade_date")
+        return value if isinstance(value, str) else ""

@@ -27,6 +27,57 @@ class SignalRepository:
             columns = [item[0] for item in result.description]
         return [self._normalize_row(columns, row) for row in rows]
 
+    def get_universe_daily_by_codes(
+        self,
+        *,
+        trade_date: date,
+        codes: list[str],
+    ) -> list[dict[str, Any]]:
+        if not codes:
+            return []
+
+        with self.duckdb.connect(read_only=True) as connection:
+            result = connection.execute(
+                """
+                select *
+                from mart.universe_daily
+                where trade_date = ?
+                  and code in (select unnest(?))
+                order by code
+                """,
+                [trade_date, codes],
+            )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+        return [self._normalize_row(columns, row) for row in rows]
+
+    def get_latest_universe_by_codes(self, *, codes: list[str]) -> list[dict[str, Any]]:
+        if not codes:
+            return []
+
+        with self.duckdb.connect(read_only=True) as connection:
+            result = connection.execute(
+                """
+                with ranked as (
+                    select *,
+                           row_number() over (
+                               partition by code
+                               order by trade_date desc
+                           ) as rn
+                    from mart.universe_daily
+                    where code in (select unnest(?))
+                )
+                select * exclude (rn)
+                from ranked
+                where rn = 1
+                order by code
+                """,
+                [codes],
+            )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+        return [self._normalize_row(columns, row) for row in rows]
+
     def get_bar_1d_qfq_history(
         self,
         *,
@@ -46,6 +97,36 @@ class SignalRepository:
                 order by code, trade_date
                 """,
                 [trade_date, codes],
+            )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+
+        bars_by_code: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            item = self._normalize_row(columns, row)
+            code = item.get("code")
+            if not isinstance(code, str):
+                continue
+            bars_by_code.setdefault(code, []).append(item)
+        return bars_by_code
+
+    def get_full_bar_1d_qfq_history(
+        self,
+        *,
+        codes: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not codes:
+            return {}
+
+        with self.duckdb.connect(read_only=True) as connection:
+            result = connection.execute(
+                """
+                select *
+                from mart.bar_1d_qfq
+                where code in (select unnest(?))
+                order by code, trade_date
+                """,
+                [codes],
             )
             rows = result.fetchall()
             columns = [item[0] for item in result.description]

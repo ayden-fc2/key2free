@@ -17,6 +17,10 @@ class DailySignalRequest(BaseModel):
     strategy_name: str
 
 
+class StockDataContextRequest(BaseModel):
+    codes: list[str]
+
+
 @router.get("/strategies")
 def get_signal_strategies() -> dict[str, list[str]]:
     return {"strategies": list_strategy_names()}
@@ -33,3 +37,10 @@ def get_daily_signals(request: DailySignalRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return asdict(result)
 
+
+@router.post("/stock-contexts")
+def get_stock_data_contexts(request: StockDataContextRequest) -> dict:
+    result = SignalService().get_stock_data_contexts(
+        codes=request.codes,
+    )
+    return asdict(result)

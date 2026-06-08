@@ -11,6 +11,14 @@ class DailySignalRequestDTO:
 
 
 @dataclass(frozen=True)
+class StockDataContextDTO:
+    code: str
+    trade_date: str
+    universe: dict[str, Any]
+    bars_1d_qfq: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class DailySignalItemDTO:
     code: str
     code_name: str | None
@@ -25,3 +33,8 @@ class DailySignalResultDTO:
     universe_count: int
     signal_count: int
     signals: list[DailySignalItemDTO]
+
+
+@dataclass(frozen=True)
+class StockDataContextResultDTO:
+    contexts: list[StockDataContextDTO]
