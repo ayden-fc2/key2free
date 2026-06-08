@@ -22,6 +22,7 @@ class AdapterRuntime:
     today: date
     latest_trading_day: date | None = None
     run_id: int | None = None
+    repository: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -238,14 +239,34 @@ class AllStockSnapshotAdapter:
     ) -> list[AdapterChunk]:
         if runtime.latest_trading_day is None:
             raise ValueError("latest_trading_day is required for all_stock_snapshot")
-        day = runtime.latest_trading_day.isoformat()
-        return [
+        if runtime.repository is None:
+            raise ValueError("repository is required for all_stock_snapshot")
+        start_date = runtime.repository.get_dataset_actual_min_date(self.spec.dataset_name)
+        if start_date is None or start_date > runtime.latest_trading_day:
+            start_date = runtime.latest_trading_day
+        missing_days = runtime.repository.get_missing_snapshot_trading_days(
+            start_date=start_date,
+            end_date=runtime.latest_trading_day,
+            dataset_name=self.spec.dataset_name,
+        )
+        chunks = [
             AdapterChunk(
                 dataset_name=self.spec.dataset_name,
-                chunk_key=day,
-                scope={"trade_date": day},
+                chunk_key=day.isoformat(),
+                scope={"trade_date": day.isoformat(), "repair_missing": True},
             )
+            for day in sorted(set(missing_days))
         ]
+        if runtime.latest_trading_day not in missing_days:
+            day = runtime.latest_trading_day
+            chunks.append(
+                AdapterChunk(
+                    dataset_name=self.spec.dataset_name,
+                    chunk_key=day.isoformat(),
+                    scope={"trade_date": day.isoformat()},
+                )
+            )
+        return chunks
 
     def fetch(
         self,
@@ -263,9 +284,10 @@ class AllStockSnapshotAdapter:
         raise_if_error(response)
 
         now = datetime.now()
+        trade_date = parse_date(day)
         rows = [
             {
-                "trade_date": runtime.latest_trading_day,
+                "trade_date": trade_date,
                 "code": empty_to_none(row.get("code")),
                 "code_name": empty_to_none(row.get("code_name")),
                 "updated_at": now,
@@ -303,14 +325,20 @@ class Bar1dRawAdapter:
     ) -> list[AdapterChunk]:
         if runtime.latest_trading_day is None:
             raise ValueError("latest_trading_day is required for bar_1d_raw")
+        if runtime.repository is None:
+            raise ValueError("repository is required for bar_1d_raw")
 
         asset_universe = self._resolve_asset_universe(item)
         end_date = runtime.latest_trading_day
         current_watermark = parse_date(item.get("current_watermark"))
+        chunks = self._repair_chunks(
+            item=item,
+            runtime=runtime,
+            current_watermark=current_watermark,
+        )
         if current_watermark is not None and current_watermark >= end_date:
-            return []
+            return chunks
 
-        chunks = []
         for asset in asset_universe:
             code = empty_to_none(asset.get("code"))
             if code is None:
@@ -331,6 +359,50 @@ class Bar1dRawAdapter:
                     scope=scope,
                 )
             )
+        return chunks
+
+    def _repair_chunks(
+        self,
+        *,
+        item: dict[str, Any],
+        runtime: AdapterRuntime,
+        current_watermark: date | None,
+    ) -> list[AdapterChunk]:
+        if current_watermark is None or runtime.repository is None:
+            return []
+        issues = runtime.repository.get_daily_source_coverage_issues(
+            dataset_name=self.spec.dataset_name,
+            end_date=current_watermark,
+        )
+        repair_days = [item["trade_date"] for item in issues]
+        if not repair_days:
+            return []
+        chunks = []
+        for asset in self._resolve_asset_universe(item):
+            code = empty_to_none(asset.get("code"))
+            if code is None:
+                continue
+            ipo_date = parse_date(asset.get("ipo_date")) or date(1990, 12, 19)
+            out_date = parse_date(asset.get("out_date"))
+            eligible_days = [
+                day
+                for day in repair_days
+                if day >= ipo_date and (out_date is None or day <= out_date)
+            ]
+            for chunk_start, chunk_end in _group_contiguous_dates(eligible_days):
+                scope = {
+                    "code": str(code),
+                    "start_date": chunk_start.isoformat(),
+                    "end_date": chunk_end.isoformat(),
+                    "repair_missing": True,
+                }
+                chunks.append(
+                    AdapterChunk(
+                        dataset_name=self.spec.dataset_name,
+                        chunk_key=_stable_scope_key(scope),
+                        scope=scope,
+                    )
+                )
         return chunks
 
     def fetch(
@@ -480,17 +552,23 @@ class Bar5mRawAdapter:
     ) -> list[AdapterChunk]:
         if runtime.latest_trading_day is None:
             raise ValueError("latest_trading_day is required for bar_5m_raw")
+        if runtime.repository is None:
+            raise ValueError("repository is required for bar_5m_raw")
 
         end_date = runtime.latest_trading_day
         current_watermark = parse_date(item.get("current_watermark"))
+        chunks = self._repair_chunks(
+            item=item,
+            runtime=runtime,
+            current_watermark=current_watermark,
+        )
         if current_watermark is not None and current_watermark >= end_date:
-            return []
+            return chunks
 
         window_start = max(_years_ago(end_date, 5), date(1990, 12, 19))
         if current_watermark is not None:
             window_start = max(window_start, current_watermark + timedelta(days=1))
 
-        chunks = []
         for asset in _resolve_asset_universe(item, "bar_5m_raw"):
             code = empty_to_none(asset.get("code"))
             if code is None:
@@ -502,6 +580,50 @@ class Bar5mRawAdapter:
                     "code": str(code),
                     "start_date": chunk_start.isoformat(),
                     "end_date": chunk_end.isoformat(),
+                }
+                chunks.append(
+                    AdapterChunk(
+                        dataset_name=self.spec.dataset_name,
+                        chunk_key=_stable_scope_key(scope),
+                        scope=scope,
+                    )
+                )
+        return chunks
+
+    def _repair_chunks(
+        self,
+        *,
+        item: dict[str, Any],
+        runtime: AdapterRuntime,
+        current_watermark: date | None,
+    ) -> list[AdapterChunk]:
+        if current_watermark is None or runtime.repository is None:
+            return []
+        issues = runtime.repository.get_daily_source_coverage_issues(
+            dataset_name=self.spec.dataset_name,
+            end_date=current_watermark,
+        )
+        repair_days = [item["trade_date"] for item in issues]
+        if not repair_days:
+            return []
+        chunks = []
+        for asset in _resolve_asset_universe(item, "bar_5m_raw"):
+            code = empty_to_none(asset.get("code"))
+            if code is None:
+                continue
+            ipo_date = parse_date(asset.get("ipo_date")) or date(1990, 12, 19)
+            out_date = parse_date(asset.get("out_date"))
+            eligible_days = [
+                day
+                for day in repair_days
+                if day >= ipo_date and (out_date is None or day <= out_date)
+            ]
+            for chunk_start, chunk_end in _group_contiguous_dates(eligible_days):
+                scope = {
+                    "code": str(code),
+                    "start_date": chunk_start.isoformat(),
+                    "end_date": chunk_end.isoformat(),
+                    "repair_missing": True,
                 }
                 chunks.append(
                     AdapterChunk(
@@ -1450,6 +1572,24 @@ def _split_year_windows(start_date: date, end_date: date) -> list[tuple[date, da
             )
         )
     return windows
+
+
+def _group_contiguous_dates(days: list[date]) -> list[tuple[date, date]]:
+    sorted_days = sorted(set(days))
+    if not sorted_days:
+        return []
+    ranges = []
+    start = sorted_days[0]
+    previous = sorted_days[0]
+    for day in sorted_days[1:]:
+        if day == previous + timedelta(days=1):
+            previous = day
+            continue
+        ranges.append((start, previous))
+        start = day
+        previous = day
+    ranges.append((start, previous))
+    return ranges
 
 
 def _quarter_key(day: date) -> tuple[int, int]:

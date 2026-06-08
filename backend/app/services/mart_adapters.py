@@ -290,6 +290,10 @@ class UniverseDailyAdapter:
         else:
             target_start = connection.execute("select (?::date + interval 1 day)::date", [watermark]).fetchone()[0]
 
+        missing_start = self._get_earliest_missing_source_date(connection)
+        if missing_start is not None:
+            target_start = missing_start if target_start is None else min(target_start, missing_start)
+
         if target_start is None or target_start > source_max_date:
             return None, None
         return target_start, source_max_date
@@ -417,9 +421,9 @@ class UniverseDailyAdapter:
             connection.execute("drop table if exists temp.staging_mart_universe_daily")
 
     def _validate_existing(self, connection: Any) -> MartAdapterResult:
-        row_count, watermark_value = connection.execute(
+        row_count, min_date, watermark_value = connection.execute(
             """
-            select count(*), max(trade_date)
+            select count(*), min(trade_date), max(trade_date)
             from mart.universe_daily
             """
         ).fetchone()
@@ -428,6 +432,14 @@ class UniverseDailyAdapter:
             row_count=int(row_count or 0),
             watermark_value=watermark_value,
         )
+        if min_date is not None and watermark_value is not None:
+            validation_results.append(
+                self._validate_trading_date_coverage(
+                    connection=connection,
+                    start_date=min_date,
+                    end_date=watermark_value,
+                )
+            )
         self._raise_if_failed(validation_results)
         return MartAdapterResult(
             dataset_name=self.dataset_name,
@@ -475,6 +487,13 @@ class UniverseDailyAdapter:
                     "end_date": str(end_date),
                     "missing_source_dates": int(missing_source_dates or 0),
                 },
+            )
+        )
+        validation_results.append(
+            self._validate_trading_date_coverage(
+                connection=connection,
+                start_date=start_date,
+                end_date=end_date,
             )
         )
         return validation_results
@@ -579,6 +598,82 @@ class UniverseDailyAdapter:
         return connection.execute(
             "select max(trade_date) from source.all_stock_snapshot"
         ).fetchone()[0]
+
+    def _get_earliest_missing_source_date(self, connection: Any) -> Any | None:
+        return connection.execute(
+            """
+            select min(s.trade_date)
+            from (
+                select distinct trade_date
+                from source.all_stock_snapshot
+            ) s
+            left join (
+                select distinct trade_date
+                from mart.universe_daily
+            ) u
+              on s.trade_date = u.trade_date
+            where u.trade_date is null
+            """
+        ).fetchone()[0]
+
+    def _validate_trading_date_coverage(
+        self,
+        *,
+        connection: Any,
+        start_date: Any,
+        end_date: Any,
+    ) -> MartValidationResult:
+        missing_snapshot_rows = connection.execute(
+            """
+            select trade_date
+            from (
+                select calendar_date as trade_date
+                from source.trade_calendar
+                where is_trading_day = 1
+                  and calendar_date between ? and ?
+                except
+                select distinct trade_date
+                from source.all_stock_snapshot
+                where trade_date between ? and ?
+            )
+            order by trade_date
+            """,
+            [start_date, end_date, start_date, end_date],
+        ).fetchall()
+        missing_universe_rows = connection.execute(
+            """
+            select trade_date
+            from (
+                select calendar_date as trade_date
+                from source.trade_calendar
+                where is_trading_day = 1
+                  and calendar_date between ? and ?
+                except
+                select distinct trade_date
+                from mart.universe_daily
+                where trade_date between ? and ?
+            )
+            order by trade_date
+            """,
+            [start_date, end_date, start_date, end_date],
+        ).fetchall()
+        missing_snapshot_dates = [str(row[0]) for row in missing_snapshot_rows]
+        missing_universe_dates = [str(row[0]) for row in missing_universe_rows]
+        missing_count = len(missing_snapshot_dates) + len(missing_universe_dates)
+        return MartValidationResult(
+            rule_name="trading_date_coverage",
+            severity="error",
+            passed=missing_count == 0,
+            sample_count=missing_count,
+            detail={
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "missing_snapshot_dates": len(missing_snapshot_dates),
+                "missing_snapshot_dates_sample": missing_snapshot_dates[:10],
+                "missing_universe_dates": len(missing_universe_dates),
+                "missing_universe_dates_sample": missing_universe_dates[:10],
+            },
+        )
 
     def _get_actual_max_date(self, connection: Any) -> str | None:
         row = connection.execute(

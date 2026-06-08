@@ -7,16 +7,16 @@ from app.api.v1.signals import router as signals_router
 from app.core.config import settings
 
 
-app = FastAPI(title=settings.app_name)
+fastapi_app = FastAPI(title=settings.app_name)
 
-app.add_middleware(
-    CORSMiddleware,
+fastapi_app.include_router(health_router, prefix="/api/v1")
+fastapi_app.include_router(data_assets_router, prefix="/api/v1")
+fastapi_app.include_router(signals_router, prefix="/api/v1")
+
+app = CORSMiddleware(
+    fastapi_app,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(health_router, prefix="/api/v1")
-app.include_router(data_assets_router, prefix="/api/v1")
-app.include_router(signals_router, prefix="/api/v1")

@@ -54,7 +54,15 @@ function buildChartOption(bars: Bar1dQfq[]) {
       { left: 0, text: "MACD", textStyle: { fontSize: 13 }, top: 426 },
       { left: 0, text: "成交量", textStyle: { fontSize: 13 }, top: 616 },
     ],
-    tooltip: { trigger: "axis" },
+    tooltip: {
+      backgroundColor: "rgba(255, 255, 255, 0.72)",
+      borderColor: "rgba(15, 23, 42, 0.14)",
+      borderWidth: 1,
+      extraCssText:
+        "box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14); backdrop-filter: blur(4px);",
+      textStyle: { color: "#111827" },
+      trigger: "axis",
+    },
     xAxis: [
       { data: dates, gridIndex: 0, scale: true, type: "category" },
       { data: dates, gridIndex: 1, scale: true, type: "category" },

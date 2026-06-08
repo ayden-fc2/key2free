@@ -10,7 +10,7 @@ import duckdb
 
 
 class DuckDBRepository:
-    _connections: dict[tuple[Path, bool], duckdb.DuckDBPyConnection] = {}
+    _connections: dict[Path, duckdb.DuckDBPyConnection] = {}
     _lock = RLock()
 
     def __init__(self, db_path: Path | None = None) -> None:
@@ -23,11 +23,10 @@ class DuckDBRepository:
         # database file. The API polls while refresh jobs write, so reuse one
         # process-local connection and serialize access through this context.
         with self._lock:
-            connection_key = (self.db_path, read_only)
-            connection = self._connections.get(connection_key)
+            connection = self._connections.get(self.db_path)
             if connection is None:
-                connection = duckdb.connect(str(self.db_path), read_only=read_only)
-                self._connections[connection_key] = connection
+                connection = duckdb.connect(str(self.db_path), read_only=False)
+                self._connections[self.db_path] = connection
             yield connection
 
     def get_tables(self) -> list[dict[str, Any]]:

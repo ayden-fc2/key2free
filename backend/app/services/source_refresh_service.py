@@ -145,7 +145,11 @@ class SourceRefreshService:
                     client=client,
                     run_id=run_id,
                     item=trade_item,
-                    runtime=AdapterRuntime(today=today, run_id=run_id),
+                    runtime=AdapterRuntime(
+                        today=today,
+                        run_id=run_id,
+                        repository=self.data_assets,
+                    ),
                     max_requests=None,
                     task_id=task_id,
                 )
@@ -178,6 +182,7 @@ class SourceRefreshService:
                                 today=today,
                                 latest_trading_day=latest_trading_day,
                                 run_id=run_id,
+                                repository=self.data_assets,
                             ),
                             max_requests=max_requests_per_run - request_count,
                             task_id=task_id,
@@ -252,6 +257,7 @@ class SourceRefreshService:
                                 today=today,
                                 latest_trading_day=latest_trading_day,
                                 run_id=run_id,
+                                repository=self.data_assets,
                             ),
                             max_requests=max_requests_per_run - request_count,
                             task_id=task_id,
@@ -469,6 +475,11 @@ class SourceRefreshService:
         if planned_chunk_count > 0 and not chunks:
             watermark_value = self.data_assets.get_dataset_actual_max_date(dataset_name)
             if watermark_value is not None:
+                self._validate_watermark_coverage(
+                    run_id=run_id,
+                    item=item,
+                    watermark_value=watermark_value,
+                )
                 self.data_assets.update_watermark(
                     dataset_name=dataset_name,
                     asset_scope=item["asset_scope"],
@@ -630,6 +641,11 @@ class SourceRefreshService:
                 runtime=runtime,
                 results=results,
             )
+            self._validate_watermark_coverage(
+                run_id=run_id,
+                item=item,
+                watermark_value=watermark_value,
+            )
             self.data_assets.update_watermark(
                 dataset_name=dataset_name,
                 asset_scope=item["asset_scope"],
@@ -709,8 +725,12 @@ class SourceRefreshService:
         planned_scopes = {
             self._scope_key(chunk.scope): chunk.scope
             for chunk in chunks
+            if not chunk.scope.get("repair_missing")
         }
-        duplicate_scopes = len(planned_scopes) != len(chunks)
+        non_repair_chunk_count = sum(
+            1 for chunk in chunks if not chunk.scope.get("repair_missing")
+        )
+        duplicate_scopes = len(planned_scopes) != non_repair_chunk_count
         missing_scopes = sorted(set(expected_scopes) - set(planned_scopes))
         extra_scopes = sorted(set(planned_scopes) - set(expected_scopes))
         mismatched_scopes = sorted(
@@ -735,7 +755,8 @@ class SourceRefreshService:
                 "detail": {
                     "asset_scope": item["asset_scope"],
                     "expected_chunk_count": len(expected_scopes),
-                    "planned_chunk_count": len(chunks),
+                    "planned_chunk_count": non_repair_chunk_count,
+                    "repair_chunk_count": len(chunks) - non_repair_chunk_count,
                     "duplicate_scopes": duplicate_scopes,
                     "missing_scopes_sample": missing_scopes[:10],
                     "extra_scopes_sample": extra_scopes[:10],
@@ -847,6 +868,42 @@ class SourceRefreshService:
                 }
                 expected[self._scope_key(scope)] = scope
         return expected
+
+    def _validate_watermark_coverage(
+        self,
+        *,
+        run_id: int,
+        item: dict[str, Any],
+        watermark_value: str,
+    ) -> None:
+        dataset_name = item["dataset_name"]
+        validation_results = self.data_assets.validate_source_watermark_coverage(
+            dataset_name=dataset_name,
+            watermark_value=watermark_value,
+        )
+        for validation in validation_results:
+            self.data_assets.write_validation_result(
+                run_id=run_id,
+                dataset_name=dataset_name,
+                scope={"dataset_name": dataset_name, "phase": "watermark"},
+                rule_name=validation["rule_name"],
+                severity=validation["severity"],
+                passed=validation["passed"],
+                sample_count=validation["sample_count"],
+                detail=validation["detail"],
+            )
+        failed_errors = [
+            validation
+            for validation in validation_results
+            if not validation["passed"] and validation["severity"] == "error"
+        ]
+        if failed_errors:
+            raise AdapterRunError(
+                dataset_name=dataset_name,
+                message=f"{dataset_name} watermark coverage validation failed: {failed_errors}",
+                partial_results=[],
+                request_count=0,
+            )
 
     def _expected_dividend_scopes(
         self,

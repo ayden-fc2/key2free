@@ -313,6 +313,11 @@ SOURCE_LOGICAL_KEYS: dict[str, list[str]] = {
 
 
 class DataAssetRepository:
+    DAILY_TRADING_COVERAGE_DATASETS: set[str] = {
+        "all_stock_snapshot",
+        "bar_1d_raw",
+        "bar_5m_raw",
+    }
     DATASET_TABLES: dict[str, dict[str, str]] = {
         "security_master": {"table_name": "source.security_master", "date_column": "last_seen_date"},
         "trade_calendar": {"table_name": "source.trade_calendar", "date_column": "calendar_date"},
@@ -893,6 +898,257 @@ class DataAssetRepository:
             ).fetchone()
         return None if row is None else row[0]
 
+    def get_missing_snapshot_trading_days(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        dataset_name: str,
+    ) -> list[date]:
+        if dataset_name != "all_stock_snapshot":
+            raise ValueError(f"unsupported snapshot dataset: {dataset_name}")
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select trade_date
+                from (
+                    select calendar_date as trade_date
+                    from source.trade_calendar
+                    where is_trading_day = 1
+                      and calendar_date between ? and ?
+                    except
+                    select distinct trade_date
+                    from source.all_stock_snapshot
+                    where trade_date between ? and ?
+                )
+                order by trade_date
+                """,
+                [start_date, end_date, start_date, end_date],
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def get_trading_days(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+    ) -> list[date]:
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select calendar_date
+                from source.trade_calendar
+                where is_trading_day = 1
+                  and calendar_date between ? and ?
+                order by calendar_date
+                """,
+                [start_date, end_date],
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def get_daily_source_coverage_issues(
+        self,
+        *,
+        dataset_name: str,
+        end_date: date,
+        start_date: date | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if dataset_name not in self.DAILY_TRADING_COVERAGE_DATASETS:
+            raise ValueError(f"unsupported daily coverage dataset: {dataset_name}")
+        physical = self.DATASET_TABLES[dataset_name]
+        table_name = physical["table_name"]
+        date_column = physical["date_column"]
+        with self.duckdb.connect(read_only=True) as connection:
+            if start_date is None:
+                row = connection.execute(
+                    f"select min({date_column}) from {table_name}"
+                ).fetchone()
+                start_date = None if row is None else row[0]
+            if start_date is None:
+                return []
+
+            min_expected_codes_sql = "1"
+            min_expected_rows_sql = "1"
+            if dataset_name == "all_stock_snapshot":
+                min_expected_codes_sql = """
+                    case
+                        when coalesce(active_security_count, 0) > 0
+                        then greatest(1, cast(ceil(active_security_count * 0.75) as bigint))
+                        else 1
+                    end
+                """
+                min_expected_rows_sql = min_expected_codes_sql
+            elif dataset_name == "bar_1d_raw":
+                min_expected_codes_sql = """
+                    case
+                        when coalesce(snapshot_count, 0) > 0
+                        then greatest(1, cast(ceil(snapshot_count * 0.5) as bigint))
+                        else 1
+                    end
+                """
+                min_expected_rows_sql = min_expected_codes_sql
+            elif dataset_name == "bar_5m_raw":
+                min_expected_codes_sql = "1"
+                min_expected_rows_sql = """
+                    case
+                        when coalesce(snapshot_count, 0) > 0
+                        then greatest(1, cast(snapshot_count * 35 as bigint))
+                        else 1
+                    end
+                """
+
+            limit_sql = "" if limit is None else f"limit {int(limit)}"
+            rows = connection.execute(
+                f"""
+                with trading_days as (
+                    select calendar_date as trade_date
+                    from source.trade_calendar
+                    where is_trading_day = 1
+                      and calendar_date between ? and ?
+                ),
+                source_counts as (
+                    select {date_column} as trade_date,
+                           count(*) as row_count,
+                           count(distinct code) as code_count
+                    from {table_name}
+                    where {date_column} between ? and ?
+                    group by {date_column}
+                ),
+                snapshot_counts as (
+                    select trade_date, count(*) as snapshot_count
+                    from source.all_stock_snapshot
+                    where trade_date between ? and ?
+                    group by trade_date
+                ),
+                active_security_counts as (
+                    select d.trade_date, count(*) as active_security_count
+                    from trading_days d
+                    join source.security_master sm
+                      on sm.security_type in (1, 2, 5)
+                     and sm.ipo_date <= d.trade_date
+                     and (sm.out_date is null or sm.out_date >= d.trade_date)
+                     and coalesce(sm.list_status, 1) in (0, 1)
+                    group by d.trade_date
+                ),
+                coverage as (
+                    select d.trade_date,
+                           coalesce(s.row_count, 0) as row_count,
+                           coalesce(s.code_count, 0) as code_count,
+                           coalesce(a.snapshot_count, 0) as snapshot_count,
+                           coalesce(asm.active_security_count, 0) as active_security_count,
+                           {min_expected_codes_sql} as min_expected_codes,
+                           {min_expected_rows_sql} as min_expected_rows
+                    from trading_days d
+                    left join source_counts s on d.trade_date = s.trade_date
+                    left join snapshot_counts a on d.trade_date = a.trade_date
+                    left join active_security_counts asm on d.trade_date = asm.trade_date
+                )
+                select trade_date,
+                       row_count,
+                       code_count,
+                       snapshot_count,
+                       active_security_count,
+                       min_expected_codes,
+                       min_expected_rows,
+                       case
+                           when row_count = 0 then 'missing'
+                           when code_count < min_expected_codes then 'partial_codes'
+                           else 'partial_rows'
+                       end as issue_type
+                from coverage
+                where row_count < min_expected_rows
+                   or code_count < min_expected_codes
+                order by trade_date
+                {limit_sql}
+                """,
+                [start_date, end_date, start_date, end_date, start_date, end_date],
+            ).fetchall()
+        return [
+            {
+                "trade_date": trade_date,
+                "row_count": int(row_count or 0),
+                "code_count": int(code_count or 0),
+                "snapshot_count": int(snapshot_count or 0),
+                "active_security_count": int(active_security_count or 0),
+                "min_expected_codes": int(min_expected_codes or 0),
+                "min_expected_rows": int(min_expected_rows or 0),
+                "issue_type": issue_type,
+            }
+            for (
+                trade_date,
+                row_count,
+                code_count,
+                snapshot_count,
+                active_security_count,
+                min_expected_codes,
+                min_expected_rows,
+                issue_type,
+            ) in rows
+        ]
+
+    def validate_source_watermark_coverage(
+        self,
+        *,
+        dataset_name: str,
+        watermark_value: str,
+    ) -> list[dict[str, Any]]:
+        if dataset_name not in self.DAILY_TRADING_COVERAGE_DATASETS:
+            return []
+        physical = self.DATASET_TABLES[dataset_name]
+        table_name = physical["table_name"]
+        date_column = physical["date_column"]
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                f"select min({date_column}) from {table_name}"
+            ).fetchone()
+        start_date = None if row is None else row[0]
+        if start_date is None:
+            return [
+                {
+                    "rule_name": "trading_date_coverage",
+                    "severity": "error",
+                    "passed": False,
+                    "sample_count": 0,
+                    "detail": {
+                        "watermark_value": watermark_value,
+                        "reason": "source table is empty",
+                    },
+                }
+            ]
+
+        issues = self.get_daily_source_coverage_issues(
+            dataset_name=dataset_name,
+            start_date=start_date,
+            end_date=date.fromisoformat(str(watermark_value)[:10]),
+            limit=50,
+        )
+        return [
+            {
+                "rule_name": "trading_date_coverage",
+                "severity": "error",
+                "passed": not issues,
+                "sample_count": len(issues),
+                "detail": {
+                    "start_date": str(start_date),
+                    "watermark_value": watermark_value,
+                    "issue_sample": [
+                        {
+                            "trade_date": str(item["trade_date"]),
+                            "issue_type": item["issue_type"],
+                            "row_count": item["row_count"],
+                            "code_count": item["code_count"],
+                            "snapshot_count": item["snapshot_count"],
+                            "active_security_count": item["active_security_count"],
+                            "min_expected_codes": item["min_expected_codes"],
+                            "min_expected_rows": item["min_expected_rows"],
+                        }
+                        for item in issues[:10]
+                    ],
+                },
+            }
+        ]
+
     def get_dataset_actual_max_date(self, dataset_name: str) -> str | None:
         physical = self.DATASET_TABLES.get(dataset_name)
         if physical is None:
@@ -907,6 +1163,21 @@ class DataAssetRepository:
         if row is None or row[0] is None:
             return None
         return str(row[0])
+
+    def get_dataset_actual_min_date(self, dataset_name: str) -> date | None:
+        physical = self.DATASET_TABLES.get(dataset_name)
+        if physical is None:
+            return None
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                f"""
+                select min({physical["date_column"]})
+                from {physical["table_name"]}
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return row[0]
 
     def replace_source_rows(
         self,
