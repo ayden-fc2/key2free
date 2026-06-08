@@ -348,16 +348,50 @@ class UniverseDailyAdapter:
                       on r.code = i.code
                      and i.update_date <= r.trade_date
                 ),
+                source_dates as (
+                    select distinct trade_date
+                    from source_rows
+                ),
+                latest_index_dates as (
+                    select d.trade_date,
+                           m.index_code,
+                           max(m.update_date) as update_date
+                    from source_dates d
+                    join (
+                        select distinct index_code, update_date
+                        from source.index_member_snapshot
+                    ) m
+                      on m.update_date <= d.trade_date
+                    group by d.trade_date, m.index_code
+                ),
                 index_flags as (
                     select r.trade_date,
                            r.code,
-                           max(case when index_code = 'sh.000016' then 1 else 0 end) as is_sz50,
-                           max(case when index_code = 'sh.000300' then 1 else 0 end) as is_hs300,
-                           max(case when index_code = 'sh.000905' then 1 else 0 end) as is_zz500
+                           max(
+                               case
+                                   when l.index_code = 'sh.000016' and m.code is not null
+                                   then 1 else 0
+                               end
+                           ) as is_sz50,
+                           max(
+                               case
+                                   when l.index_code = 'sh.000300' and m.code is not null
+                                   then 1 else 0
+                               end
+                           ) as is_hs300,
+                           max(
+                               case
+                                   when l.index_code = 'sh.000905' and m.code is not null
+                                   then 1 else 0
+                               end
+                           ) as is_zz500
                     from source_rows r
+                    left join latest_index_dates l
+                      on r.trade_date = l.trade_date
                     left join source.index_member_snapshot m
-                      on r.code = m.code
-                     and m.update_date <= r.trade_date
+                      on m.index_code = l.index_code
+                     and m.update_date = l.update_date
+                     and m.code = r.code
                     group by r.trade_date, r.code
                 )
                 select r.trade_date,

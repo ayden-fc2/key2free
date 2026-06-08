@@ -694,6 +694,7 @@ class DividendAdapter:
     )
 
     year_types = ("report", "operate")
+    lookback_years = 3
 
     def plan(
         self,
@@ -715,7 +716,7 @@ class DividendAdapter:
             out_date = parse_date(asset.get("out_date"))
             start_year = ipo_date.year
             if current_watermark is not None:
-                start_year = max(start_year, current_watermark.year)
+                start_year = max(start_year, current_watermark.year - self.lookback_years)
             end_year = latest_year if out_date is None else min(out_date.year, latest_year)
             if start_year > end_year:
                 continue
