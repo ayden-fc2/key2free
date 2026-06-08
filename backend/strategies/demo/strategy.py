@@ -8,28 +8,34 @@ from app.entities.stock_data_context import StockDataContext
 HISTORY_WINDOW = 430
 MA20_WINDOW = 20
 MA20_SLOPE_WINDOW = 10
-MIN_MA20_SLOPE_IMPROVING_DAYS = 3
 MAX_MA20_SLOPE_IMPROVING_DAYS = 5
+MIN_MA20_SLOPE_IMPROVING_STEPS = 3
 MA30_WINDOW = 30
 MA30_SLOPE_WINDOW = 10
 MA30_STRUCTURE_DAYS = 400
 MIN_MA30_TURN_POINTS = 5
-MAX_MA30_TURN_POINTS = 8
+MAX_MA30_TURN_POINTS = 10
 RECENT_TURN_POINTS = 5
 RECENT_LOW_COUNT = 4
-MIN_LOW_STRUCTURE_SPAN_DAYS = 200
-STRUCTURE_NOISE_ATR_MULTIPLE = 0.6
+MIN_LOW_STRUCTURE_SPAN_DAYS = 144
+STRUCTURE_NOISE_ATR_MULTIPLE = 1.0
 RECENT_SUPPORT_LOOKBACK = 6
-RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE = STRUCTURE_NOISE_ATR_MULTIPLE
-RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE = STRUCTURE_NOISE_ATR_MULTIPLE * 2
+RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE = 1.0
+RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE = 1.618
+POST_L4_CLOSE_MAX_BELOW_L4_ATR_MULTIPLE = 1.0
+CURRENT_CLOSE_MAX_ABOVE_L4_STRONG_ATR_MULTIPLE = 1.618
+CURRENT_CLOSE_MAX_ABOVE_L4_NORMAL_ATR_MULTIPLE = 1.0
+CURRENT_CLOSE_MAX_ABOVE_RECENT_LOW_ATR_MULTIPLE = 1.2
 ATR30_WINDOW = 30
 
 ATR14_WINDOW = 14
 VOLUME_AVG_WINDOW = 10
-LONG_BODY_MIN_RATIO = 0.7
-LONG_BODY_ATR_MULTIPLE = 0.8
+VOLUME_AVG_MIN_RATIO = 0.8
+LONG_BODY_MIN_RATIO = 0.8
+LONG_BODY_ATR_MULTIPLE = 0.618
 SMALL_CANDLE_ATR_MULTIPLE = 0.6
-BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO = 0.7
+BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO = 0.618
+PIERCING_CURRENT_BODY_MIN_RATIO = 0.618
 
 MACD_DIVERGENCE_LOOKBACK = 120
 PIVOT_NEIGHBOR_WINDOW = 3
@@ -50,8 +56,6 @@ ALLOWED_LOW_PATTERNS = {
     ("震", "涨", "震"),
     ("涨", "涨", "涨"),
 }
-
-
 def demo_signal_strategy(context: StockDataContext) -> bool:
     if not _passes_universe_filter(context):
         return False
@@ -139,12 +143,14 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
 
     if not _is_recent_low_inside_last_structure_low_zone(lows, low_points[-1]):
         return False
-    if not _is_post_l4_low_above_support(lows, low_points[-1]):
+    if not _is_current_close_near_l4(lows, closes, low_points[-1], low_pattern):
+        return False
+    if not _is_post_l4_price_above_support(lows, closes, low_points[-1]):
         return False
     if not _is_recent_ma20_slope_improving(closes):
         return False
 
-    return not _has_bearish_macd_divergence(closes)
+    return True
 
 
 def _extract_interval_low_points(
@@ -198,26 +204,70 @@ def _is_recent_low_inside_last_structure_low_zone(
     lows: list[float | None],
     last_low_point: tuple[int, float, float],
 ) -> bool:
-    recent_lows = lows[-RECENT_SUPPORT_LOOKBACK:]
-    if len(recent_lows) < RECENT_SUPPORT_LOOKBACK or any(value is None for value in recent_lows):
-        return False
     _low_index, low_value, low_atr = last_low_point
-    recent_low = min(value for value in recent_lows if value is not None)
+    recent_low = _resolve_recent_low(lows)
+    if recent_low is None:
+        return False
     lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
     upper_bound = low_value + low_atr * RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE
     return lower_bound <= recent_low <= upper_bound
 
 
-def _is_post_l4_low_above_support(
+def _is_current_close_near_l4(
     lows: list[float | None],
+    closes: list[float | None],
+    last_low_point: tuple[int, float, float],
+    low_pattern: tuple[str, ...],
+) -> bool:
+    current_close = closes[-1] if closes else None
+    if current_close is None:
+        return False
+    _low_index, low_value, low_atr = last_low_point
+    recent_low = _resolve_recent_low(lows)
+    if recent_low is None:
+        return False
+    upper_multiple = (
+        CURRENT_CLOSE_MAX_ABOVE_L4_STRONG_ATR_MULTIPLE
+        if _low_pattern_rise_count(low_pattern) >= 2
+        else CURRENT_CLOSE_MAX_ABOVE_L4_NORMAL_ATR_MULTIPLE
+    )
+    return (
+        current_close <= low_value + low_atr * upper_multiple
+        and current_close <= recent_low + low_atr * CURRENT_CLOSE_MAX_ABOVE_RECENT_LOW_ATR_MULTIPLE
+    )
+
+
+def _resolve_recent_low(lows: list[float | None]) -> float | None:
+    recent_lows = lows[-RECENT_SUPPORT_LOOKBACK:]
+    if len(recent_lows) < RECENT_SUPPORT_LOOKBACK or any(value is None for value in recent_lows):
+        return None
+    return min(value for value in recent_lows if value is not None)
+
+
+def _is_post_l4_price_above_support(
+    lows: list[float | None],
+    closes: list[float | None],
     last_low_point: tuple[int, float, float],
 ) -> bool:
     low_index, low_value, low_atr = last_low_point
     post_l4_lows = lows[low_index:]
-    if not post_l4_lows or any(value is None for value in post_l4_lows):
+    post_l4_closes = closes[low_index:]
+    if not post_l4_lows or not post_l4_closes:
         return False
-    lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
-    return min(value for value in post_l4_lows if value is not None) >= lower_bound
+    if any(value is None for value in post_l4_lows):
+        return False
+    if any(value is None for value in post_l4_closes):
+        return False
+    low_lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
+    close_lower_bound = low_value - low_atr * POST_L4_CLOSE_MAX_BELOW_L4_ATR_MULTIPLE
+    return (
+        min(value for value in post_l4_lows if value is not None) >= low_lower_bound
+        and min(value for value in post_l4_closes if value is not None) >= close_lower_bound
+    )
+
+
+def _low_pattern_rise_count(low_pattern: tuple[str, ...]) -> int:
+    return sum(1 for item in low_pattern if item == "ХЗ")
 
 
 def _is_recent_ma20_slope_improving(closes: list[float | None]) -> bool:
@@ -229,14 +279,13 @@ def _is_recent_ma20_slope_improving(closes: list[float | None]) -> bool:
     if any(value is None for value in recent_slopes):
         return False
 
-    suffix_length = 1
-    for index in range(len(recent_slopes) - 1, 0, -1):
-        current = recent_slopes[index]
-        previous = recent_slopes[index - 1]
-        if current is None or previous is None or current <= previous:
-            break
-        suffix_length += 1
-    return suffix_length >= MIN_MA20_SLOPE_IMPROVING_DAYS
+    improving_steps = 0
+    for previous, current in zip(recent_slopes, recent_slopes[1:]):
+        if previous is None or current is None:
+            return False
+        if current > previous:
+            improving_steps += 1
+    return improving_steps >= MIN_MA20_SLOPE_IMPROVING_STEPS
 
 
 def _passes_kline_filter(bars: list[dict[str, Any]]) -> bool:
@@ -283,7 +332,6 @@ def _passes_kline_filter(bars: list[dict[str, Any]]) -> bool:
         or _is_hammer(candles, volumes, current_index)
         or _is_morning_star(candles, atr14, current_index)
         or _is_bullish_engulfing(candles, atr14, current_index)
-        or _is_piercing_like(candles, atr14, current_index)
         or _is_fairy_guide(candles, atr14, current_index)
     )
 
@@ -346,7 +394,7 @@ def _is_volume_above_recent_average(volumes: list[float | None], index: int) -> 
     if current is None or any(value is None for value in recent_values):
         return False
     average_volume = sum(value for value in recent_values if value is not None) / VOLUME_AVG_WINDOW
-    return current >= average_volume
+    return current >= average_volume * VOLUME_AVG_MIN_RATIO
 
 
 def _shadow_ratio_at_least(
@@ -459,6 +507,7 @@ def _is_bullish_engulfing(
         _is_bullish(current)
         and _is_bearish(previous)
         and _is_long_body(current, atr14, current_index)
+        and _is_long_body(previous, atr14, current_index - 1)
         and previous["body"] >= current["body"] * BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO
         and current_low <= previous_low
         and current_high >= previous_high
@@ -488,7 +537,7 @@ def _is_piercing_like(
         and previous_body > 0
         and current_low >= previous_low
         and current_high <= previous_high
-        and current["body"] >= previous_body * 0.8
+        and current["body"] >= previous_body * PIERCING_CURRENT_BODY_MIN_RATIO
     )
 
 
@@ -507,6 +556,7 @@ def _is_fairy_guide(
         _is_bullish(current)
         and _is_long_body(current, atr14, current_index)
         and _is_inverted_hammer_shape(previous)
+        and current["close"] > previous["high"]
     )
 
 
