@@ -39,7 +39,7 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         entry_strategy=demo_entry_strategy,
         exit_strategy=demo_exit_strategy,
         universe_filter=demo_universe_filter,
-        daily_signal_history_limit=380,
+        daily_signal_history_limit=430,
     )
 }
 
