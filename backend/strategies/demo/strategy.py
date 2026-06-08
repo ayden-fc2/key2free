@@ -9,10 +9,16 @@ MA_FAST_WINDOW = 20
 MA_SLOW_WINDOW = 30
 SLOPE_ATR_WINDOW = 14
 STRUCTURE_ATR_WINDOW = 30
-VOLUME_ATR_WINDOW = 30
+VOLUME_ATR_WINDOW = 14
 SLOPE_WINDOW = 10
+CROSS_LOOKBACK_DAYS = 5
+SLOPE_TURN_START_DAYS_AGO = 20
+SLOPE_TURN_END_DAYS_AGO = 5
+LONG_BODY_MIN_RATIO = 0.8
+LONG_BODY_ATR_MULTIPLE = 1.2
+SMALL_BODY_ATR_MULTIPLE = 0.5
+VOLUME_EXPANSION_ATR_MULTIPLE = 1.2
 MIN_NORMALIZED_SLOPE = 0.03
-NEAR_ZERO_NORMALIZED_SLOPE = 0.01
 STRUCTURE_LOOKBACK = 300
 MA30_TURN_SLOPE_WINDOW = 10
 MIN_TROUGH_COUNT = 3
@@ -32,6 +38,8 @@ def demo_signal_strategy(context: StockDataContext) -> bool:
     if not _passes_universe_filter(context):
         return False
     if not _passes_trend_filter(context.bars_1d_qfq):
+        return False
+    if not _passes_kline_filter(context.bars_1d_qfq):
         return False
     return True
 
@@ -86,9 +94,7 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
 
     ma20 = _moving_average(closes, MA_FAST_WINDOW)
     ma30 = _moving_average(closes, MA_SLOW_WINDOW)
-    if ma20[-2] is None or ma30[-2] is None or ma20[-1] is None or ma30[-1] is None:
-        return False
-    if not (ma20[-2] < ma30[-2] and ma20[-1] > ma30[-1]):
+    if not _has_recent_ma_cross_up(ma20, ma30, CROSS_LOOKBACK_DAYS):
         return False
 
     slope_atr = _average_true_range(highs, lows, closes, SLOPE_ATR_WINDOW)
@@ -101,6 +107,12 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
         return False
 
     slopes = _rolling_linear_slopes(ma20, SLOPE_WINDOW)
+    if not _has_slope_negative_to_positive_turn_in_window(
+        slopes,
+        start_days_ago=SLOPE_TURN_START_DAYS_AGO,
+        end_days_ago=SLOPE_TURN_END_DAYS_AGO,
+    ):
+        return False
     recent_slopes = slopes[-SLOPE_WINDOW:]
     if any(value is None for value in recent_slopes):
         return False
@@ -108,25 +120,340 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
     normalized = [value / current_slope_atr for value in recent_slopes if value is not None]
     if normalized[-1] <= MIN_NORMALIZED_SLOPE:
         return False
-    if not _has_negative_to_zero_to_positive_turn(normalized):
-        return False
     if not _passes_ma30_structure_filter(closes, ma30, current_structure_atr):
         return False
     return not _has_bearish_macd_divergence(closes)
 
 
-def _has_negative_to_zero_to_positive_turn(values: list[float]) -> bool:
-    if len(values) < SLOPE_WINDOW:
+def _passes_kline_filter(bars: list[dict[str, Any]]) -> bool:
+    min_bars = max(SLOPE_ATR_WINDOW, VOLUME_ATR_WINDOW) + 5
+    if len(bars) < min_bars:
         return False
-    first_part = values[:3]
-    middle_part = values[3:7]
-    last_part = values[7:]
+
+    opens = [_to_float(item.get("open")) for item in bars]
+    highs = [_to_float(item.get("high")) for item in bars]
+    lows = [_to_float(item.get("low")) for item in bars]
+    closes = [_to_float(item.get("close")) for item in bars]
+    volumes = [_to_float(item.get("volume")) for item in bars]
+    if any(value is None for value in opens[-min_bars:]):
+        return False
+    if any(value is None for value in highs[-min_bars:]):
+        return False
+    if any(value is None for value in lows[-min_bars:]):
+        return False
+    if any(value is None for value in closes[-min_bars:]):
+        return False
+    if any(value is None for value in volumes[-(VOLUME_ATR_WINDOW + 1):]):
+        return False
+
+    atr14 = _average_true_range(highs, lows, closes, SLOPE_ATR_WINDOW)
+    volume_atr = _average_volume_true_range(volumes, VOLUME_ATR_WINDOW)
+    candles = [
+        _build_candle(
+            open_value=open_value,
+            high_value=high_value,
+            low_value=low_value,
+            close_value=close_value,
+        )
+        for open_value, high_value, low_value, close_value in zip(opens, highs, lows, closes)
+    ]
+    if any(candle is None for candle in candles[-5:]):
+        return False
+
+    current_index = len(candles) - 1
+    current_atr = atr14[current_index]
+    current_volume_atr = volume_atr[current_index]
+    if current_atr is None or current_atr <= 0:
+        return False
+    if current_volume_atr is None or current_volume_atr <= 0:
+        return False
+
     return (
-        min(first_part) < -NEAR_ZERO_NORMALIZED_SLOPE
-        and any(abs(value) <= NEAR_ZERO_NORMALIZED_SLOPE for value in middle_part)
-        and max(last_part) > NEAR_ZERO_NORMALIZED_SLOPE
-        and values[-1] > values[0]
+        _is_dragonfly_doji(candles, volumes, volume_atr, current_index)
+        or _is_hammer(candles, volumes, volume_atr, current_index)
+        or _is_morning_star(candles, atr14, current_index)
+        or _is_bullish_engulfing(candles, atr14, current_index)
+        or _is_piercing_like(candles, atr14, current_index)
+        or _is_fairy_guide(candles, atr14, current_index)
     )
+
+
+def _build_candle(
+    *,
+    open_value: float | None,
+    high_value: float | None,
+    low_value: float | None,
+    close_value: float | None,
+) -> dict[str, float] | None:
+    if open_value is None or high_value is None or low_value is None or close_value is None:
+        return None
+    total = high_value - low_value
+    if total <= 0:
+        return None
+    body = abs(close_value - open_value)
+    upper_shadow = high_value - max(open_value, close_value)
+    lower_shadow = min(open_value, close_value) - low_value
+    return {
+        "open": open_value,
+        "high": high_value,
+        "low": low_value,
+        "close": close_value,
+        "total": total,
+        "body": body,
+        "upper_shadow": max(upper_shadow, 0.0),
+        "lower_shadow": max(lower_shadow, 0.0),
+    }
+
+
+def _is_bullish(candle: dict[str, float]) -> bool:
+    return candle["close"] > candle["open"]
+
+
+def _is_bearish(candle: dict[str, float]) -> bool:
+    return candle["close"] < candle["open"]
+
+
+def _body_ratio(candle: dict[str, float]) -> float:
+    return candle["body"] / candle["total"] if candle["total"] > 0 else 0.0
+
+
+def _is_long_body(
+    candle: dict[str, float],
+    atr14: list[float | None],
+    index: int,
+) -> bool:
+    atr_value = atr14[index]
+    if atr_value is None or atr_value <= 0:
+        return False
+    return _body_ratio(candle) >= LONG_BODY_MIN_RATIO and candle["body"] >= atr_value * LONG_BODY_ATR_MULTIPLE
+
+
+def _has_volume_expansion(
+    volumes: list[float | None],
+    volume_atr: list[float | None],
+    index: int,
+) -> bool:
+    if index <= 0:
+        return False
+    current = volumes[index]
+    previous = volumes[index - 1]
+    atr_value = volume_atr[index]
+    if current is None or previous is None or atr_value is None or atr_value <= 0:
+        return False
+    return current > previous and current - previous >= atr_value * VOLUME_EXPANSION_ATR_MULTIPLE
+
+
+def _shadow_ratio_at_least(
+    *,
+    long_shadow: float,
+    short_shadow: float,
+    multiple: float,
+) -> bool:
+    if long_shadow <= 0:
+        return False
+    if short_shadow <= 0:
+        return True
+    return long_shadow / short_shadow >= multiple
+
+
+def _is_dragonfly_doji(
+    candles: list[dict[str, float] | None],
+    volumes: list[float | None],
+    volume_atr: list[float | None],
+    index: int,
+) -> bool:
+    candle = candles[index]
+    if candle is None:
+        return False
+    return (
+        _body_ratio(candle) <= 0.1
+        and _shadow_ratio_at_least(
+            long_shadow=candle["lower_shadow"],
+            short_shadow=candle["upper_shadow"],
+            multiple=8,
+        )
+        and _has_volume_expansion(volumes, volume_atr, index)
+    )
+
+
+def _is_hammer_shape(candle: dict[str, float]) -> bool:
+    body_ratio = _body_ratio(candle)
+    return (
+        0.1 <= body_ratio <= 0.4
+        and _shadow_ratio_at_least(
+            long_shadow=candle["lower_shadow"],
+            short_shadow=candle["upper_shadow"],
+            multiple=5,
+        )
+    )
+
+
+def _is_inverted_hammer_shape(candle: dict[str, float]) -> bool:
+    body_ratio = _body_ratio(candle)
+    return (
+        0.1 <= body_ratio <= 0.4
+        and _shadow_ratio_at_least(
+            long_shadow=candle["upper_shadow"],
+            short_shadow=candle["lower_shadow"],
+            multiple=5,
+        )
+    )
+
+
+def _is_hammer(
+    candles: list[dict[str, float] | None],
+    volumes: list[float | None],
+    volume_atr: list[float | None],
+    index: int,
+) -> bool:
+    candle = candles[index]
+    if candle is None:
+        return False
+    return _is_hammer_shape(candle) and _has_volume_expansion(volumes, volume_atr, index)
+
+
+def _is_morning_star(
+    candles: list[dict[str, float] | None],
+    atr14: list[float | None],
+    current_index: int,
+) -> bool:
+    current = candles[current_index]
+    if current is None or not _is_bullish(current) or not _is_long_body(current, atr14, current_index):
+        return False
+
+    earliest_index = max(0, current_index - 4)
+    latest_left_index = current_index - 2
+    for left_index in range(earliest_index, latest_left_index + 1):
+        left = candles[left_index]
+        if left is None or not _is_bearish(left) or not _is_long_body(left, atr14, left_index):
+            continue
+        middle_candles = candles[left_index + 1 : current_index]
+        if 1 <= len(middle_candles) <= 3 and all(
+            candle is not None and candle["body"] <= _atr_value_or_zero(atr14[index]) * SMALL_BODY_ATR_MULTIPLE
+            for index, candle in zip(range(left_index + 1, current_index), middle_candles)
+        ):
+            return True
+    return False
+
+
+def _is_bullish_engulfing(
+    candles: list[dict[str, float] | None],
+    atr14: list[float | None],
+    current_index: int,
+) -> bool:
+    if current_index <= 0:
+        return False
+    current = candles[current_index]
+    previous = candles[current_index - 1]
+    if current is None or previous is None:
+        return False
+    current_low = min(current["open"], current["close"])
+    current_high = max(current["open"], current["close"])
+    previous_low = min(previous["open"], previous["close"])
+    previous_high = max(previous["open"], previous["close"])
+    return (
+        _is_bullish(current)
+        and _is_bearish(previous)
+        and _is_long_body(current, atr14, current_index)
+        and current_low <= previous_low
+        and current_high >= previous_high
+    )
+
+
+def _is_piercing_like(
+    candles: list[dict[str, float] | None],
+    atr14: list[float | None],
+    current_index: int,
+) -> bool:
+    if current_index <= 0:
+        return False
+    current = candles[current_index]
+    previous = candles[current_index - 1]
+    if current is None or previous is None:
+        return False
+    current_low = min(current["open"], current["close"])
+    current_high = max(current["open"], current["close"])
+    previous_low = min(previous["open"], previous["close"])
+    previous_high = max(previous["open"], previous["close"])
+    previous_body = previous["body"]
+    return (
+        _is_bullish(current)
+        and _is_bearish(previous)
+        and _is_long_body(current, atr14, current_index)
+        and previous_body > 0
+        and current_low >= previous_low
+        and current_high <= previous_high
+        and current["body"] >= previous_body * 0.8
+    )
+
+
+def _is_fairy_guide(
+    candles: list[dict[str, float] | None],
+    atr14: list[float | None],
+    current_index: int,
+) -> bool:
+    if current_index <= 0:
+        return False
+    current = candles[current_index]
+    previous = candles[current_index - 1]
+    if current is None or previous is None:
+        return False
+    return (
+        _is_bullish(current)
+        and _is_long_body(current, atr14, current_index)
+        and _is_inverted_hammer_shape(previous)
+    )
+
+
+def _atr_value_or_zero(value: float | None) -> float:
+    return value if value is not None and value > 0 else 0.0
+
+
+def _has_recent_ma_cross_up(
+    ma_fast: list[float | None],
+    ma_slow: list[float | None],
+    lookback_days: int,
+) -> bool:
+    if len(ma_fast) != len(ma_slow) or len(ma_fast) < 2:
+        return False
+
+    start_index = max(1, len(ma_fast) - lookback_days - 1)
+    for index in range(start_index, len(ma_fast)):
+        previous_fast = ma_fast[index - 1]
+        previous_slow = ma_slow[index - 1]
+        current_fast = ma_fast[index]
+        current_slow = ma_slow[index]
+        if (
+            previous_fast is not None
+            and previous_slow is not None
+            and current_fast is not None
+            and current_slow is not None
+            and previous_fast < previous_slow
+            and current_fast > current_slow
+        ):
+            return True
+    return False
+
+
+def _has_slope_negative_to_positive_turn_in_window(
+    slopes: list[float | None],
+    *,
+    start_days_ago: int,
+    end_days_ago: int,
+) -> bool:
+    if start_days_ago <= end_days_ago or len(slopes) < start_days_ago + 1:
+        return False
+
+    start_index = len(slopes) - start_days_ago
+    end_index = len(slopes) - end_days_ago
+    for index in range(max(1, start_index), end_index + 1):
+        previous = slopes[index - 1]
+        current = slopes[index]
+        if previous is None or current is None:
+            continue
+        if previous < 0 <= current:
+            return True
+    return False
 
 
 def _passes_ma30_structure_filter(
