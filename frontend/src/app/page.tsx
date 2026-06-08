@@ -48,16 +48,14 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
 
 const dailyRecommendedSourceTables = [
   "trade_calendar",
-  "security_master",
   "all_stock_snapshot",
   "bar_1d_raw",
-  "bar_5m_raw",
   "adjust_factor",
-  "performance_express",
-  "forecast",
 ];
 
 const weeklyRecommendedSourceTables = [
+  "security_master",
+  "bar_5m_raw",
   "dividend",
   "profit",
   "operation",
@@ -72,7 +70,11 @@ const weeklyRecommendedSourceTables = [
   "money_supply_year",
   "industry_snapshot",
   "index_member_snapshot",
+  "performance_express",
+  "forecast",
 ];
+
+const maintainedSourceTables = new Set(dailyRecommendedSourceTables);
 
 const strategyOptions = [{ label: "demo", value: "demo" }];
 
@@ -237,14 +239,17 @@ export default function Home() {
       setSourceUpdateModalOpen(true);
       return;
     }
-    if (selectedSourceTables.length === 0) {
+    const enabledSelectedSourceTables = selectedSourceTables.filter((datasetName) =>
+      maintainedSourceTables.has(datasetName),
+    );
+    if (enabledSelectedSourceTables.length === 0) {
       messageApi.warning("请选择至少一个 source 表");
       return;
     }
 
     try {
       const data = await requestStockDataAssetRefresh(
-        selectedSourceTables,
+        enabledSelectedSourceTables,
         sourceUpdateTargetDate,
       );
       messageApi.info(data.message);
@@ -259,6 +264,9 @@ export default function Home() {
   }
 
   function toggleSourceTable(datasetName: string, checked: boolean) {
+    if (!maintainedSourceTables.has(datasetName)) {
+      return;
+    }
     setSelectedSourceTables((current) => {
       if (checked) {
         return current.includes(datasetName)
@@ -752,10 +760,13 @@ export default function Home() {
                   <div className="source-table-group">
                     <span className="source-table-group-label">周频推荐</span>
                     {weeklyRecommendedSourceTables.map((datasetName) => (
-                      <label className="source-table-option" key={datasetName}>
+                      <label
+                        className="source-table-option source-table-option-disabled"
+                        key={datasetName}
+                      >
                         <input
-                          checked={selectedSourceTables.includes(datasetName)}
-                          disabled={sourceUpdateRunning}
+                          checked={false}
+                          disabled
                           onChange={(event) =>
                             toggleSourceTable(datasetName, event.target.checked)
                           }
@@ -771,6 +782,9 @@ export default function Home() {
                   dataSource={datasets}
                   loading={datasetsLoading}
                   pagination={false}
+                  rowClassName={(record) =>
+                    record.enabled ? "" : "disabled-asset-row"
+                  }
                   rowKey="dataset_name"
                   scroll={{ x: 1733 }}
                   size="middle"
@@ -803,6 +817,9 @@ export default function Home() {
                   dataSource={martDatasets}
                   loading={martDatasetsLoading || martRefreshing}
                   pagination={false}
+                  rowClassName={(record) =>
+                    record.enabled ? "" : "disabled-asset-row"
+                  }
                   rowKey="dataset_name"
                   scroll={{ x: 1410 }}
                   size="middle"

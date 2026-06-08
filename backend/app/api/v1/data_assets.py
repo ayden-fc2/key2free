@@ -37,12 +37,15 @@ def request_stock_data_asset_refresh(
     dataset_names: Optional[str] = Query(default=None),
     target_date: Optional[str] = Query(default=None),
 ) -> dict:
-    return asdict(
-        DataAssetService().request_stock_data_asset_refresh(
-            target_date=target_date,
-            dataset_names=dataset_names,
+    try:
+        return asdict(
+            DataAssetService().request_stock_data_asset_refresh(
+                target_date=target_date,
+                dataset_names=dataset_names,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/source-update-task")

@@ -304,94 +304,26 @@ class UniverseDailyAdapter:
             connection.execute(
                 """
                 create temp table staging_mart_universe_daily as
-                with source_rows as (
-                    select s.trade_date,
-                           s.code,
-                           s.code_name,
-                           sm.security_type,
-                           sm.list_status
-                    from source.all_stock_snapshot s
-                    left join source.security_master sm
-                      on s.code = sm.code
-                    where s.trade_date between ? and ?
-                      and s.code is not null
-                      and s.code <> ''
-                ),
-                industry_ranked as (
-                    select r.trade_date,
-                           r.code,
-                           industry,
-                           industry_classification,
-                           row_number() over (
-                               partition by r.trade_date, r.code
-                               order by i.update_date desc nulls last
-                           ) as rn
-                    from source_rows r
-                    left join source.industry_snapshot i
-                      on r.code = i.code
-                     and i.update_date <= r.trade_date
-                ),
-                source_dates as (
-                    select distinct trade_date
-                    from source_rows
-                ),
-                latest_index_dates as (
-                    select d.trade_date,
-                           m.index_code,
-                           max(m.update_date) as update_date
-                    from source_dates d
-                    join (
-                        select distinct index_code, update_date
-                        from source.index_member_snapshot
-                    ) m
-                      on m.update_date <= d.trade_date
-                    group by d.trade_date, m.index_code
-                ),
-                index_flags as (
-                    select r.trade_date,
-                           r.code,
-                           max(
-                               case
-                                   when l.index_code = 'sh.000016' and m.code is not null
-                                   then 1 else 0
-                               end
-                           ) as is_sz50,
-                           max(
-                               case
-                                   when l.index_code = 'sh.000300' and m.code is not null
-                                   then 1 else 0
-                               end
-                           ) as is_hs300,
-                           max(
-                               case
-                                   when l.index_code = 'sh.000905' and m.code is not null
-                                   then 1 else 0
-                               end
-                           ) as is_zz500
-                    from source_rows r
-                    left join latest_index_dates l
-                      on r.trade_date = l.trade_date
-                    left join source.index_member_snapshot m
-                      on m.index_code = l.index_code
-                     and m.update_date = l.update_date
-                     and m.code = r.code
-                    group by r.trade_date, r.code
-                )
-                select r.trade_date,
-                       r.code,
-                       r.code_name,
-                       r.security_type,
-                       r.list_status,
-                       i.industry,
-                       i.industry_classification,
-                       cast(coalesce(f.is_sz50, 0) as smallint) as is_sz50,
-                       cast(coalesce(f.is_hs300, 0) as smallint) as is_hs300,
-                       cast(coalesce(f.is_zz500, 0) as smallint) as is_zz500
-                from source_rows r
-                left join industry_ranked i
-                  on r.trade_date = i.trade_date and r.code = i.code and i.rn = 1
-                left join index_flags f
-                  on r.trade_date = f.trade_date and r.code = f.code
+                select s.trade_date,
+                       s.code,
+                       s.code_name,
+                       cast(
+                           case
+                               when s.code like 'sh.000%' or s.code like 'sz.399%' then 2
+                               when s.code like 'sh.51%' or s.code like 'sz.15%' or s.code like 'sz.16%' then 5
+                               else 1
+                           end as smallint
+                       ) as security_type,
+                       cast(1 as smallint) as list_status,
+                       cast(null as varchar) as industry,
+                       cast(null as varchar) as industry_classification,
+                       cast(0 as smallint) as is_sz50,
+                       cast(0 as smallint) as is_hs300,
+                       cast(0 as smallint) as is_zz500
+                from source.all_stock_snapshot s
+                where s.trade_date between ? and ?
+                  and s.code is not null
+                  and s.code <> ''
                 """,
                 [start_date, end_date],
             )

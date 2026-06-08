@@ -166,7 +166,7 @@ class SourceRefreshService:
                     )
                 self.tasks.append_log(task_id, f"目标交易日: {latest_trading_day}")
 
-                for bootstrap_dataset in ("security_master", "all_stock_snapshot"):
+                for bootstrap_dataset in ("all_stock_snapshot",):
                     if not self._should_run_dataset(bootstrap_dataset):
                         self.tasks.append_log(task_id, f"跳过 {bootstrap_dataset}: 未选择。")
                         continue
@@ -221,7 +221,7 @@ class SourceRefreshService:
 
                 for item in catalog:
                     dataset_name = item["dataset_name"]
-                    if dataset_name in {"trade_calendar", "security_master", "all_stock_snapshot"}:
+                    if dataset_name in {"trade_calendar", "all_stock_snapshot"}:
                         continue
                     if not self._should_run_dataset(dataset_name):
                         self.tasks.append_log(task_id, f"跳过 {dataset_name}: 未选择。")

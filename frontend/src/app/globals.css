@@ -319,6 +319,20 @@ button {
   gap: 4px;
 }
 
+.source-table-option-disabled {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.disabled-asset-row > td {
+  background: #f8fafc !important;
+  color: #94a3b8;
+}
+
+.disabled-asset-row .ant-tag {
+  opacity: 0.7;
+}
+
 .recent-update {
   font-weight: 600;
 }

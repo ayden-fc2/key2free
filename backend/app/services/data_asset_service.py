@@ -10,7 +10,10 @@ from app.dtos.data_asset_dto import (
     StockDataAssetSummaryDTO,
     TaskDTO,
 )
-from app.repositories.data_asset_repository import DataAssetRepository
+from app.repositories.data_asset_repository import (
+    DataAssetRepository,
+    MAINTAINED_SOURCE_DATASETS,
+)
 from app.repositories.task_repository import TaskRepository
 from app.services.mart_refresh_service import MartRefreshService
 from app.services.source_refresh_service import SourceRefreshService
@@ -141,6 +144,14 @@ class DataAssetService:
         if dataset_names is None or dataset_names.strip() == "":
             return None
         names = [name.strip() for name in dataset_names.split(",") if name.strip()]
+        disabled_names = sorted(
+            name for name in names if name not in MAINTAINED_SOURCE_DATASETS
+        )
+        if disabled_names:
+            raise ValueError(
+                "disabled source datasets cannot be refreshed: "
+                + ", ".join(disabled_names)
+            )
         return names or None
 
     def get_source_update_task(self, task_id: int | None = None) -> TaskDTO | None:

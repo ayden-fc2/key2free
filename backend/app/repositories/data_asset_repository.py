@@ -311,12 +311,23 @@ SOURCE_LOGICAL_KEYS: dict[str, list[str]] = {
     "dividend": [],
 }
 
+MAINTAINED_SOURCE_DATASETS: set[str] = {
+    "trade_calendar",
+    "all_stock_snapshot",
+    "bar_1d_raw",
+    "adjust_factor",
+}
+
+MAINTAINED_MART_DATASETS: set[str] = {
+    "universe_daily",
+    "bar_1d_qfq",
+}
+
 
 class DataAssetRepository:
     DAILY_TRADING_COVERAGE_DATASETS: set[str] = {
         "all_stock_snapshot",
         "bar_1d_raw",
-        "bar_5m_raw",
     }
     DATASET_TABLES: dict[str, dict[str, str]] = {
         "security_master": {"table_name": "source.security_master", "date_column": "last_seen_date"},
@@ -354,7 +365,31 @@ class DataAssetRepository:
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
 
+    def sync_catalog_maintenance_flags(self) -> None:
+        with self.duckdb.connect(read_only=False) as connection:
+            self.sync_catalog_maintenance_flags_with_connection(connection)
+
+    def sync_catalog_maintenance_flags_with_connection(self, connection: Any) -> None:
+        source_names = sorted(MAINTAINED_SOURCE_DATASETS)
+        mart_names = sorted(MAINTAINED_MART_DATASETS)
+        connection.execute(
+            """
+            update meta.dataset_catalog
+            set enabled = case
+                when coalesce(tier, '') <> 'mart'
+                 and dataset_name in (select unnest(?))
+                then 1
+                when tier = 'mart'
+                 and dataset_name in (select unnest(?))
+                then 1
+                else 0
+            end
+            """,
+            [source_names, mart_names],
+        )
+
     def get_stock_dataset_overview(self) -> list[StockDatasetOverviewDTO]:
+        self.sync_catalog_maintenance_flags()
         with self.duckdb.connect(read_only=True) as connection:
             catalog_rows = connection.execute(
                 """
@@ -496,6 +531,7 @@ class DataAssetRepository:
         return datasets
 
     def get_mart_dataset_overview(self) -> list[MartDatasetOverviewDTO]:
+        self.sync_catalog_maintenance_flags()
         with self.duckdb.connect(read_only=True) as connection:
             catalog_rows = connection.execute(
                 """
@@ -623,6 +659,7 @@ class DataAssetRepository:
         return datasets
 
     def get_enabled_source_catalog(self) -> list[dict[str, Any]]:
+        self.sync_catalog_maintenance_flags()
         with self.duckdb.connect(read_only=True) as connection:
             rows = connection.execute(
                 """
@@ -695,27 +732,44 @@ class DataAssetRepository:
         return catalog
 
     def get_asset_universe(self, asset_scope: str) -> list[dict[str, Any]]:
-        type_map = {
-            "equity_index_etf": (1, 2, 5),
-            "equity_etf": (1, 5),
-            "equity": (1,),
-        }
-        security_types = type_map.get(asset_scope)
-        if security_types is None:
+        if asset_scope not in {"equity_index_etf", "equity_etf", "equity"}:
             raise ValueError(f"unsupported asset_scope: {asset_scope}")
-        placeholders = ", ".join(["?"] * len(security_types))
+
+        latest_snapshot_date = self.get_dataset_actual_max_date("all_stock_snapshot")
+        if latest_snapshot_date is None:
+            return []
+
+        type_filter = ""
+        if asset_scope == "equity":
+            type_filter = "and not (code like 'sh.000%' or code like 'sz.399%' or code like 'sh.51%' or code like 'sz.15%' or code like 'sz.16%')"
+        elif asset_scope == "equity_etf":
+            type_filter = "and not (code like 'sh.000%' or code like 'sz.399%')"
+
         with self.duckdb.connect(read_only=True) as connection:
             rows = connection.execute(
                 f"""
-                select code, ipo_date, out_date, security_type
-                from source.security_master
-                where security_type in ({placeholders})
-                  and coalesce(list_status, 1) in (0, 1)
-                  and code is not null
-                  and code <> ''
-                order by code
+                with latest_codes as (
+                    select distinct code
+                    from source.all_stock_snapshot
+                    where trade_date = ?::date
+                      and code is not null
+                      and code <> ''
+                      {type_filter}
+                )
+                select s.code,
+                       min(s.trade_date) as ipo_date,
+                       null as out_date,
+                       case
+                           when s.code like 'sh.000%' or s.code like 'sz.399%' then 2
+                           when s.code like 'sh.51%' or s.code like 'sz.15%' or s.code like 'sz.16%' then 5
+                           else 1
+                       end as security_type
+                from source.all_stock_snapshot s
+                join latest_codes l on s.code = l.code
+                group by s.code
+                order by s.code
                 """,
-                list(security_types),
+                [latest_snapshot_date],
             ).fetchall()
         return [
             {
@@ -973,8 +1027,8 @@ class DataAssetRepository:
             if dataset_name == "all_stock_snapshot":
                 min_expected_codes_sql = """
                     case
-                        when coalesce(active_security_count, 0) > 0
-                        then greatest(1, cast(ceil(active_security_count * 0.75) as bigint))
+                        when coalesce(reference_snapshot_count, 0) > 0
+                        then greatest(1, cast(ceil(reference_snapshot_count * 0.75) as bigint))
                         else 1
                     end
                 """
@@ -1021,34 +1075,55 @@ class DataAssetRepository:
                     where trade_date between ? and ?
                     group by trade_date
                 ),
-                active_security_counts as (
-                    select d.trade_date, count(*) as active_security_count
+                same_day_active_counts as (
+                    select trade_date, count(*) as active_security_count
+                    from source.all_stock_snapshot
+                    where trade_date between ? and ?
+                      and code is not null
+                      and code <> ''
+                    group by trade_date
+                ),
+                reference_snapshot_counts as (
+                    select d.trade_date,
+                           coalesce(
+                               (
+                                   select p.snapshot_count
+                                   from snapshot_counts p
+                                   where p.trade_date < d.trade_date
+                                   order by p.trade_date desc
+                                   limit 1
+                               ),
+                               (
+                                   select n.snapshot_count
+                                   from snapshot_counts n
+                                   where n.trade_date > d.trade_date
+                                   order by n.trade_date asc
+                                   limit 1
+                               )
+                           ) as reference_snapshot_count
                     from trading_days d
-                    join source.security_master sm
-                      on sm.security_type in (1, 2, 5)
-                     and sm.ipo_date <= d.trade_date
-                     and (sm.out_date is null or sm.out_date >= d.trade_date)
-                     and coalesce(sm.list_status, 1) in (0, 1)
-                    group by d.trade_date
                 ),
                 coverage as (
                     select d.trade_date,
                            coalesce(s.row_count, 0) as row_count,
                            coalesce(s.code_count, 0) as code_count,
                            coalesce(a.snapshot_count, 0) as snapshot_count,
-                           coalesce(asm.active_security_count, 0) as active_security_count,
+                           coalesce(same_day.active_security_count, 0) as active_security_count,
+                           coalesce(ref.reference_snapshot_count, 0) as reference_snapshot_count,
                            {min_expected_codes_sql} as min_expected_codes,
                            {min_expected_rows_sql} as min_expected_rows
                     from trading_days d
                     left join source_counts s on d.trade_date = s.trade_date
                     left join snapshot_counts a on d.trade_date = a.trade_date
-                    left join active_security_counts asm on d.trade_date = asm.trade_date
+                    left join same_day_active_counts same_day on d.trade_date = same_day.trade_date
+                    left join reference_snapshot_counts ref on d.trade_date = ref.trade_date
                 )
                 select trade_date,
                        row_count,
                        code_count,
                        snapshot_count,
                        active_security_count,
+                       reference_snapshot_count,
                        min_expected_codes,
                        min_expected_rows,
                        case
@@ -1062,7 +1137,16 @@ class DataAssetRepository:
                 order by trade_date
                 {limit_sql}
                 """,
-                [start_date, end_date, start_date, end_date, start_date, end_date],
+                [
+                    start_date,
+                    end_date,
+                    start_date,
+                    end_date,
+                    start_date,
+                    end_date,
+                    start_date,
+                    end_date,
+                ],
             ).fetchall()
         return [
             {
@@ -1071,6 +1155,7 @@ class DataAssetRepository:
                 "code_count": int(code_count or 0),
                 "snapshot_count": int(snapshot_count or 0),
                 "active_security_count": int(active_security_count or 0),
+                "reference_snapshot_count": int(reference_snapshot_count or 0),
                 "min_expected_codes": int(min_expected_codes or 0),
                 "min_expected_rows": int(min_expected_rows or 0),
                 "issue_type": issue_type,
@@ -1081,6 +1166,7 @@ class DataAssetRepository:
                 code_count,
                 snapshot_count,
                 active_security_count,
+                reference_snapshot_count,
                 min_expected_codes,
                 min_expected_rows,
                 issue_type,
@@ -1517,10 +1603,11 @@ class DataAssetRepository:
                 expected_columns_json, duckdb_schema_json,
                 validation_rules_json, priority
             )
-            values (?, 'mart_adapter', 'mart', 1, 'mart', ?, ?, ?, ?, '{}', ?, ?)
+            values (?, 'mart_adapter', 'mart', ?, 'mart', ?, ?, ?, ?, '{}', ?, ?)
             """,
             [
                 dataset_name,
+                1 if dataset_name in MAINTAINED_MART_DATASETS else 0,
                 "watermark_incremental" if table_type == "BASE TABLE" else "view_validate",
                 "date_window" if table_type == "BASE TABLE" else "none",
                 logical_key_json,

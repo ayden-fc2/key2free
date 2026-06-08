@@ -29,9 +29,24 @@ class MartRefreshService:
         self.repository = DataAssetRepository()
 
     def run(self) -> MartRefreshRunResult:
-        adapters = list(MART_ADAPTER_REGISTRY.values())
         refreshed_count = 0
         with self.repository.duckdb.connect(read_only=False) as connection:
+            self.repository.sync_catalog_maintenance_flags_with_connection(connection)
+            enabled_rows = connection.execute(
+                """
+                select dataset_name
+                from meta.dataset_catalog
+                where tier = 'mart'
+                  and enabled = 1
+                order by priority, dataset_name
+                """
+            ).fetchall()
+            enabled_names = {row[0] for row in enabled_rows}
+            adapters = [
+                adapter
+                for name, adapter in MART_ADAPTER_REGISTRY.items()
+                if name in enabled_names
+            ]
             run_id = self.repository.create_mart_run_log(connection)
             try:
                 connection.execute("begin transaction")
