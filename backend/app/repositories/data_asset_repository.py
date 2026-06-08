@@ -307,6 +307,10 @@ SOURCE_TABLE_COLUMNS: dict[str, list[str]] = {
     ],
 }
 
+SOURCE_LOGICAL_KEYS: dict[str, list[str]] = {
+    "dividend": [],
+}
+
 
 class DataAssetRepository:
     DATASET_TABLES: dict[str, dict[str, str]] = {
@@ -666,6 +670,8 @@ class DataAssetRepository:
             ) in rows
         ]
         for item in catalog:
+            if item["dataset_name"] in SOURCE_LOGICAL_KEYS:
+                item["logical_key"] = SOURCE_LOGICAL_KEYS[item["dataset_name"]]
             if item["dataset_name"] in {
                 "bar_1d_raw",
                 "bar_5m_raw",
@@ -945,6 +951,8 @@ class DataAssetRepository:
         with self.duckdb.connect(read_only=False) as connection:
             staging_table_name = f"temp.staging_{dataset_name}"
             staging_relation_name = f"staging_{dataset_name}"
+            validation_relation_name = staging_table_name
+            written_count = len(rows)
             try:
                 connection.execute(f"drop table if exists {staging_table_name}")
                 connection.execute("begin transaction")
@@ -960,11 +968,18 @@ class DataAssetRepository:
                         f"values ({placeholders})",
                         values,
                     )
+                if dataset_name == "dividend":
+                    dedup_relation_name = f"{staging_relation_name}_dedup"
+                    connection.execute(
+                        f"create temp table {dedup_relation_name} as "
+                        f"select distinct * from {staging_table_name}"
+                    )
+                    validation_relation_name = f"temp.{dedup_relation_name}"
 
                 validation_results = self._validate_dataset_relation(
                     connection=connection,
                     dataset_name=dataset_name,
-                    relation_name=staging_table_name,
+                    relation_name=validation_relation_name,
                     expected_columns=expected_columns,
                     logical_key=logical_key,
                     scope=scope,
@@ -987,17 +1002,24 @@ class DataAssetRepository:
 
                 if values:
                     column_sql = ", ".join(columns)
+                    written_count = connection.execute(
+                        f"select count(*) from {validation_relation_name}"
+                    ).fetchone()[0]
                     connection.execute(
                         f"insert into {table_name}({column_sql}) "
-                        f"select {column_sql} from {staging_table_name}"
+                        f"select {column_sql} from {validation_relation_name}"
                     )
                 connection.execute("commit")
             except Exception:
                 connection.execute("rollback")
                 raise
             finally:
+                if dataset_name == "dividend":
+                    connection.execute(
+                        f"drop table if exists temp.{staging_relation_name}_dedup"
+                    )
                 connection.execute(f"drop table if exists {staging_table_name}")
-        return len(rows), validation_results
+        return written_count, validation_results
 
     def _delete_source_scope(
         self,
@@ -1267,12 +1289,14 @@ class DataAssetRepository:
         duplicate_groups = 0
         if logical_key:
             key_sql = ", ".join(logical_key)
+            non_null_key_sql = " and ".join(f"{column} is not null" for column in logical_key)
             duplicate_groups = connection.execute(
                 f"""
                 select count(*)
                 from (
                     select {key_sql}, count(*) as row_count
                     from {relation_name}
+                    where {non_null_key_sql}
                     group by {key_sql}
                     having count(*) > 1
                 )

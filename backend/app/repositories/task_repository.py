@@ -7,6 +7,8 @@ from app.repositories.duckdb_repository import DuckDBRepository
 
 
 class TaskRepository:
+    MAX_LOG_LINES = 2000
+
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
 
@@ -103,31 +105,55 @@ class TaskRepository:
 
     def append_log(self, task_id: int, message: str) -> None:
         with self.duckdb.connect(read_only=False) as connection:
+            row = connection.execute(
+                """
+                select logs
+                from meta.my_task
+                where id = ?
+                """,
+                [task_id],
+            ).fetchone()
+            logs = "" if row is None else row[0] or ""
             connection.execute(
                 """
                 update meta.my_task
-                set logs = coalesce(logs, '') || ?
+                set logs = ?
                 where id = ?
                 """,
-                [self._format_log(message), task_id],
+                [self._trim_logs(logs + self._format_log(message)), task_id],
             )
 
     def finish_task(self, task_id: int, status: str, message: str) -> None:
         if status not in {"success", "error"}:
             raise ValueError(f"invalid task finish status: {status}")
         with self.duckdb.connect(read_only=False) as connection:
+            row = connection.execute(
+                """
+                select logs
+                from meta.my_task
+                where id = ?
+                """,
+                [task_id],
+            ).fetchone()
+            logs = "" if row is None else row[0] or ""
             connection.execute(
                 """
                 update meta.my_task
-                set logs = coalesce(logs, '') || ?, status = ?
+                set logs = ?, status = ?
                 where id = ?
                 """,
-                [self._format_log(message), status, task_id],
+                [self._trim_logs(logs + self._format_log(message)), status, task_id],
             )
 
     def _format_log(self, message: str) -> str:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return f"[{timestamp}] {message}\n"
+
+    def _trim_logs(self, logs: str) -> str:
+        lines = logs.splitlines()
+        if len(lines) <= self.MAX_LOG_LINES:
+            return logs
+        return "\n".join(lines[-self.MAX_LOG_LINES :]) + "\n"
 
     def _to_task(self, row: tuple | None) -> TaskDTO | None:
         if row is None:

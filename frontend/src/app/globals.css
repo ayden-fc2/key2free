@@ -319,6 +319,22 @@ button {
   gap: 4px;
 }
 
+.recent-update {
+  font-weight: 600;
+}
+
+.recent-update-today {
+  color: #15803d;
+}
+
+.recent-update-yesterday {
+  color: #b45309;
+}
+
+.recent-update-stale {
+  color: #dc2626;
+}
+
 .task-modal-header {
   align-items: center;
   display: flex;

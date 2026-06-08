@@ -85,6 +85,53 @@ function defaultTargetDate() {
   return `${year}-${month}-${date}`;
 }
 
+function parseLocalDateTime(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const match = value
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2}))?/);
+  if (!match) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const [, year, month, day, hour = "0", minute = "0", second = "0"] = match;
+  return new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+}
+
+function dateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function recentUpdateClassName(value: string | null) {
+  const updatedAt = parseLocalDateTime(value);
+  if (updatedAt === null) {
+    return undefined;
+  }
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const updatedKey = dateKey(updatedAt);
+  if (updatedKey === dateKey(today)) {
+    return "recent-update recent-update-today";
+  }
+  if (updatedKey === dateKey(yesterday)) {
+    return "recent-update recent-update-yesterday";
+  }
+  return "recent-update recent-update-stale";
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>(
     "data-assets",
@@ -403,7 +450,9 @@ export default function Home() {
     },
     {
       dataIndex: "updated_at",
-      render: (value: string | null) => formatDateTime(value),
+      render: (value: string | null) => (
+        <span className={recentUpdateClassName(value)}>{formatDateTime(value)}</span>
+      ),
       title: "最近更新",
       width: 210,
     },
@@ -506,7 +555,9 @@ export default function Home() {
     },
     {
       dataIndex: "updated_at",
-      render: (value: string | null) => formatDateTime(value),
+      render: (value: string | null) => (
+        <span className={recentUpdateClassName(value)}>{formatDateTime(value)}</span>
+      ),
       title: "最近更新",
       width: 210,
     },

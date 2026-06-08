@@ -66,7 +66,7 @@ class SourceRefreshCancelled(RuntimeError):
 
 class SourceRefreshService:
     TASK_TYPE = "source_update"
-    DEFAULT_MAX_REQUESTS_PER_RUN = 50000
+    DEFAULT_MAX_REQUESTS_PER_RUN = 2000000
     DEFAULT_CHUNK_MAX_ATTEMPTS = 3
     DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 600
 
@@ -1270,6 +1270,8 @@ class SourceRefreshService:
 
     def _is_retryable_baostock_error(self, exc: BaoStockError) -> bool:
         error_code = (exc.error_code or "").strip()
+        if error_code and error_code != "0":
+            return True
         if error_code in {"10002007"}:
             return True
 
@@ -1340,6 +1342,14 @@ class SourceRefreshService:
             )
 
         if not passed:
+            failed_details = [
+                {
+                    "rule_name": validation["rule_name"],
+                    "detail": validation["detail"],
+                }
+                for validation in validation_results
+                if not validation["passed"] and validation["severity"] == "error"
+            ]
             self.data_assets.upsert_chunk_state(
                 dataset_name=dataset_name,
                 chunk_key=chunk_key,
@@ -1348,9 +1358,9 @@ class SourceRefreshService:
                 run_id=run_id,
                 row_count=row_count,
                 error_code="ValidationError",
-                error_message="source dataset validation failed",
+                error_message=f"source dataset validation failed: {failed_details}",
             )
-            raise RuntimeError(f"{dataset_name} validation failed")
+            raise RuntimeError(f"{dataset_name} validation failed: {failed_details}")
 
         self.data_assets.upsert_chunk_state(
             dataset_name=dataset_name,
@@ -1401,7 +1411,7 @@ class SourceRefreshService:
         return (
             chunk_index == 1
             or chunk_index == total_chunks
-            or chunk_index % 50 == 0
+            or chunk_index % 1000 == 0
         )
 
     def _elapsed(self, started_at: float) -> str:
