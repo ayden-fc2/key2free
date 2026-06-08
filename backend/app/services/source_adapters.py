@@ -122,8 +122,25 @@ class TradeCalendarAdapter:
         item: dict[str, Any],
         runtime: AdapterRuntime,
     ) -> list[AdapterChunk]:
-        start_date = (runtime.today - timedelta(days=14)).isoformat()
-        end_date = (runtime.today + timedelta(days=7)).isoformat()
+        end_date_value = runtime.today + timedelta(days=7)
+        start_date_value = runtime.today - timedelta(days=14)
+        current_watermark = parse_date(item.get("current_watermark"))
+        if current_watermark is not None and current_watermark < end_date_value:
+            start_date_value = min(start_date_value, current_watermark + timedelta(days=1))
+        if runtime.repository is not None:
+            calendar_min_date = (
+                runtime.repository.get_dataset_actual_min_date(self.spec.dataset_name)
+                or start_date_value
+            )
+            missing_dates = runtime.repository.get_missing_calendar_dates(
+                start_date=calendar_min_date,
+                end_date=end_date_value,
+                limit=1,
+            )
+            if missing_dates:
+                start_date_value = min(start_date_value, missing_dates[0])
+        start_date = start_date_value.isoformat()
+        end_date = end_date_value.isoformat()
         return [
             AdapterChunk(
                 dataset_name=self.spec.dataset_name,

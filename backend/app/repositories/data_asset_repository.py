@@ -1000,6 +1000,78 @@ class DataAssetRepository:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def get_missing_calendar_dates(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        limit: int | None = None,
+    ) -> list[date]:
+        limit_sql = "" if limit is None else f"limit {int(limit)}"
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                f"""
+                with expected as (
+                    select range::date as calendar_date
+                    from range(?::date, (?::date + interval 1 day), interval 1 day)
+                )
+                select e.calendar_date
+                from expected e
+                left join source.trade_calendar c
+                  on e.calendar_date = c.calendar_date
+                where c.calendar_date is null
+                order by e.calendar_date
+                {limit_sql}
+                """,
+                [start_date, end_date],
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def get_calendar_coverage_issues(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        limit_sql = "" if limit is None else f"limit {int(limit)}"
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                f"""
+                with expected as (
+                    select range::date as calendar_date
+                    from range(?::date, (?::date + interval 1 day), interval 1 day)
+                ),
+                calendar_counts as (
+                    select calendar_date, count(*) as row_count
+                    from source.trade_calendar
+                    where calendar_date between ? and ?
+                    group by calendar_date
+                )
+                select e.calendar_date,
+                       coalesce(c.row_count, 0) as row_count,
+                       case
+                           when c.row_count is null then 'missing'
+                           else 'duplicate'
+                       end as issue_type
+                from expected e
+                left join calendar_counts c
+                  on e.calendar_date = c.calendar_date
+                where coalesce(c.row_count, 0) <> 1
+                order by e.calendar_date
+                {limit_sql}
+                """,
+                [start_date, end_date, start_date, end_date],
+            ).fetchall()
+        return [
+            {
+                "calendar_date": calendar_date,
+                "row_count": int(row_count or 0),
+                "issue_type": issue_type,
+            }
+            for calendar_date, row_count, issue_type in rows
+        ]
+
     def get_daily_source_coverage_issues(
         self,
         *,
@@ -1179,6 +1251,48 @@ class DataAssetRepository:
         dataset_name: str,
         watermark_value: str,
     ) -> list[dict[str, Any]]:
+        watermark_date = date.fromisoformat(str(watermark_value)[:10])
+        if dataset_name == "trade_calendar":
+            start_date = self.get_dataset_actual_min_date(dataset_name)
+            if start_date is None:
+                return [
+                    {
+                        "rule_name": "calendar_date_coverage",
+                        "severity": "error",
+                        "passed": False,
+                        "sample_count": 0,
+                        "detail": {
+                            "watermark_value": watermark_value,
+                            "reason": "source table is empty",
+                        },
+                    }
+                ]
+            calendar_issues = self.get_calendar_coverage_issues(
+                start_date=start_date,
+                end_date=watermark_date,
+                limit=50,
+            )
+            return [
+                {
+                    "rule_name": "calendar_date_coverage",
+                    "severity": "error",
+                    "passed": not calendar_issues,
+                    "sample_count": len(calendar_issues),
+                    "detail": {
+                        "start_date": str(start_date),
+                        "watermark_value": watermark_value,
+                        "issue_sample": [
+                            {
+                                "calendar_date": str(item["calendar_date"]),
+                                "issue_type": item["issue_type"],
+                                "row_count": item["row_count"],
+                            }
+                            for item in calendar_issues[:10]
+                        ],
+                    },
+                }
+            ]
+
         if dataset_name not in self.DAILY_TRADING_COVERAGE_DATASETS:
             return []
         physical = self.DATASET_TABLES[dataset_name]
@@ -1203,10 +1317,37 @@ class DataAssetRepository:
                 }
             ]
 
+        calendar_issues = self.get_calendar_coverage_issues(
+            start_date=start_date,
+            end_date=watermark_date,
+            limit=50,
+        )
+        if calendar_issues:
+            return [
+                {
+                    "rule_name": "calendar_date_coverage",
+                    "severity": "error",
+                    "passed": False,
+                    "sample_count": len(calendar_issues),
+                    "detail": {
+                        "start_date": str(start_date),
+                        "watermark_value": watermark_value,
+                        "issue_sample": [
+                            {
+                                "calendar_date": str(item["calendar_date"]),
+                                "issue_type": item["issue_type"],
+                                "row_count": item["row_count"],
+                            }
+                            for item in calendar_issues[:10]
+                        ],
+                    },
+                }
+            ]
+
         issues = self.get_daily_source_coverage_issues(
             dataset_name=dataset_name,
             start_date=start_date,
-            end_date=date.fromisoformat(str(watermark_value)[:10]),
+            end_date=watermark_date,
             limit=50,
         )
         return [

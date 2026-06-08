@@ -139,6 +139,8 @@ def _passes_trend_filter(bars: list[dict[str, Any]]) -> bool:
 
     if not _is_recent_low_inside_last_structure_low_zone(lows, low_points[-1]):
         return False
+    if not _is_post_l4_low_above_support(lows, low_points[-1]):
+        return False
     if not _is_recent_ma20_slope_improving(closes):
         return False
 
@@ -204,6 +206,18 @@ def _is_recent_low_inside_last_structure_low_zone(
     lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
     upper_bound = low_value + low_atr * RECENT_LOW_MAX_ABOVE_L4_ATR_MULTIPLE
     return lower_bound <= recent_low <= upper_bound
+
+
+def _is_post_l4_low_above_support(
+    lows: list[float | None],
+    last_low_point: tuple[int, float, float],
+) -> bool:
+    low_index, low_value, low_atr = last_low_point
+    post_l4_lows = lows[low_index:]
+    if not post_l4_lows or any(value is None for value in post_l4_lows):
+        return False
+    lower_bound = low_value - low_atr * RECENT_LOW_MAX_BELOW_L4_ATR_MULTIPLE
+    return min(value for value in post_l4_lows if value is not None) >= lower_bound
 
 
 def _is_recent_ma20_slope_improving(closes: list[float | None]) -> bool:
