@@ -6,13 +6,19 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
 import {
+  getMartDataAssetSummary,
   getSourceUpdateTask,
   getStockDataAssetSummary,
+  refreshMartDataAssets,
   requestStockDataAssetRefresh,
   stopSourceUpdateTask,
 } from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
-import type { DataAssetTask, StockDatasetOverview } from "@/types/dataAsset";
+import type {
+  DataAssetTask,
+  MartDatasetOverview,
+  StockDatasetOverview,
+} from "@/types/dataAsset";
 import type { HealthState } from "@/types/health";
 import { formatDateTime } from "@/utils/format";
 
@@ -26,7 +32,10 @@ const tabs = [
 const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string }[]> = {
   "backtest-stats": [{ key: "placeholder", label: "占位" }],
   "daily-signals": [{ key: "placeholder", label: "占位" }],
-  "data-assets": [{ key: "overview", label: "数据资产一览" }],
+  "data-assets": [
+    { key: "source", label: "源数据" },
+    { key: "mart", label: "后处理数据" },
+  ],
   strategies: [{ key: "placeholder", label: "占位" }],
 };
 
@@ -38,6 +47,10 @@ export default function Home() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<StockDatasetOverview[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [martDatasets, setMartDatasets] = useState<MartDatasetOverview[]>([]);
+  const [martDatasetsLoading, setMartDatasetsLoading] = useState(false);
+  const [martRefreshing, setMartRefreshing] = useState(false);
+  const [activeDataAssetSubTab, setActiveDataAssetSubTab] = useState("source");
   const [sourceUpdateTask, setSourceUpdateTask] = useState<DataAssetTask | null>(
     null,
   );
@@ -82,6 +95,31 @@ export default function Home() {
       messageApi.error(error instanceof Error ? error.message : "刷新失败");
     } finally {
       setDatasetsLoading(false);
+    }
+  }
+
+  async function fetchMartDataAssets() {
+    setMartDatasetsLoading(true);
+    try {
+      const data = await getMartDataAssetSummary();
+      setMartDatasets(data.datasets);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "刷新失败");
+    } finally {
+      setMartDatasetsLoading(false);
+    }
+  }
+
+  async function refreshMartDatasets() {
+    setMartRefreshing(true);
+    try {
+      const data = await refreshMartDataAssets();
+      messageApi.success(data.message);
+      await fetchMartDataAssets();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "更新失败");
+    } finally {
+      setMartRefreshing(false);
     }
   }
 
@@ -185,10 +223,13 @@ export default function Home() {
   ]);
 
   useEffect(() => {
-    if (activeTab === "data-assets") {
+    if (activeTab === "data-assets" && activeDataAssetSubTab === "source") {
       fetchStockDataAssets();
     }
-  }, [activeTab]);
+    if (activeTab === "data-assets" && activeDataAssetSubTab === "mart") {
+      fetchMartDataAssets();
+    }
+  }, [activeTab, activeDataAssetSubTab]);
 
   const activeSubTabs = useMemo(() => subTabs[activeTab], [activeTab]);
 
@@ -289,6 +330,84 @@ export default function Home() {
     },
   ];
 
+  const martDataAssetColumns: ColumnsType<MartDatasetOverview> = [
+    {
+      dataIndex: "dataset_name",
+      fixed: "left",
+      title: "数据集",
+      width: 190,
+    },
+    {
+      dataIndex: "table_type",
+      render: (value: string) => (
+        <Tag color={value === "BASE TABLE" ? "blue" : "purple"}>{value}</Tag>
+      ),
+      title: "类型",
+      width: 120,
+    },
+    {
+      dataIndex: "enabled",
+      render: (enabled: boolean) =>
+        enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
+      title: "启用",
+      width: 90,
+    },
+    {
+      dataIndex: "status",
+      render: (status: string) => {
+        const color =
+          status === "ok"
+            ? "green"
+            : status === "warning"
+              ? "orange"
+              : status === "unknown" || status === "empty"
+                ? "default"
+                : "red";
+        return <Tag color={color}>{status}</Tag>;
+      },
+      title: "状态",
+      width: 140,
+    },
+    {
+      dataIndex: "watermark",
+      render: (value: string | null) => formatDateTime(value),
+      title: "水位",
+      width: 140,
+    },
+    {
+      dataIndex: "actual_max_date",
+      render: (value: string | null) => formatDateTime(value),
+      title: "真实最大日期",
+      width: 160,
+    },
+    {
+      dataIndex: "updated_at",
+      render: (value: string | null) => formatDateTime(value),
+      title: "最近更新",
+      width: 210,
+    },
+    {
+      dataIndex: "latest_validation_at",
+      render: (value: string | null) => formatDateTime(value),
+      title: "最近校验",
+      width: 210,
+    },
+    {
+      dataIndex: "validation_failed_count",
+      render: (value: number) =>
+        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
+      title: "校验失败",
+      width: 110,
+    },
+    {
+      align: "right",
+      dataIndex: "row_count",
+      render: (value: number | null) => value?.toLocaleString() ?? "-",
+      title: "行数",
+      width: 130,
+    },
+  ];
+
   return (
     <main className="app-shell">
       {contextHolder}
@@ -359,9 +478,18 @@ export default function Home() {
         <header className="topbar">
           <div className="topbar-title">
             <Tabs
-              activeKey={activeSubTabs[0].key}
+              activeKey={
+                activeTab === "data-assets"
+                  ? activeDataAssetSubTab
+                  : activeSubTabs[0].key
+              }
               className="header-tabs"
               items={activeSubTabs}
+              onChange={(key) => {
+                if (activeTab === "data-assets") {
+                  setActiveDataAssetSubTab(key);
+                }
+              }}
             />
           </div>
           <div
@@ -375,38 +503,72 @@ export default function Home() {
 
         {activeTab === "data-assets" ? (
           <section className="content-panel">
-            <div className="table-panel">
-              <div className="table-toolbar">
-                <div className="placeholder-title">数据集总览</div>
-                <Space>
-                  <Button
-                    icon={<ReloadOutlined />}
-                    loading={datasetsLoading}
-                    onClick={fetchStockDataAssets}
-                  >
-                    刷新
-                  </Button>
-                  <Button
-                    icon={<SyncOutlined />}
-                    disabled={sourceUpdateRunning}
-                    loading={sourceUpdateRunning}
-                    onClick={requestRefresh}
-                    type="primary"
-                  >
-                    更新
-                  </Button>
-                </Space>
+            {activeDataAssetSubTab === "source" ? (
+              <div className="table-panel">
+                <div className="table-toolbar">
+                  <div className="placeholder-title">源数据总览</div>
+                  <Space>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={datasetsLoading}
+                      onClick={fetchStockDataAssets}
+                    >
+                      刷新
+                    </Button>
+                    <Button
+                      icon={<SyncOutlined />}
+                      disabled={sourceUpdateRunning}
+                      loading={sourceUpdateRunning}
+                      onClick={requestRefresh}
+                      type="primary"
+                    >
+                      更新
+                    </Button>
+                  </Space>
+                </div>
+                <Table
+                  columns={dataAssetColumns}
+                  dataSource={datasets}
+                  loading={datasetsLoading}
+                  pagination={false}
+                  rowKey="dataset_name"
+                  scroll={{ x: 1733 }}
+                  size="middle"
+                />
               </div>
-              <Table
-                columns={dataAssetColumns}
-                dataSource={datasets}
-                loading={datasetsLoading}
-                pagination={false}
-                rowKey="dataset_name"
-                scroll={{ x: 1733 }}
-                size="middle"
-              />
-            </div>
+            ) : (
+              <div className="table-panel">
+                <div className="table-toolbar">
+                  <div className="placeholder-title">后处理数据总览</div>
+                  <Space>
+                    <Button
+                      icon={<ReloadOutlined />}
+                      loading={martDatasetsLoading}
+                      onClick={fetchMartDataAssets}
+                    >
+                      刷新
+                    </Button>
+                    <Button
+                      icon={<SyncOutlined />}
+                      loading={martRefreshing}
+                      onClick={refreshMartDatasets}
+                      type="primary"
+                    >
+                      更新
+                    </Button>
+                  </Space>
+                </div>
+                <Table
+                  columns={martDataAssetColumns}
+                  dataSource={martDatasets}
+                  loading={martDatasetsLoading || martRefreshing}
+                  pagination={false}
+                  rowKey="dataset_name"
+                  scroll={{ x: 1410 }}
+                  size="middle"
+                />
+              </div>
+            )}
           </section>
         ) : (
           <section className="placeholder">

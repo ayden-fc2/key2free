@@ -1,12 +1,22 @@
 import { apiGet, apiPost } from "@/lib/api/client";
 import type {
   DataAssetTask,
+  MartDataAssetRefresh,
+  MartDataAssetSummary,
   StockDataAssetRefresh,
   StockDataAssetSummary,
 } from "@/types/dataAsset";
 
 export function getStockDataAssetSummary(): Promise<StockDataAssetSummary> {
   return apiGet<StockDataAssetSummary>("/api/v1/data-assets/stocks/summary");
+}
+
+export function getMartDataAssetSummary(): Promise<MartDataAssetSummary> {
+  return apiGet<MartDataAssetSummary>("/api/v1/data-assets/mart/summary");
+}
+
+export function refreshMartDataAssets(): Promise<MartDataAssetRefresh> {
+  return apiPost<MartDataAssetRefresh>("/api/v1/data-assets/mart/refresh");
 }
 
 export function requestStockDataAssetRefresh(): Promise<StockDataAssetRefresh> {

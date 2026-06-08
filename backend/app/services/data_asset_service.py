@@ -3,12 +3,15 @@ from __future__ import annotations
 from threading import Event, Lock, Thread
 
 from app.dtos.data_asset_dto import (
+    MartDataAssetRefreshDTO,
+    MartDataAssetSummaryDTO,
     StockDataAssetRefreshDTO,
     StockDataAssetSummaryDTO,
     TaskDTO,
 )
 from app.repositories.data_asset_repository import DataAssetRepository
 from app.repositories.task_repository import TaskRepository
+from app.services.mart_refresh_service import MartRefreshService
 from app.services.source_refresh_service import SourceRefreshService
 
 
@@ -57,6 +60,19 @@ class DataAssetService:
     def get_stock_data_asset_summary(self) -> StockDataAssetSummaryDTO:
         return StockDataAssetSummaryDTO(
             datasets=self.repository.get_stock_dataset_overview()
+        )
+
+    def get_mart_data_asset_summary(self) -> MartDataAssetSummaryDTO:
+        return MartDataAssetSummaryDTO(
+            datasets=self.repository.get_mart_dataset_overview()
+        )
+
+    def refresh_mart_data_assets(self) -> MartDataAssetRefreshDTO:
+        result = MartRefreshService().run()
+        return MartDataAssetRefreshDTO(
+            status="success",
+            message=f"mart 后处理数据同步完成，共处理 {result.refreshed_count} 个对象。",
+            refreshed_count=result.refreshed_count,
         )
 
     def request_stock_data_asset_refresh(self) -> StockDataAssetRefreshDTO:

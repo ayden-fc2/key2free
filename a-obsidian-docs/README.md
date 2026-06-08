@@ -9,7 +9,11 @@
 ### 1. 数据资产
 
 使用duckdb存储的大A历史股票数据，见 ./data/ 目录。
-数据更新相关脚本统一放在 ./data/refresh/ 目录，入口脚本为 ./data/refresh/refresh.py。
+当前数据刷新由后端接口触发：`POST /api/v1/data-assets/stocks/refresh`。
+接口会创建 `source_update` 后台任务并立即返回 `task_id`；前端或调用方通过 `GET /api/v1/data-assets/source-update-task?task_id=...` 轮询任务日志和状态，也可以通过 `POST /api/v1/data-assets/source-update-task/stop` 请求停止。
+
+`./data/refresh/` 目录保留数据更新流程说明，`./data/refresh/refresh.py` 目前不是实际入口。
+详见 [[1. 数据资产]] 和 `../data/refresh/README.md`。
 
 ### 2. 信号系统
 
@@ -48,7 +52,11 @@
 	* 普通涨停：close >= 涨停价附近，能买
 	* 普通跌停：close <= 跌停价附近，能卖
 
+详见 [[3.  事件驱动的回测系统]]。
+
 ### 4. 具体股票策略
 
 每个具体股票策略包含信号策略、买入策略、卖出策略
 信号策略接收到单个股票的T及以前的数据和预处理数据，按照特定规则决定是否爆信号
+
+详见 [[4. 具体股票策略]]。

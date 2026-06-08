@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.data_asset_service import DataAssetService
+from app.services.mart_refresh_service import MartRefreshError
 
 router = APIRouter(prefix="/data-assets", tags=["data-assets"])
 
@@ -13,6 +14,22 @@ router = APIRouter(prefix="/data-assets", tags=["data-assets"])
 @router.get("/stocks/summary")
 def get_stock_data_asset_summary() -> dict:
     return asdict(DataAssetService().get_stock_data_asset_summary())
+
+
+@router.get("/mart/summary")
+def get_mart_data_asset_summary() -> dict:
+    return asdict(DataAssetService().get_mart_data_asset_summary())
+
+
+@router.post("/mart/refresh")
+def refresh_mart_data_assets() -> dict:
+    try:
+        return asdict(DataAssetService().refresh_mart_data_assets())
+    except MartRefreshError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{exc.dataset_name} mart refresh failed: {exc}",
+        ) from exc
 
 
 @router.post("/stocks/refresh")

@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from app.dtos.data_asset_dto import StockDatasetOverviewDTO
+from app.dtos.data_asset_dto import MartDatasetOverviewDTO, StockDatasetOverviewDTO
 from app.repositories.duckdb_repository import DuckDBRepository
 
 
@@ -333,6 +333,14 @@ class DataAssetRepository:
         "industry_snapshot": {"table_name": "source.industry_snapshot", "date_column": "update_date"},
         "index_member_snapshot": {"table_name": "source.index_member_snapshot", "date_column": "update_date"},
     }
+    MART_DATE_COLUMN_CANDIDATES: tuple[str, ...] = (
+        "trade_date",
+        "calendar_date",
+        "stat_date",
+        "update_date",
+        "pub_date",
+        "bar_time",
+    )
 
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
@@ -473,6 +481,110 @@ class DataAssetRepository:
                         latest_chunk_status=latest_chunk_status,
                         chunk_failed_count=chunk_failed_count,
                         open_repair_count=open_repair_count,
+                    )
+                )
+        return datasets
+
+    def get_mart_dataset_overview(self) -> list[MartDatasetOverviewDTO]:
+        with self.duckdb.connect(read_only=True) as connection:
+            table_rows = connection.execute(
+                """
+                select table_name, table_type
+                from information_schema.tables
+                where table_schema = 'mart'
+                order by case when table_type = 'BASE TABLE' then 0 else 1 end,
+                         table_name
+                """
+            ).fetchall()
+            catalog_rows = connection.execute(
+                """
+                select dataset_name, enabled
+                from meta.dataset_catalog
+                where tier = 'mart'
+                """
+            ).fetchall()
+            catalog = {
+                dataset_name: bool(enabled)
+                for dataset_name, enabled in catalog_rows
+            }
+            watermark_rows = connection.execute(
+                """
+                select dataset_name, watermark_value, updated_at
+                from meta.dataset_watermark
+                """
+            ).fetchall()
+            watermarks = {
+                dataset_name: {
+                    "watermark": watermark_value,
+                    "updated_at": None if updated_at is None else str(updated_at),
+                }
+                for dataset_name, watermark_value, updated_at in watermark_rows
+            }
+            validation_rows = connection.execute(
+                """
+                with latest_run as (
+                    select dataset_name, max(run_id) as run_id
+                    from meta.validation_result
+                    group by dataset_name
+                )
+                select v.dataset_name,
+                       max(v.created_at) as latest_validation_at,
+                       sum(case when v.passed = 0 then 1 else 0 end) as failed_count
+                from meta.validation_result v
+                join latest_run r
+                  on v.dataset_name = r.dataset_name
+                 and v.run_id = r.run_id
+                group by v.dataset_name
+                """
+            ).fetchall()
+            validations = {
+                dataset_name: {
+                    "latest_validation_at": (
+                        None if latest_validation_at is None else str(latest_validation_at)
+                    ),
+                    "failed_count": int(failed_count or 0),
+                }
+                for dataset_name, latest_validation_at, failed_count in validation_rows
+            }
+
+            datasets: list[MartDatasetOverviewDTO] = []
+            for dataset_name, table_type in table_rows:
+                table_name = f"mart.{dataset_name}"
+                columns = self._get_relation_columns(connection, table_name)
+                date_column = self._resolve_mart_date_column(columns)
+                if table_type == "BASE TABLE":
+                    row_count, actual_max_date = self._get_relation_count_and_max_date(
+                        connection=connection,
+                        table_name=table_name,
+                        date_column=date_column,
+                    )
+                else:
+                    row_count, actual_max_date = None, None
+                watermark_item = watermarks.get(dataset_name, {})
+                validation_item = validations.get(dataset_name, {})
+                watermark = watermark_item.get("watermark")
+                actual_max_date_str = None if actual_max_date is None else str(actual_max_date)
+                validation_failed_count = int(validation_item.get("failed_count") or 0)
+                status = self._resolve_mart_status(
+                    watermark=watermark,
+                    actual_max_date=actual_max_date_str,
+                    validation_failed_count=validation_failed_count,
+                    row_count=row_count,
+                    table_type=table_type,
+                )
+                datasets.append(
+                    MartDatasetOverviewDTO(
+                        dataset_name=dataset_name,
+                        table_name=table_name,
+                        table_type=table_type,
+                        enabled=catalog.get(dataset_name, True),
+                        row_count=row_count,
+                        watermark=watermark,
+                        actual_max_date=actual_max_date_str,
+                        updated_at=watermark_item.get("updated_at"),
+                        status=status,
+                        latest_validation_at=validation_item.get("latest_validation_at"),
+                        validation_failed_count=validation_failed_count,
                     )
                 )
         return datasets
@@ -1023,6 +1135,82 @@ class DataAssetRepository:
                 logical_key=logical_key,
                 scope=scope,
             )
+
+    def get_dataset_watermark(
+        self,
+        *,
+        dataset_name: str,
+        asset_scope: str | None = None,
+    ) -> str | None:
+        where_scope = "" if asset_scope is None else "and asset_scope = ?"
+        params: list[Any] = [dataset_name]
+        if asset_scope is not None:
+            params.append(asset_scope)
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                f"""
+                select watermark_value
+                from meta.dataset_watermark
+                where dataset_name = ?
+                  {where_scope}
+                order by updated_at desc nulls last
+                limit 1
+                """,
+                params,
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def ensure_mart_catalog_item_with_connection(
+        self,
+        *,
+        connection: Any,
+        dataset_name: str,
+        table_type: str,
+        expected_columns: list[str],
+        priority: int = 1000,
+    ) -> None:
+        existing = connection.execute(
+            """
+            select 1
+            from meta.dataset_catalog
+            where dataset_name = ?
+            limit 1
+            """,
+            [dataset_name],
+        ).fetchone()
+        if existing is not None:
+            return
+
+        logical_key_json = (
+            '["trade_date","code"]' if dataset_name == "universe_daily" else "[]"
+        )
+        validation_rules_json = (
+            '["schema","row_count","logical_key","watermark"]'
+            if table_type == "BASE TABLE"
+            else '["schema","watermark"]'
+        )
+        connection.execute(
+            """
+            insert into meta.dataset_catalog(
+                dataset_name, endpoint, tier, enabled, asset_scope,
+                chunk_strategy, replace_strategy, logical_key_json,
+                expected_columns_json, duckdb_schema_json,
+                validation_rules_json, priority
+            )
+            values (?, 'mart_adapter', 'mart', 1, 'mart', ?, ?, ?, ?, '{}', ?, ?)
+            """,
+            [
+                dataset_name,
+                "watermark_incremental" if table_type == "BASE TABLE" else "view_validate",
+                "date_window" if table_type == "BASE TABLE" else "none",
+                logical_key_json,
+                json.dumps(expected_columns, ensure_ascii=False),
+                validation_rules_json,
+                priority,
+            ],
+        )
 
     def _validate_dataset_relation(
         self,
@@ -1685,22 +1873,11 @@ class DataAssetRepository:
         watermark_value: str,
     ) -> None:
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute(
-                """
-                delete from meta.dataset_watermark
-                where dataset_name = ? and asset_scope = ?
-                """,
-                [dataset_name, asset_scope],
-            )
-            connection.execute(
-                """
-                insert into meta.dataset_watermark(
-                    dataset_name, asset_scope, watermark_value,
-                    repair_backfill_from, updated_at
-                )
-                values (?, ?, ?, null, current_timestamp)
-                """,
-                [dataset_name, asset_scope, watermark_value],
+            self.update_watermark_with_connection(
+                connection=connection,
+                dataset_name=dataset_name,
+                asset_scope=asset_scope,
+                watermark_value=watermark_value,
             )
 
     def upsert_chunk_state(
@@ -1804,25 +1981,317 @@ class DataAssetRepository:
         detail: dict[str, Any],
     ) -> None:
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute(
-                """
-                insert into meta.validation_result(
-                    run_id, dataset_name, scope_json, rule_name, severity,
-                    passed, sample_count, detail_json, created_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
-                """,
-                [
-                    run_id,
-                    dataset_name,
-                    json.dumps(scope, ensure_ascii=False),
-                    rule_name,
-                    severity,
-                    1 if passed else 0,
-                    sample_count,
-                    json.dumps(detail, ensure_ascii=False),
-                ],
+            self.write_validation_result_with_connection(
+                connection=connection,
+                run_id=run_id,
+                dataset_name=dataset_name,
+                scope=scope,
+                rule_name=rule_name,
+                severity=severity,
+                passed=passed,
+                sample_count=sample_count,
+                detail=detail,
             )
+
+    def _get_relation_columns(self, connection: Any, table_name: str) -> list[str]:
+        return [row[0] for row in connection.execute(f"describe {table_name}").fetchall()]
+
+    def _resolve_mart_date_column(self, columns: list[str]) -> str | None:
+        for column in self.MART_DATE_COLUMN_CANDIDATES:
+            if column in columns:
+                return column
+        return None
+
+    def _get_relation_count_and_max_date(
+        self,
+        *,
+        connection: Any,
+        table_name: str,
+        date_column: str | None,
+    ) -> tuple[int | None, Any | None]:
+        if date_column is None:
+            row = connection.execute(f"select count(*) from {table_name}").fetchone()
+            return row[0], None
+        row = connection.execute(
+            f"select count(*), max({date_column}) from {table_name}"
+        ).fetchone()
+        return row[0], row[1]
+
+    def _validate_mart_relation(
+        self,
+        *,
+        dataset_name: str,
+        table_name: str,
+        table_type: str,
+        columns: list[str],
+        row_count: int | None,
+        date_column: str | None,
+    ) -> list[dict[str, Any]]:
+        results = [
+            {
+                "rule_name": "schema",
+                "severity": "error",
+                "passed": len(columns) > 0,
+                "sample_count": len(columns),
+                "detail": {
+                    "schema": "mart",
+                    "table_name": table_name,
+                    "table_type": table_type,
+                    "columns": columns,
+                },
+            },
+        ]
+        if table_type == "BASE TABLE":
+            results.append(
+                {
+                    "rule_name": "row_count",
+                    "severity": "error",
+                    "passed": row_count is not None and row_count > 0,
+                    "sample_count": int(row_count or 0),
+                    "detail": {"row_count": int(row_count or 0)},
+                }
+            )
+        results.append(
+            {
+                "rule_name": "watermark_column",
+                "severity": "info",
+                "passed": date_column is not None,
+                "sample_count": 0,
+                "detail": {"date_column": date_column},
+            }
+        )
+        if dataset_name == "universe_daily":
+            expected_columns = [
+                "trade_date",
+                "code",
+                "code_name",
+                "security_type",
+                "list_status",
+                "industry",
+                "industry_classification",
+                "is_sz50",
+                "is_hs300",
+                "is_zz500",
+            ]
+            results.append(
+                {
+                    "rule_name": "expected_columns",
+                    "severity": "error",
+                    "passed": columns == expected_columns,
+                    "sample_count": len(columns),
+                    "detail": {"actual": columns, "expected": expected_columns},
+                }
+            )
+        return results
+
+    def _resolve_mart_derived_watermark(
+        self,
+        connection: Any,
+        dataset_name: str,
+    ) -> str | None:
+        source_dataset = self.MART_DERIVED_WATERMARK_SOURCE.get(dataset_name)
+        if source_dataset is None:
+            return None
+        row = connection.execute(
+            """
+            select watermark_value
+            from meta.dataset_watermark
+            where dataset_name = ?
+            order by updated_at desc nulls last
+            limit 1
+            """,
+            [source_dataset],
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def update_watermark_with_connection(
+        self,
+        *,
+        connection: Any,
+        dataset_name: str,
+        asset_scope: str,
+        watermark_value: str,
+    ) -> None:
+        connection.execute(
+            """
+            delete from meta.dataset_watermark
+            where dataset_name = ? and asset_scope = ?
+            """,
+            [dataset_name, asset_scope],
+        )
+        connection.execute(
+            """
+            insert into meta.dataset_watermark(
+                dataset_name, asset_scope, watermark_value,
+                repair_backfill_from, updated_at
+            )
+            values (?, ?, ?, null, current_timestamp)
+            """,
+            [dataset_name, asset_scope, watermark_value],
+        )
+
+    def write_validation_result_with_connection(
+        self,
+        *,
+        connection: Any,
+        run_id: int,
+        dataset_name: str,
+        scope: dict[str, Any],
+        rule_name: str,
+        severity: str,
+        passed: bool,
+        sample_count: int,
+        detail: dict[str, Any],
+    ) -> None:
+        connection.execute(
+            """
+            insert into meta.validation_result(
+                run_id, dataset_name, scope_json, rule_name, severity,
+                passed, sample_count, detail_json, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, current_timestamp)
+            """,
+            [
+                run_id,
+                dataset_name,
+                json.dumps(scope, ensure_ascii=False),
+                rule_name,
+                severity,
+                1 if passed else 0,
+                sample_count,
+                json.dumps(detail, ensure_ascii=False),
+            ],
+        )
+
+    def upsert_chunk_state_with_connection(
+        self,
+        *,
+        connection: Any,
+        dataset_name: str,
+        chunk_key: str,
+        scope: dict[str, Any],
+        status: str,
+        run_id: int | None = None,
+        row_count: int = 0,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        existing = connection.execute(
+            """
+            select coalesce(attempts, 0)
+            from meta.chunk_state
+            where dataset_name = ? and chunk_key = ?
+            """,
+            [dataset_name, chunk_key],
+        ).fetchone()
+        previous_attempts = 0 if existing is None else int(existing[0] or 0)
+        attempts = previous_attempts + 1 if status == "running" or previous_attempts == 0 else previous_attempts
+        connection.execute(
+            """
+            delete from meta.chunk_state
+            where dataset_name = ? and chunk_key = ?
+            """,
+            [dataset_name, chunk_key],
+        )
+        connection.execute(
+            """
+            insert into meta.chunk_state(
+                dataset_name, chunk_key, scope_json, status, attempts,
+                lease_run_id, lease_expires_at, last_error_code,
+                last_error_msg, row_count, checksum, last_success_at,
+                updated_at, lease_token
+            )
+            values (?, ?, ?, ?, ?, ?, null, ?, ?, ?, null,
+                    case when ? = 'success' then current_timestamp else null end,
+                    current_timestamp, null)
+            """,
+            [
+                dataset_name,
+                chunk_key,
+                json.dumps(scope, ensure_ascii=False),
+                status,
+                attempts,
+                run_id,
+                error_code,
+                error_message,
+                row_count,
+                status,
+            ],
+        )
+
+    def create_mart_run_log(self, connection: Any) -> int:
+        return connection.execute(
+            """
+            insert into meta.run_log(command, tier, started_at, status,
+                                     request_count, retry_count, login_count,
+                                     chunk_success, chunk_failed, blacklisted)
+            values ('mart_refresh', 'mart', current_timestamp,
+                    'running', 0, 0, 0, 0, 0, 0)
+            returning run_id
+            """
+        ).fetchone()[0]
+
+    def finish_mart_run_log(
+        self,
+        *,
+        connection: Any,
+        run_id: int,
+        refreshed_count: int,
+        failed_count: int,
+        error_summary: str | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            update meta.run_log
+            set ended_at = current_timestamp,
+                status = ?,
+                exit_reason = ?,
+                request_count = 0,
+                retry_count = 0,
+                login_count = 0,
+                chunk_success = ?,
+                chunk_failed = ?,
+                blacklisted = 0,
+                error_summary = ?
+            where run_id = ?
+            """,
+            [
+                "success" if failed_count == 0 else "partial_success",
+                "completed" if failed_count == 0 else "aborted_on_error",
+                refreshed_count - failed_count,
+                failed_count,
+                error_summary,
+                run_id,
+            ],
+        )
+
+    def _resolve_mart_status(
+        self,
+        *,
+        watermark: Any,
+        actual_max_date: Any,
+        validation_failed_count: int,
+        row_count: int | None,
+        table_type: str,
+    ) -> str:
+        if validation_failed_count > 0:
+            return "validation_failed"
+        if table_type == "BASE TABLE" and (row_count is None or row_count == 0):
+            return "empty"
+        if table_type != "BASE TABLE":
+            return "unknown" if watermark is None else "ok"
+        if actual_max_date is None:
+            return "unknown"
+        if watermark is None:
+            return "unknown"
+        return (
+            "ok"
+            if self._normalize_date_value(watermark)
+            == self._normalize_date_value(actual_max_date)
+            else "warning"
+        )
 
     def _resolve_status(
         self,
