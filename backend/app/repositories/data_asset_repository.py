@@ -351,6 +351,7 @@ class DataAssetRepository:
                 """
                 select dataset_name, endpoint, enabled, priority
                 from meta.dataset_catalog
+                where coalesce(tier, '') <> 'mart'
                 order by case when enabled = 1 then 0 else 1 end, priority, dataset_name
                 """
             ).fetchall()
@@ -487,30 +488,25 @@ class DataAssetRepository:
 
     def get_mart_dataset_overview(self) -> list[MartDatasetOverviewDTO]:
         with self.duckdb.connect(read_only=True) as connection:
-            table_rows = connection.execute(
-                """
-                select table_name, table_type
-                from information_schema.tables
-                where table_schema = 'mart'
-                order by case when table_type = 'BASE TABLE' then 0 else 1 end,
-                         table_name
-                """
-            ).fetchall()
             catalog_rows = connection.execute(
                 """
-                select dataset_name, enabled
-                from meta.dataset_catalog
-                where tier = 'mart'
+                select c.dataset_name,
+                       coalesce(t.table_type, 'UNKNOWN') as table_type,
+                       c.enabled,
+                       c.priority
+                from meta.dataset_catalog c
+                left join information_schema.tables t
+                  on t.table_schema = 'mart'
+                 and t.table_name = c.dataset_name
+                where c.tier = 'mart'
+                order by c.priority, c.dataset_name
                 """
             ).fetchall()
-            catalog = {
-                dataset_name: bool(enabled)
-                for dataset_name, enabled in catalog_rows
-            }
             watermark_rows = connection.execute(
                 """
                 select dataset_name, watermark_value, updated_at
                 from meta.dataset_watermark
+                where asset_scope = 'mart'
                 """
             ).fetchall()
             watermarks = {
@@ -546,21 +542,52 @@ class DataAssetRepository:
                 }
                 for dataset_name, latest_validation_at, failed_count in validation_rows
             }
+            latest_chunk_rows = connection.execute(
+                """
+                with ranked as (
+                    select dataset_name, status, row_count,
+                           row_number() over (
+                               partition by dataset_name
+                               order by updated_at desc nulls last
+                           ) as rn
+                    from meta.chunk_state
+                    where dataset_name in (
+                        select dataset_name
+                        from meta.dataset_catalog
+                        where tier = 'mart'
+                    )
+                )
+                select dataset_name, status, row_count
+                from ranked
+                where rn = 1
+                """
+            ).fetchall()
+            latest_chunks = {
+                dataset_name: {
+                    "status": status,
+                    "row_count": None if row_count is None else int(row_count),
+                }
+                for dataset_name, status, row_count in latest_chunk_rows
+            }
 
             datasets: list[MartDatasetOverviewDTO] = []
-            for dataset_name, table_type in table_rows:
+            for dataset_name, table_type, enabled, _priority in catalog_rows:
                 table_name = f"mart.{dataset_name}"
-                columns = self._get_relation_columns(connection, table_name)
-                date_column = self._resolve_mart_date_column(columns)
-                row_count, actual_max_date = self._get_relation_count_and_max_date(
-                    connection=connection,
-                    table_name=table_name,
-                    date_column=date_column,
-                )
                 watermark_item = watermarks.get(dataset_name, {})
                 validation_item = validations.get(dataset_name, {})
+                chunk_item = latest_chunks.get(dataset_name, {})
                 watermark = watermark_item.get("watermark")
-                actual_max_date_str = None if actual_max_date is None else str(actual_max_date)
+                row_count = chunk_item.get("row_count")
+                actual_max_date_str = watermark
+                if table_type == "BASE TABLE":
+                    columns = self._get_relation_columns(connection, table_name)
+                    date_column = self._resolve_mart_date_column(columns)
+                    row_count, actual_max_date = self._get_relation_count_and_max_date(
+                        connection=connection,
+                        table_name=table_name,
+                        date_column=date_column,
+                    )
+                    actual_max_date_str = None if actual_max_date is None else str(actual_max_date)
                 validation_failed_count = int(validation_item.get("failed_count") or 0)
                 status = self._resolve_mart_status(
                     watermark=watermark,
@@ -574,7 +601,7 @@ class DataAssetRepository:
                         dataset_name=dataset_name,
                         table_name=table_name,
                         table_type=table_type,
-                        enabled=catalog.get(dataset_name, True),
+                        enabled=bool(enabled),
                         row_count=row_count,
                         watermark=watermark,
                         actual_max_date=actual_max_date_str,
@@ -602,6 +629,7 @@ class DataAssetRepository:
                        ) as current_watermark
                 from meta.dataset_catalog c
                 where enabled = 1
+                  and coalesce(tier, '') <> 'mart'
                 order by priority, dataset_name
                 """
             ).fetchall()
@@ -1885,7 +1913,7 @@ class DataAssetRepository:
         scope: dict[str, Any],
         status: str,
         run_id: int | None = None,
-        row_count: int = 0,
+        row_count: int | None = 0,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
@@ -2149,7 +2177,7 @@ class DataAssetRepository:
         scope: dict[str, Any],
         status: str,
         run_id: int | None = None,
-        row_count: int = 0,
+        row_count: int | None = 0,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:

@@ -20,7 +20,7 @@ class MartValidationResult:
 @dataclass(frozen=True)
 class MartAdapterResult:
     dataset_name: str
-    row_count: int
+    row_count: int | None
     watermark_value: str | None
     validation_results: list[MartValidationResult]
 
@@ -56,13 +56,9 @@ class MartViewAdapter:
 
     def run(self, connection: Any) -> MartAdapterResult:
         columns = [row[0] for row in connection.execute(f"describe {self.table_name}").fetchall()]
-        date_column = self._resolve_date_column(columns)
-        row_count, actual_max_date = self._get_view_count_and_max_date(
-            connection=connection,
-            date_column=date_column,
-        )
         upstream_watermark = self._get_upstream_watermark(connection)
         upstream_actual_max_date = self._get_upstream_actual_max_date(connection)
+        watermark_value = upstream_actual_max_date or upstream_watermark
         validation_results = [
             MartValidationResult(
                 rule_name="schema",
@@ -72,18 +68,21 @@ class MartViewAdapter:
                 detail={"actual": columns, "expected": self.expected_columns},
             ),
             MartValidationResult(
-                rule_name="row_count",
-                severity="error",
-                passed=row_count > 0,
-                sample_count=row_count,
-                detail={"row_count": row_count},
-            ),
-            MartValidationResult(
                 rule_name="watermark",
                 severity="error",
-                passed=actual_max_date is not None,
+                passed=watermark_value is not None,
                 sample_count=0,
-                detail={"watermark_value": actual_max_date},
+                detail={"watermark_value": watermark_value},
+            ),
+            MartValidationResult(
+                rule_name="row_count",
+                severity="info",
+                passed=True,
+                sample_count=0,
+                detail={
+                    "row_count": None,
+                    "note": "VIEW row_count is read from meta.chunk_state in summaries; refresh avoids materializing large views.",
+                },
             ),
             MartValidationResult(
                 rule_name="upstream_state",
@@ -100,40 +99,20 @@ class MartViewAdapter:
                 rule_name="view_materialization",
                 severity="info",
                 passed=True,
-                sample_count=row_count,
+                sample_count=0,
                 detail={
-                    "mode": "strict_view_read",
-                    "note": "VIEW adapter reads count(*) and max(date) from the mart view itself.",
+                    "mode": "metadata_only",
+                    "note": "VIEW adapter validates schema and advances mart watermark from upstream data state.",
                 },
             ),
         ]
         self._raise_if_failed(validation_results)
         return MartAdapterResult(
             dataset_name=self.dataset_name,
-            row_count=row_count,
-            watermark_value=actual_max_date,
+            row_count=None,
+            watermark_value=watermark_value,
             validation_results=validation_results,
         )
-
-    def _resolve_date_column(self, columns: list[str]) -> str | None:
-        for column in ("trade_date", "calendar_date", "stat_date", "update_date", "pub_date", "bar_time"):
-            if column in columns:
-                return column
-        return None
-
-    def _get_view_count_and_max_date(
-        self,
-        *,
-        connection: Any,
-        date_column: str | None,
-    ) -> tuple[int, str | None]:
-        if date_column is None:
-            row = connection.execute(f"select count(*) from {self.table_name}").fetchone()
-            return int(row[0] or 0), None
-        row = connection.execute(
-            f"select count(*), max({date_column}) from {self.table_name}"
-        ).fetchone()
-        return int(row[0] or 0), None if row[1] is None else str(row[1])
 
     def _get_upstream_watermark(self, connection: Any) -> str | None:
         row = connection.execute(

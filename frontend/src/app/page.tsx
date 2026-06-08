@@ -324,7 +324,8 @@ export default function Home() {
     {
       align: "right",
       dataIndex: "row_count",
-      render: (value: number | null) => value?.toLocaleString() ?? "-",
+      render: (value: number | null, record) =>
+        record.table_type === "VIEW" ? <Tag>视图</Tag> : value?.toLocaleString() ?? "-",
       title: "行数",
       width: 130,
     },
