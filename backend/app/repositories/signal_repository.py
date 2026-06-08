@@ -12,6 +12,22 @@ class SignalRepository:
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
 
+    _BAR_1D_QFQ_SIGNAL_COLUMNS = """
+        trade_date,
+        code,
+        open,
+        high,
+        low,
+        close,
+        preclose,
+        volume,
+        amount,
+        turn,
+        tradestatus,
+        pct_chg,
+        is_st
+    """
+
     def get_universe_daily(self, trade_date: date) -> list[dict[str, Any]]:
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
@@ -89,8 +105,8 @@ class SignalRepository:
 
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
-                select *
+                f"""
+                select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
                 from mart.bar_1d_qfq
                 where trade_date <= ?
                   and code in (select unnest(?))
@@ -145,21 +161,43 @@ class SignalRepository:
         *,
         codes: list[str],
         trade_date: date,
+        limit_per_code: int | None = None,
     ) -> Iterator[tuple[str, list[dict[str, Any]]]]:
         if not codes:
             return
 
         with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                """
-                select *
-                from mart.bar_1d_qfq
-                where trade_date <= ?
-                  and code in (select unnest(?))
-                order by code, trade_date
-                """,
-                [trade_date, codes],
-            )
+            if limit_per_code is None:
+                result = connection.execute(
+                    f"""
+                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                    from mart.bar_1d_qfq
+                    where trade_date <= ?
+                      and code in (select unnest(?))
+                    order by code, trade_date
+                    """,
+                    [trade_date, codes],
+                )
+            else:
+                result = connection.execute(
+                    f"""
+                    with ranked as (
+                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS},
+                               row_number() over (
+                                   partition by code
+                                   order by trade_date desc
+                               ) as rn
+                        from mart.bar_1d_qfq
+                        where trade_date <= ?
+                          and code in (select unnest(?))
+                    )
+                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                    from ranked
+                    where rn <= ?
+                    order by code, trade_date
+                    """,
+                    [trade_date, codes, limit_per_code],
+                )
             columns = [item[0] for item in result.description]
             current_code: str | None = None
             current_bars: list[dict[str, Any]] = []

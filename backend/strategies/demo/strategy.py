@@ -36,6 +36,10 @@ def demo_signal_strategy(context: StockDataContext) -> bool:
     return True
 
 
+def demo_universe_filter(context: StockDataContext) -> bool:
+    return _passes_universe_filter(context)
+
+
 def demo_entry_strategy(*_args: Any, **_kwargs: Any) -> int:
     return -1
 

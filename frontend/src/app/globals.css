@@ -217,6 +217,55 @@ button {
   justify-content: space-between;
 }
 
+.signal-workbench {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+}
+
+.signal-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(360px, 430px) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.signal-list {
+  min-width: 0;
+}
+
+.signal-list .ant-table-row {
+  cursor: pointer;
+}
+
+.signal-list .selected-row > td {
+  background: var(--accent-soft) !important;
+}
+
+.signal-charts {
+  border-left: 1px solid var(--panel-border);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-left: 18px;
+}
+
+.chart-header {
+  align-items: baseline;
+  display: flex;
+  gap: 12px;
+}
+
+.empty-chart {
+  align-items: center;
+  border: 1px dashed var(--panel-border);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  min-height: 360px;
+  justify-content: center;
+}
+
 .placeholder-title {
   font-size: 18px;
   font-weight: 700;
@@ -285,5 +334,16 @@ button {
 
   .content-panel {
     margin: 18px;
+  }
+
+  .signal-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-charts {
+    border-left: 0;
+    border-top: 1px solid var(--panel-border);
+    padding-left: 0;
+    padding-top: 18px;
   }
 }

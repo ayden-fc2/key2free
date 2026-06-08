@@ -38,13 +38,19 @@ class SignalService:
             for row in universe_rows
             if isinstance(row.get("code"), str)
         }
-        codes = list(universe_by_code)
+        codes = self._prefilter_universe_codes(
+            trade_date=trade_date,
+            universe_by_code=universe_by_code,
+            universe_filter=getattr(strategy, "universe_filter", None),
+        )
+        skipped_codes = set(universe_by_code) - set(codes)
 
         signal_items: list[DailySignalItemDTO] = []
-        handled_codes: set[str] = set()
+        handled_codes: set[str] = set(skipped_codes)
         for code, bars in self.repository.iter_bar_1d_qfq_history_groups(
             codes=codes,
             trade_date=trade_date,
+            limit_per_code=getattr(strategy, "daily_signal_history_limit", None),
         ):
             universe = universe_by_code.get(code)
             if universe is None:
@@ -136,6 +142,28 @@ class SignalService:
                 universe=universe,
             )
         )
+
+    def _prefilter_universe_codes(
+        self,
+        *,
+        trade_date: date,
+        universe_by_code: dict[str, dict[str, Any]],
+        universe_filter: Any,
+    ) -> list[str]:
+        if universe_filter is None:
+            return list(universe_by_code)
+
+        codes: list[str] = []
+        for code, universe in universe_by_code.items():
+            context = StockDataContext(
+                code=code,
+                trade_date=trade_date,
+                universe=universe,
+                bars_1d_qfq=[],
+            )
+            if universe_filter(context):
+                codes.append(code)
+        return codes
 
     def _optional_string(self, value: Any) -> str | None:
         return value if isinstance(value, str) else None

@@ -8,10 +8,16 @@ from strategies.demo import (
     demo_entry_strategy,
     demo_exit_strategy,
     demo_signal_strategy,
+    demo_universe_filter,
 )
 
 
 class SignalStrategyFn(Protocol):
+    def __call__(self, context: StockDataContext) -> bool:
+        ...
+
+
+class UniverseFilterFn(Protocol):
     def __call__(self, context: StockDataContext) -> bool:
         ...
 
@@ -22,6 +28,8 @@ class StrategyRegistration:
     signal_strategy: SignalStrategyFn
     entry_strategy: Callable[..., int]
     exit_strategy: Callable[..., int]
+    universe_filter: UniverseFilterFn | None = None
+    daily_signal_history_limit: int | None = None
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -30,6 +38,8 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_strategy=demo_signal_strategy,
         entry_strategy=demo_entry_strategy,
         exit_strategy=demo_exit_strategy,
+        universe_filter=demo_universe_filter,
+        daily_signal_history_limit=380,
     )
 }
 

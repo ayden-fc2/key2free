@@ -5,6 +5,7 @@ import { Button, DatePicker, Modal, Select, Space, Table, Tabs, Tag, message } f
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
+import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import {
   getMartDataAssetSummary,
   getSourceUpdateTask,
@@ -14,14 +15,18 @@ import {
   stopSourceUpdateTask,
 } from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
-import { getDailySignals } from "@/lib/api/signals";
+import { getDailySignals, getStockDataContexts } from "@/lib/api/signals";
 import type {
   DataAssetTask,
   MartDatasetOverview,
   StockDatasetOverview,
 } from "@/types/dataAsset";
 import type { HealthState } from "@/types/health";
-import type { DailySignalItem, DailySignalResult } from "@/types/signal";
+import type {
+  DailySignalItem,
+  DailySignalResult,
+  StockDataContext,
+} from "@/types/signal";
 import { formatDateTime } from "@/utils/format";
 
 const tabs = [
@@ -66,6 +71,11 @@ export default function Home() {
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
   const [dailySignalResult, setDailySignalResult] =
     useState<DailySignalResult | null>(null);
+  const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>(
+    {},
+  );
+  const [stockContextsLoading, setStockContextsLoading] = useState(false);
+  const [selectedSignalCode, setSelectedSignalCode] = useState<string | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
 
   useEffect(() => {
@@ -176,6 +186,8 @@ export default function Home() {
     }
 
     setDailySignalLoading(true);
+    setStockContexts({});
+    setSelectedSignalCode(null);
     try {
       const data = await getDailySignals({
         strategy_name: dailySignalStrategy,
@@ -183,6 +195,27 @@ export default function Home() {
       });
       setDailySignalResult(data);
       messageApi.success(`当日信号计算完成，共 ${data.signal_count} 只`);
+      const codes = data.signals.map((item) => item.code);
+      if (codes.length > 0) {
+        setSelectedSignalCode(codes[0]);
+        setStockContextsLoading(true);
+        try {
+          const contextResult = await getStockDataContexts({
+            codes,
+          });
+          setStockContexts(
+            Object.fromEntries(
+              contextResult.contexts.map((context) => [context.code, context]),
+            ),
+          );
+        } catch (error) {
+          messageApi.error(
+            error instanceof Error ? error.message : "股票上下文加载失败",
+          );
+        } finally {
+          setStockContextsLoading(false);
+        }
+      }
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "信号查询失败");
     } finally {
@@ -456,22 +489,13 @@ export default function Home() {
       title: "交易日",
       width: 140,
     },
-    {
-      dataIndex: "current_bar_1d_qfq",
-      render: (value: Record<string, unknown> | null) =>
-        typeof value?.close === "number" ? value.close.toFixed(2) : "-",
-      title: "T日收盘",
-      width: 120,
-    },
-    {
-      dataIndex: "current_bar_1d_qfq",
-      render: (value: Record<string, unknown> | null) =>
-        typeof value?.pct_chg === "number" ? `${value.pct_chg.toFixed(2)}%` : "-",
-      title: "T日涨跌幅",
-      width: 130,
-    },
   ];
 
+  const selectedStockContext =
+    selectedSignalCode === null ? null : stockContexts[selectedSignalCode] ?? null;
+  const selectedSignal = dailySignalResult?.signals.find(
+    (item) => item.code === selectedSignalCode,
+  );
   return (
     <main className="app-shell">
       {contextHolder}
@@ -636,13 +660,14 @@ export default function Home() {
           </section>
         ) : activeTab === "daily-signals" ? (
           <section className="content-panel">
-            <div className="table-panel">
+            <div className="signal-workbench">
               <div className="table-toolbar">
                 <div>
                   <div className="placeholder-title">当日信号</div>
                   <div className="panel-subtitle">
                     universe: {dailySignalResult?.universe_count ?? "-"} / signals:{" "}
-                    {dailySignalResult?.signal_count ?? "-"}
+                    {dailySignalResult?.signal_count ?? "-"} / contexts:{" "}
+                    {Object.keys(stockContexts).length || "-"}
                   </div>
                 </div>
                 <Space>
@@ -663,7 +688,7 @@ export default function Home() {
                     style={{ width: 140 }}
                   />
                   <Button
-                    loading={dailySignalLoading}
+                    loading={dailySignalLoading || stockContextsLoading}
                     onClick={fetchDailySignals}
                     type="primary"
                   >
@@ -671,15 +696,40 @@ export default function Home() {
                   </Button>
                 </Space>
               </div>
-              <Table
-                columns={dailySignalColumns}
-                dataSource={dailySignalResult?.signals ?? []}
-                loading={dailySignalLoading}
-                pagination={{ pageSize: 50, showSizeChanger: true }}
-                rowKey="code"
-                scroll={{ x: 690 }}
-                size="middle"
-              />
+              <div className="signal-layout">
+                <div className="signal-list">
+                  <Table
+                    columns={dailySignalColumns}
+                    dataSource={dailySignalResult?.signals ?? []}
+                    loading={dailySignalLoading || stockContextsLoading}
+                    onRow={(record) => ({
+                      onClick: () => setSelectedSignalCode(record.code),
+                    })}
+                    pagination={{ pageSize: 30, showSizeChanger: true }}
+                    rowClassName={(record) =>
+                      record.code === selectedSignalCode ? "selected-row" : ""
+                    }
+                    rowKey="code"
+                    scroll={{ x: 440, y: 560 }}
+                    size="small"
+                  />
+                </div>
+                <div className="signal-charts">
+                  <div className="chart-header">
+                    <div className="placeholder-title">
+                      {selectedSignalCode ?? "未选择股票"}
+                    </div>
+                    <div className="panel-subtitle">
+                      {selectedSignal?.code_name ?? "从左侧列表选择一只股票"}
+                    </div>
+                  </div>
+                  {selectedStockContext === null ? (
+                    <div className="empty-chart">暂无可渲染的股票上下文</div>
+                  ) : (
+                    <StockContextCharts context={selectedStockContext} />
+                  )}
+                </div>
+              </div>
             </div>
           </section>
         ) : (
