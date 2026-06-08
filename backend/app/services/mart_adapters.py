@@ -36,6 +36,142 @@ class MartAdapter(Protocol):
         ...
 
 
+class MartViewAdapter:
+    table_type = "VIEW"
+    asset_scope = "mart"
+
+    def __init__(
+        self,
+        *,
+        dataset_name: str,
+        upstream_dataset_name: str,
+        expected_columns: list[str],
+        priority: int,
+    ) -> None:
+        self.dataset_name = dataset_name
+        self.table_name = f"mart.{dataset_name}"
+        self.upstream_dataset_name = upstream_dataset_name
+        self.expected_columns = expected_columns
+        self.priority = priority
+
+    def run(self, connection: Any) -> MartAdapterResult:
+        columns = [row[0] for row in connection.execute(f"describe {self.table_name}").fetchall()]
+        date_column = self._resolve_date_column(columns)
+        row_count, actual_max_date = self._get_view_count_and_max_date(
+            connection=connection,
+            date_column=date_column,
+        )
+        upstream_watermark = self._get_upstream_watermark(connection)
+        upstream_actual_max_date = self._get_upstream_actual_max_date(connection)
+        validation_results = [
+            MartValidationResult(
+                rule_name="schema",
+                severity="error",
+                passed=columns == self.expected_columns,
+                sample_count=len(columns),
+                detail={"actual": columns, "expected": self.expected_columns},
+            ),
+            MartValidationResult(
+                rule_name="row_count",
+                severity="error",
+                passed=row_count > 0,
+                sample_count=row_count,
+                detail={"row_count": row_count},
+            ),
+            MartValidationResult(
+                rule_name="watermark",
+                severity="error",
+                passed=actual_max_date is not None,
+                sample_count=0,
+                detail={"watermark_value": actual_max_date},
+            ),
+            MartValidationResult(
+                rule_name="upstream_state",
+                severity="info",
+                passed=True,
+                sample_count=0,
+                detail={
+                    "upstream_dataset_name": self.upstream_dataset_name,
+                    "upstream_watermark": upstream_watermark,
+                    "upstream_actual_max_date": upstream_actual_max_date,
+                },
+            ),
+            MartValidationResult(
+                rule_name="view_materialization",
+                severity="info",
+                passed=True,
+                sample_count=row_count,
+                detail={
+                    "mode": "strict_view_read",
+                    "note": "VIEW adapter reads count(*) and max(date) from the mart view itself.",
+                },
+            ),
+        ]
+        self._raise_if_failed(validation_results)
+        return MartAdapterResult(
+            dataset_name=self.dataset_name,
+            row_count=row_count,
+            watermark_value=actual_max_date,
+            validation_results=validation_results,
+        )
+
+    def _resolve_date_column(self, columns: list[str]) -> str | None:
+        for column in ("trade_date", "calendar_date", "stat_date", "update_date", "pub_date", "bar_time"):
+            if column in columns:
+                return column
+        return None
+
+    def _get_view_count_and_max_date(
+        self,
+        *,
+        connection: Any,
+        date_column: str | None,
+    ) -> tuple[int, str | None]:
+        if date_column is None:
+            row = connection.execute(f"select count(*) from {self.table_name}").fetchone()
+            return int(row[0] or 0), None
+        row = connection.execute(
+            f"select count(*), max({date_column}) from {self.table_name}"
+        ).fetchone()
+        return int(row[0] or 0), None if row[1] is None else str(row[1])
+
+    def _get_upstream_watermark(self, connection: Any) -> str | None:
+        row = connection.execute(
+            """
+            select watermark_value
+            from meta.dataset_watermark
+            where dataset_name = ?
+            order by updated_at desc nulls last
+            limit 1
+            """,
+            [self.upstream_dataset_name],
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def _get_upstream_actual_max_date(self, connection: Any) -> str | None:
+        if self.upstream_dataset_name in {"bar_1d_raw", "bar_5m_raw"}:
+            row = connection.execute(
+                f"select max(trade_date) from source.{self.upstream_dataset_name}"
+            ).fetchone()
+        else:
+            return None
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def _raise_if_failed(self, validation_results: list[MartValidationResult]) -> None:
+        failed = [
+            result
+            for result in validation_results
+            if result.severity == "error" and not result.passed
+        ]
+        if failed:
+            names = ", ".join(result.rule_name for result in failed)
+            raise MartAdapterError(f"{self.dataset_name} validation failed: {names}")
+
+
 class UniverseDailyAdapter:
     dataset_name = "universe_daily"
     table_name = "mart.universe_daily"
@@ -439,6 +575,132 @@ class UniverseDailyAdapter:
             return None
         return str(row[0])
 
+BAR_1D_COLUMNS = [
+    "trade_date",
+    "trade_year",
+    "code",
+    "open",
+    "high",
+    "low",
+    "close",
+    "preclose",
+    "volume",
+    "amount",
+    "turn",
+    "tradestatus",
+    "pct_chg",
+    "pe_ttm",
+    "pb_mrq",
+    "ps_ttm",
+    "pcf_ncf_ttm",
+    "is_st",
+    "adjust_factor_value",
+]
+
+BAR_5M_COLUMNS = [
+    "trade_date",
+    "trade_year",
+    "code",
+    "time_raw",
+    "bar_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "adjust_factor_value",
+]
+
+BAR_AGG_DAILY_COLUMNS = [
+    "trade_date",
+    "trade_year",
+    "code",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "adjustflag",
+    "turn",
+    "pct_chg",
+]
+
+BAR_AGG_INTRADAY_COLUMNS = [
+    "trade_date",
+    "trade_year",
+    "code",
+    "bar_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+]
+
+
 MART_ADAPTER_REGISTRY: dict[str, MartAdapter] = {
     "universe_daily": UniverseDailyAdapter(),
+    "bar_1d_qfq": MartViewAdapter(
+        dataset_name="bar_1d_qfq",
+        upstream_dataset_name="bar_1d_raw",
+        expected_columns=BAR_1D_COLUMNS,
+        priority=100,
+    ),
+    "bar_1d_hfq": MartViewAdapter(
+        dataset_name="bar_1d_hfq",
+        upstream_dataset_name="bar_1d_raw",
+        expected_columns=BAR_1D_COLUMNS,
+        priority=110,
+    ),
+    "bar_1w": MartViewAdapter(
+        dataset_name="bar_1w",
+        upstream_dataset_name="bar_1d_raw",
+        expected_columns=BAR_AGG_DAILY_COLUMNS,
+        priority=120,
+    ),
+    "bar_1m": MartViewAdapter(
+        dataset_name="bar_1m",
+        upstream_dataset_name="bar_1d_raw",
+        expected_columns=BAR_AGG_DAILY_COLUMNS,
+        priority=130,
+    ),
+    "bar_1y": MartViewAdapter(
+        dataset_name="bar_1y",
+        upstream_dataset_name="bar_1d_raw",
+        expected_columns=BAR_AGG_DAILY_COLUMNS,
+        priority=140,
+    ),
+    "bar_5m_qfq": MartViewAdapter(
+        dataset_name="bar_5m_qfq",
+        upstream_dataset_name="bar_5m_raw",
+        expected_columns=BAR_5M_COLUMNS,
+        priority=200,
+    ),
+    "bar_5m_hfq": MartViewAdapter(
+        dataset_name="bar_5m_hfq",
+        upstream_dataset_name="bar_5m_raw",
+        expected_columns=BAR_5M_COLUMNS,
+        priority=210,
+    ),
+    "bar_15m": MartViewAdapter(
+        dataset_name="bar_15m",
+        upstream_dataset_name="bar_5m_raw",
+        expected_columns=BAR_AGG_INTRADAY_COLUMNS,
+        priority=220,
+    ),
+    "bar_30m": MartViewAdapter(
+        dataset_name="bar_30m",
+        upstream_dataset_name="bar_5m_raw",
+        expected_columns=BAR_AGG_INTRADAY_COLUMNS,
+        priority=230,
+    ),
+    "bar_60m": MartViewAdapter(
+        dataset_name="bar_60m",
+        upstream_dataset_name="bar_5m_raw",
+        expected_columns=BAR_AGG_INTRADAY_COLUMNS,
+        priority=240,
+    ),
 }

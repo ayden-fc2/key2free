@@ -552,14 +552,11 @@ class DataAssetRepository:
                 table_name = f"mart.{dataset_name}"
                 columns = self._get_relation_columns(connection, table_name)
                 date_column = self._resolve_mart_date_column(columns)
-                if table_type == "BASE TABLE":
-                    row_count, actual_max_date = self._get_relation_count_and_max_date(
-                        connection=connection,
-                        table_name=table_name,
-                        date_column=date_column,
-                    )
-                else:
-                    row_count, actual_max_date = None, None
+                row_count, actual_max_date = self._get_relation_count_and_max_date(
+                    connection=connection,
+                    table_name=table_name,
+                    date_column=date_column,
+                )
                 watermark_item = watermarks.get(dataset_name, {})
                 validation_item = validations.get(dataset_name, {})
                 watermark = watermark_item.get("watermark")
@@ -2084,28 +2081,6 @@ class DataAssetRepository:
             )
         return results
 
-    def _resolve_mart_derived_watermark(
-        self,
-        connection: Any,
-        dataset_name: str,
-    ) -> str | None:
-        source_dataset = self.MART_DERIVED_WATERMARK_SOURCE.get(dataset_name)
-        if source_dataset is None:
-            return None
-        row = connection.execute(
-            """
-            select watermark_value
-            from meta.dataset_watermark
-            where dataset_name = ?
-            order by updated_at desc nulls last
-            limit 1
-            """,
-            [source_dataset],
-        ).fetchone()
-        if row is None or row[0] is None:
-            return None
-        return str(row[0])
-
     def update_watermark_with_connection(
         self,
         *,
@@ -2280,8 +2255,6 @@ class DataAssetRepository:
             return "validation_failed"
         if table_type == "BASE TABLE" and (row_count is None or row_count == 0):
             return "empty"
-        if table_type != "BASE TABLE":
-            return "unknown" if watermark is None else "ok"
         if actual_max_date is None:
             return "unknown"
         if watermark is None:
