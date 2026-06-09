@@ -1,4 +1,5 @@
 from .strategy import (
+    demo_batch_signal_strategy,
     demo_entry_strategy,
     demo_exit_strategy,
     demo_signal_strategy,
@@ -8,6 +9,7 @@ from .strategy import (
 __all__ = [
     "demo_entry_strategy",
     "demo_exit_strategy",
+    "demo_batch_signal_strategy",
     "demo_signal_strategy",
     "demo_universe_filter",
 ]

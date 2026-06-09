@@ -3,7 +3,6 @@ from __future__ import annotations
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
@@ -47,7 +46,6 @@ class BacktestService:
     TASK_TYPE = "backtest"
     BUY_FEE_BPS = 5
     SELL_FEE_BPS = 10
-    SIGNAL_WORKERS = 10
     SIMULATION_RUNS = 50
 
     def __init__(self) -> None:
@@ -95,6 +93,9 @@ class BacktestService:
         if task_id is None:
             return self.tasks.get_latest_task_by_type(self.TASK_TYPE)
         return self.tasks.get_task(task_id)
+
+    def list_backtest_tasks(self, limit: int = 100) -> list[TaskDTO]:
+        return self.tasks.list_tasks_by_type(self.TASK_TYPE, limit=limit)
 
     def _run_backtest_task(
         self,
@@ -156,46 +157,41 @@ class BacktestService:
         strategy_name: str,
     ) -> dict[date, list[dict[str, Any]]]:
         signals_by_date: dict[date, list[dict[str, Any]]] = {}
-        completed = 0
-        self.tasks.append_log(task_id, f"开始 10 线程预计算信号: {strategy_name}")
-        with ThreadPoolExecutor(max_workers=self.SIGNAL_WORKERS) as executor:
-            futures = {
-                executor.submit(self._compute_signals_for_date, day, strategy_name): day
-                for day in trading_dates
-            }
-            for future in as_completed(futures):
-                day = futures[future]
-                signals = future.result()
-                signals_by_date[day] = signals
-                self.repository.insert_signals(
-                    task_id=task_id,
-                    trade_date=day,
-                    strategy_name=strategy_name,
-                    signals=signals,
-                )
-                completed += 1
-                if completed == 1 or completed % 20 == 0 or completed == len(trading_dates):
-                    self.tasks.append_log(
-                        task_id,
-                        f"信号预计算 {completed}/{len(trading_dates)}: {day.isoformat()} signals={len(signals)}",
-                    )
-        return signals_by_date
-
-    def _compute_signals_for_date(self, trade_date: date, strategy_name: str) -> list[dict[str, Any]]:
-        result = SignalService().get_daily_signals(
-            trade_date=trade_date,
+        self.tasks.append_log(task_id, f"开始按股票维度预计算信号: {strategy_name}")
+        daily_results = SignalService().get_signals_for_dates_by_stock(
+            trade_dates=trading_dates,
             strategy_name=strategy_name,
+            progress_callback=lambda done, total: self.tasks.append_log(
+                task_id,
+                f"股票维度信号预计算进度: {done}/{total}",
+            ),
+            progress_interval=200,
         )
-        return [
-            {
-                "code": item.code,
-                "code_name": item.code_name,
-                "trade_date": item.trade_date,
-                "universe": item.universe,
-                "signal": item.signal or {"triggered": True},
-            }
-            for item in result.signals
-        ]
+        for completed, day in enumerate(trading_dates, start=1):
+            result = daily_results.get(day)
+            signals = [] if result is None else [
+                {
+                    "code": item.code,
+                    "code_name": item.code_name,
+                    "trade_date": item.trade_date,
+                    "universe": item.universe,
+                    "signal": item.signal or {"triggered": True},
+                }
+                for item in result.signals
+            ]
+            signals_by_date[day] = signals
+            self.repository.insert_signals(
+                task_id=task_id,
+                trade_date=day,
+                strategy_name=strategy_name,
+                signals=signals,
+            )
+            if completed == 1 or completed % 20 == 0 or completed == len(trading_dates):
+                self.tasks.append_log(
+                    task_id,
+                    f"信号预计算 {completed}/{len(trading_dates)}: {day.isoformat()} signals={len(signals)}",
+                )
+        return signals_by_date
 
     def _simulate(
         self,

@@ -11,3 +11,5 @@ export type BacktestStart = {
   task: DataAssetTask;
   message: string;
 };
+
+export type BacktestTaskList = DataAssetTask[];

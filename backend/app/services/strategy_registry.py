@@ -5,6 +5,7 @@ from typing import Callable, Protocol
 
 from app.entities.stock_data_context import SignalDecision, StockDataContext
 from strategies.demo import (
+    demo_batch_signal_strategy,
     demo_entry_strategy,
     demo_exit_strategy,
     demo_signal_strategy,
@@ -30,6 +31,7 @@ class StrategyRegistration:
     exit_strategy: Callable[..., int]
     universe_filter: UniverseFilterFn | None = None
     daily_signal_history_limit: int | None = None
+    batch_signal_strategy: Callable[..., dict] | None = None
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -40,6 +42,7 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         exit_strategy=demo_exit_strategy,
         universe_filter=demo_universe_filter,
         daily_signal_history_limit=430,
+        batch_signal_strategy=demo_batch_signal_strategy,
     )
 }
 

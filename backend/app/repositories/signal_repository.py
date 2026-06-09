@@ -50,6 +50,88 @@ class SignalRepository:
             columns = [item[0] for item in result.description]
         return [self._normalize_row(columns, row) for row in rows]
 
+    def get_universe_daily_range(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+    ) -> dict[date, dict[str, dict[str, Any]]]:
+        with self.duckdb.connect(read_only=True) as connection:
+            result = connection.execute(
+                """
+                select *
+                from mart.universe_daily
+                where trade_date between ? and ?
+                order by trade_date, code
+                """,
+                [start_date, end_date],
+            )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+
+        grouped: dict[date, dict[str, dict[str, Any]]] = {}
+        for row in rows:
+            item = self._normalize_row(columns, row)
+            trade_date_value = row[0]
+            code = item.get("code")
+            if not isinstance(trade_date_value, date) or not isinstance(code, str):
+                continue
+            grouped.setdefault(trade_date_value, {})[code] = item
+        return grouped
+
+    def get_universe_codes_range(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+    ) -> list[str]:
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select distinct code
+                from mart.universe_daily
+                where trade_date between ? and ?
+                  and code is not null
+                order by code
+                """,
+                [start_date, end_date],
+            ).fetchall()
+        return [str(row[0]) for row in rows if row and row[0] is not None]
+
+    def get_universe_daily_range_by_codes(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        codes: list[str],
+    ) -> dict[date, dict[str, dict[str, Any]]]:
+        if not codes:
+            return {}
+
+        with self.duckdb.connect(read_only=True) as connection:
+            result = connection.execute(
+                """
+                select *
+                from mart.universe_daily
+                where trade_date between ? and ?
+                  and code in (select unnest(?))
+                order by trade_date, code
+                """,
+                [start_date, end_date, codes],
+            )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+
+        grouped: dict[date, dict[str, dict[str, Any]]] = {}
+        for row in rows:
+            item = self._normalize_row(columns, row)
+            trade_date_value = row[0]
+            code = item.get("code")
+            if not isinstance(trade_date_value, date) or not isinstance(code, str):
+                continue
+            grouped.setdefault(trade_date_value, {})[code] = item
+        return grouped
+
     def get_universe_daily_by_codes(
         self,
         *,
@@ -151,6 +233,75 @@ class SignalRepository:
                 """,
                 [codes],
             )
+            rows = result.fetchall()
+            columns = [item[0] for item in result.description]
+
+        bars_by_code: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            item = self._normalize_row(columns, row)
+            code = item.get("code")
+            if not isinstance(code, str):
+                continue
+            bars_by_code.setdefault(code, []).append(item)
+        return bars_by_code
+
+    def get_bar_1d_qfq_history_for_signal_range(
+        self,
+        *,
+        codes: list[str],
+        start_date: date,
+        end_date: date,
+        limit_before_start: int | None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not codes:
+            return {}
+
+        with self.duckdb.connect(read_only=True) as connection:
+            if limit_before_start is None:
+                result = connection.execute(
+                    f"""
+                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                    from mart.bar_1d_qfq
+                    where trade_date <= ?
+                      and code in (select unnest(?))
+                    order by code, trade_date
+                    """,
+                    [end_date, codes],
+                )
+            else:
+                result = connection.execute(
+                    f"""
+                    with ranked_before as (
+                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS},
+                               row_number() over (
+                                   partition by code
+                                   order by trade_date desc
+                               ) as rn
+                        from mart.bar_1d_qfq
+                        where trade_date < ?
+                          and code in (select unnest(?))
+                    ),
+                    limited_before as (
+                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                        from ranked_before
+                        where rn <= ?
+                    ),
+                    in_range as (
+                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                        from mart.bar_1d_qfq
+                        where trade_date between ? and ?
+                          and code in (select unnest(?))
+                    )
+                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
+                    from (
+                        select * from limited_before
+                        union all
+                        select * from in_range
+                    )
+                    order by code, trade_date
+                    """,
+                    [start_date, codes, limit_before_start, start_date, end_date, codes],
+                )
             rows = result.fetchall()
             columns = [item[0] for item in result.description]
 

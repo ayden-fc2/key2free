@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from app.entities.stock_data_context import SignalDecision, StockDataContext
@@ -69,6 +70,18 @@ class _TrendSignalContext:
     l3_l4_high: float
 
 
+@dataclass(frozen=True)
+class _BatchKlineSeries:
+    opens: list[float | None]
+    highs: list[float | None]
+    lows: list[float | None]
+    closes: list[float | None]
+    volumes: list[float | None]
+    atr14: list[float | None]
+    candles: list[dict[str, float] | None]
+    avg_volume10: list[float | None]
+
+
 def demo_signal_strategy(context: StockDataContext) -> SignalDecision:
     if not _passes_universe_filter(context):
         return SignalDecision(triggered=False)
@@ -85,6 +98,49 @@ def demo_signal_strategy(context: StockDataContext) -> SignalDecision:
         ideal_buy_price=trend_context.l4_low + trend_context.l4_atr30,
         max_watch_days=MAX_WATCH_DAYS,
     )
+
+
+def demo_batch_signal_strategy(
+    *,
+    code: str,
+    target_dates: list[Any],
+    universe_by_date: dict[Any, dict[str, Any]],
+    bars: list[dict[str, Any]],
+    history_limit: int | None,
+) -> dict[Any, SignalDecision]:
+    if not bars:
+        return {}
+    results: dict[Any, SignalDecision] = {}
+    bar_dates = [_coerce_date(item.get("trade_date")) for item in bars]
+    if any(value is None for value in bar_dates):
+        return {}
+
+    date_to_index = {
+        value: index
+        for index, value in enumerate(bar_dates)
+        if value is not None
+    }
+    kline_series = _build_batch_kline_series(bars)
+    for target_date in target_dates:
+        bar_index = date_to_index.get(target_date)
+        if bar_index is None:
+            continue
+        start_index = 0 if history_limit is None else max(0, bar_index + 1 - history_limit)
+        if not _passes_kline_filter_at_index(kline_series, bar_index):
+            continue
+        window_bars = bars[start_index : bar_index + 1]
+        trend_context = _resolve_trend_signal_context(window_bars)
+        if trend_context is None:
+            continue
+        results[target_date] = SignalDecision(
+            triggered=True,
+            min_stop_loss=trend_context.l4_low - trend_context.l4_atr30,
+            reference_take_profit=trend_context.l3_l4_high - 1.618 * trend_context.l4_atr30,
+            signal_atr30=trend_context.l4_atr30,
+            ideal_buy_price=trend_context.l4_low + trend_context.l4_atr30,
+            max_watch_days=MAX_WATCH_DAYS,
+        )
+    return results
 
 
 def demo_universe_filter(context: StockDataContext) -> bool:
@@ -434,6 +490,63 @@ def _passes_kline_filter(bars: list[dict[str, Any]]) -> bool:
     )
 
 
+def _build_batch_kline_series(bars: list[dict[str, Any]]) -> _BatchKlineSeries:
+    opens = [_to_float(item.get("open")) for item in bars]
+    highs = [_to_float(item.get("high")) for item in bars]
+    lows = [_to_float(item.get("low")) for item in bars]
+    closes = [_to_float(item.get("close")) for item in bars]
+    volumes = [_to_float(item.get("volume")) for item in bars]
+    atr14 = _average_true_range(highs, lows, closes, ATR14_WINDOW)
+    candles = [
+        _build_candle(
+            open_value=open_value,
+            high_value=high_value,
+            low_value=low_value,
+            close_value=close_value,
+        )
+        for open_value, high_value, low_value, close_value in zip(opens, highs, lows, closes)
+    ]
+    return _BatchKlineSeries(
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        volumes=volumes,
+        atr14=atr14,
+        candles=candles,
+        avg_volume10=_moving_average(volumes, VOLUME_AVG_WINDOW),
+    )
+
+
+def _passes_kline_filter_at_index(series: _BatchKlineSeries, index: int) -> bool:
+    min_bars = max(ATR14_WINDOW + 1, VOLUME_AVG_WINDOW + 1, 5)
+    if index + 1 < min_bars:
+        return False
+    start = index + 1 - min_bars
+    if any(value is None for value in series.opens[start : index + 1]):
+        return False
+    if any(value is None for value in series.highs[start : index + 1]):
+        return False
+    if any(value is None for value in series.lows[start : index + 1]):
+        return False
+    if any(value is None for value in series.closes[start : index + 1]):
+        return False
+    if any(value is None for value in series.volumes[start : index + 1]):
+        return False
+    if any(candle is None for candle in series.candles[index - 4 : index + 1]):
+        return False
+    current_atr = series.atr14[index]
+    if current_atr is None or current_atr <= 0:
+        return False
+    return (
+        _is_dragonfly_doji_with_average(series.candles, series.volumes, series.avg_volume10, index)
+        or _is_hammer_with_average(series.candles, series.volumes, series.avg_volume10, index)
+        or _is_morning_star(series.candles, series.atr14, index)
+        or _is_bullish_engulfing(series.candles, series.atr14, index)
+        or _is_fairy_guide(series.candles, series.atr14, index)
+    )
+
+
 def _build_candle(
     *,
     open_value: float | None,
@@ -527,6 +640,26 @@ def _is_dragonfly_doji(
     )
 
 
+def _is_dragonfly_doji_with_average(
+    candles: list[dict[str, float] | None],
+    volumes: list[float | None],
+    avg_volume10: list[float | None],
+    index: int,
+) -> bool:
+    candle = candles[index]
+    if candle is None:
+        return False
+    return (
+        _body_ratio(candle) <= 0.1
+        and _shadow_ratio_at_least(
+            long_shadow=candle["lower_shadow"],
+            short_shadow=candle["upper_shadow"],
+            multiple=6,
+        )
+        and _is_volume_above_average(volumes, avg_volume10, index)
+    )
+
+
 def _is_hammer_shape(candle: dict[str, float]) -> bool:
     body_ratio = _body_ratio(candle)
     return (
@@ -560,6 +693,30 @@ def _is_hammer(
     if candle is None:
         return False
     return _is_hammer_shape(candle) and _is_volume_above_recent_average(volumes, index)
+
+
+def _is_hammer_with_average(
+    candles: list[dict[str, float] | None],
+    volumes: list[float | None],
+    avg_volume10: list[float | None],
+    index: int,
+) -> bool:
+    candle = candles[index]
+    if candle is None:
+        return False
+    return _is_hammer_shape(candle) and _is_volume_above_average(volumes, avg_volume10, index)
+
+
+def _is_volume_above_average(
+    volumes: list[float | None],
+    avg_volume10: list[float | None],
+    index: int,
+) -> bool:
+    current = volumes[index]
+    average_volume = avg_volume10[index - 1] if index > 0 else None
+    if current is None or average_volume is None:
+        return False
+    return current >= average_volume * VOLUME_AVG_MIN_RATIO
 
 
 def _is_morning_star(
@@ -840,3 +997,14 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None

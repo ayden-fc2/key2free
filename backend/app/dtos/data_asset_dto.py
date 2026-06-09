@@ -66,3 +66,5 @@ class TaskDTO:
     type: str
     logs: str
     status: str
+    created_at: str | None = None
+    updated_at: str | None = None

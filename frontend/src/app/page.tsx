@@ -6,7 +6,7 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
 import { StockContextCharts } from "@/components/signals/StockContextCharts";
-import { getBacktestTask, runBacktest } from "@/lib/api/backtests";
+import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
 import {
   getMartDataAssetSummary,
   getSourceUpdateTask,
@@ -142,6 +142,16 @@ function formatSignalMetric(value: number | null | undefined) {
   return Number.isInteger(value) ? value.toString() : value.toFixed(3);
 }
 
+function parseBacktestStrategy(logs: string | null | undefined) {
+  const match = (logs ?? "").match(/strategy=([^,\]\s]+)/);
+  return match?.[1] ?? "-";
+}
+
+function parseBacktestRange(logs: string | null | undefined) {
+  const match = (logs ?? "").match(/range=([^,\]\s]+)/);
+  return match?.[1] ?? "-";
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>(
     "data-assets",
@@ -181,10 +191,30 @@ export default function Home() {
   const [backtestInitialCash, setBacktestInitialCash] = useState(100000);
   const [backtestStrategy, setBacktestStrategy] = useState("demo");
   const [backtestTask, setBacktestTask] = useState<DataAssetTask | null>(null);
+  const [backtestTasks, setBacktestTasks] = useState<DataAssetTask[]>([]);
+  const [backtestTasksLoading, setBacktestTasksLoading] = useState(false);
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestModalOpen, setBacktestModalOpen] = useState(false);
+  const [backtestCreateModalOpen, setBacktestCreateModalOpen] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const backtestRunning = backtestTask?.status === "running";
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const taskId = params.get("task_id");
+    if (tab === "backtest-stats") {
+      setActiveTab("backtest-stats");
+    }
+    if (taskId !== null) {
+      const parsedTaskId = Number(taskId);
+      if (Number.isFinite(parsedTaskId)) {
+        getBacktestTask(parsedTaskId)
+          .then(setBacktestTask)
+          .catch(() => undefined);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -355,11 +385,23 @@ export default function Home() {
     }
   }
 
-  async function requestBacktest() {
-    if (backtestRunning) {
-      setBacktestModalOpen(true);
-      return;
+  async function fetchBacktestTasks() {
+    setBacktestTasksLoading(true);
+    try {
+      const tasks = await listBacktestTasks();
+      setBacktestTasks(tasks);
+      const runningTask = tasks.find((task) => task.status === "running");
+      if (runningTask) {
+        setBacktestTask((current) => current ?? runningTask);
+      }
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "backtest tasks load failed");
+    } finally {
+      setBacktestTasksLoading(false);
     }
+  }
+
+  async function requestBacktest() {
     if (!backtestStartDate || !backtestEndDate) {
       messageApi.warning("请选择回测周期");
       return;
@@ -378,7 +420,9 @@ export default function Home() {
         strategy_name: backtestStrategy,
       });
       setBacktestTask(data.task);
+      setBacktestCreateModalOpen(false);
       setBacktestModalOpen(true);
+      fetchBacktestTasks();
       messageApi.info("回测任务已创建");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "回测任务创建失败");
@@ -450,25 +494,7 @@ export default function Home() {
   ]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function fetchRunningBacktestTask() {
-      try {
-        const task = await getBacktestTask();
-        if (!cancelled && task.status === "running") {
-          setBacktestTask(task);
-          setBacktestModalOpen(true);
-        }
-      } catch {
-        // No previous backtest task exists yet.
-      }
-    }
-
-    fetchRunningBacktestTask();
-
-    return () => {
-      cancelled = true;
-    };
+    fetchBacktestTasks();
   }, []);
 
   useEffect(() => {
@@ -484,6 +510,12 @@ export default function Home() {
         const task = await getBacktestTask(taskId);
         if (!cancelled) {
           setBacktestTask(task);
+          setBacktestTasks((tasks) =>
+            tasks.map((item) => (item.id === task.id ? task : item)),
+          );
+          if (task.status !== "running") {
+            fetchBacktestTasks();
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -606,6 +638,85 @@ export default function Home() {
       render: (value: number | null) => value?.toLocaleString() ?? "-",
       title: "行数",
       width: 130,
+    },
+  ];
+
+  const backtestTaskColumns: ColumnsType<DataAssetTask> = [
+    {
+      dataIndex: "id",
+      title: "任务 ID",
+      width: 100,
+    },
+    {
+      render: (_value, record) => parseBacktestStrategy(record.logs),
+      title: "策略",
+      width: 120,
+    },
+    {
+      render: (_value, record) => parseBacktestRange(record.logs),
+      title: "周期",
+      width: 220,
+    },
+    {
+      dataIndex: "status",
+      render: (status: DataAssetTask["status"]) => (
+        <Tag
+          color={
+            status === "success"
+              ? "green"
+              : status === "error"
+                ? "red"
+                : status === "running"
+                  ? "blue"
+                  : "default"
+          }
+        >
+          {status}
+        </Tag>
+      ),
+      title: "状态",
+      width: 110,
+    },
+    {
+      dataIndex: "created_at",
+      render: (value: string | null | undefined) => formatDateTime(value ?? null),
+      title: "创建时间",
+      width: 180,
+    },
+    {
+      dataIndex: "updated_at",
+      render: (value: string | null | undefined) => formatDateTime(value ?? null),
+      title: "更新时间",
+      width: 180,
+    },
+    {
+      fixed: "right",
+      render: (_value, record) => (
+        <Space>
+          <Button
+            size="small"
+            onClick={() => {
+              setBacktestTask(record);
+              setBacktestModalOpen(true);
+            }}
+          >
+            查看日志
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => {
+              if (record.id != null) {
+                window.location.href = `/?tab=backtest-stats&task_id=${encodeURIComponent(record.id)}`;
+              }
+            }}
+          >
+            查看详情
+          </Button>
+        </Space>
+      ),
+      title: "操作",
+      width: 190,
     },
   ];
 
@@ -796,6 +907,60 @@ export default function Home() {
           </Tag>
         </div>
         <pre className="task-log">{backtestTask?.logs || "等待任务日志..."}</pre>
+      </Modal>
+      <Modal
+        confirmLoading={backtestLoading}
+        okText="新建回测"
+        open={backtestCreateModalOpen}
+        title="新建回测"
+        width={760}
+        onCancel={() => setBacktestCreateModalOpen(false)}
+        onOk={requestBacktest}
+      >
+        <div className="backtest-form">
+          <label className="form-field">
+            <span>开始日期</span>
+            <input
+              className="target-date-input"
+              disabled={backtestLoading}
+              onChange={(event) => setBacktestStartDate(event.target.value)}
+              type="date"
+              value={backtestStartDate}
+            />
+          </label>
+          <label className="form-field">
+            <span>结束日期</span>
+            <input
+              className="target-date-input"
+              disabled={backtestLoading}
+              onChange={(event) => setBacktestEndDate(event.target.value)}
+              type="date"
+              value={backtestEndDate}
+            />
+          </label>
+          <label className="form-field">
+            <span>初始仓位</span>
+            <InputNumber
+              disabled={backtestLoading}
+              min={1}
+              onChange={(value) =>
+                setBacktestInitialCash(typeof value === "number" ? value : 100000)
+              }
+              precision={2}
+              style={{ width: "100%" }}
+              value={backtestInitialCash}
+            />
+          </label>
+          <label className="form-field">
+            <span>策略</span>
+            <Select
+              disabled={backtestLoading}
+              options={strategyOptions}
+              value={backtestStrategy}
+              onChange={setBacktestStrategy}
+            />
+          </label>
+        </div>
       </Modal>
       <aside className="sidebar">
         <div className="brand">
@@ -1050,6 +1215,40 @@ export default function Home() {
             </div>
           </section>
         ) : activeTab === "backtest-stats" ? (
+          <section className="content-panel">
+            <div className="backtest-panel">
+              <div className="table-toolbar">
+                <div>
+                  <div className="placeholder-title">回测统计</div>
+                  <div className="panel-subtitle">
+                    回测任务允许重复创建，列表按任务 ID 倒序展示；详情入口会携带 task_id。
+                  </div>
+                </div>
+                <Space>
+                  <Button icon={<ReloadOutlined />} onClick={fetchBacktestTasks}>
+                    刷新
+                  </Button>
+                  <Button
+                    loading={backtestLoading}
+                    onClick={() => setBacktestCreateModalOpen(true)}
+                    type="primary"
+                  >
+                    新建回测
+                  </Button>
+                </Space>
+              </div>
+              <Table
+                columns={backtestTaskColumns}
+                dataSource={backtestTasks}
+                loading={backtestTasksLoading}
+                pagination={{ pageSize: 20, showSizeChanger: true }}
+                rowKey={(record) => String(record.id)}
+                scroll={{ x: 1100 }}
+                size="middle"
+              />
+            </div>
+          </section>
+        ) : false && activeTab === "backtest-stats" ? (
           <section className="content-panel">
             <div className="backtest-panel">
               <div className="table-toolbar">
