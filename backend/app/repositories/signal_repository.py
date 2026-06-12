@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.repositories.duckdb_repository import DuckDBRepository
+from app.repositories.tushare_sql import TUSHARE_BAR_1D_QFQ_SQL, TUSHARE_UNIVERSE_DAILY_SQL
 
 
 class SignalRepository:
@@ -38,9 +39,9 @@ class SignalRepository:
     def get_universe_daily(self, trade_date: date) -> list[dict[str, Any]]:
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 select *
-                from mart.universe_daily
+                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                 where trade_date = ?
                 order by code
                 """,
@@ -58,9 +59,9 @@ class SignalRepository:
     ) -> dict[date, dict[str, dict[str, Any]]]:
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 select *
-                from mart.universe_daily
+                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                 where trade_date between ? and ?
                 order by trade_date, code
                 """,
@@ -87,9 +88,9 @@ class SignalRepository:
     ) -> list[str]:
         with self.duckdb.connect(read_only=True) as connection:
             rows = connection.execute(
-                """
+                f"""
                 select distinct code
-                from mart.universe_daily
+                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                 where trade_date between ? and ?
                   and code is not null
                 order by code
@@ -110,9 +111,9 @@ class SignalRepository:
 
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 select *
-                from mart.universe_daily
+                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                 where trade_date between ? and ?
                   and code in (select unnest(?))
                 order by trade_date, code
@@ -143,9 +144,9 @@ class SignalRepository:
 
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 select *
-                from mart.universe_daily
+                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                 where trade_date = ?
                   and code in (select unnest(?))
                 order by code
@@ -162,14 +163,14 @@ class SignalRepository:
 
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 with ranked as (
                     select *,
                            row_number() over (
                                partition by code
                                order by trade_date desc
                            ) as rn
-                    from mart.universe_daily
+                    from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
                     where code in (select unnest(?))
                 )
                 select * exclude (rn)
@@ -196,7 +197,7 @@ class SignalRepository:
             result = connection.execute(
                 f"""
                 select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from mart.bar_1d_qfq
+                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                 where trade_date <= ?
                   and code in (select unnest(?))
                 order by code, trade_date
@@ -225,9 +226,9 @@ class SignalRepository:
 
         with self.duckdb.connect(read_only=True) as connection:
             result = connection.execute(
-                """
+                f"""
                 select *
-                from mart.bar_1d_qfq
+                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                 where code in (select unnest(?))
                 order by code, trade_date
                 """,
@@ -261,7 +262,7 @@ class SignalRepository:
                 result = connection.execute(
                     f"""
                     select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                    from mart.bar_1d_qfq
+                    from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                     where trade_date <= ?
                       and code in (select unnest(?))
                     order by code, trade_date
@@ -277,7 +278,7 @@ class SignalRepository:
                                    partition by code
                                    order by trade_date desc
                                ) as rn
-                        from mart.bar_1d_qfq
+                        from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                         where trade_date < ?
                           and code in (select unnest(?))
                     ),
@@ -288,7 +289,7 @@ class SignalRepository:
                     ),
                     in_range as (
                         select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                        from mart.bar_1d_qfq
+                        from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                         where trade_date between ? and ?
                           and code in (select unnest(?))
                     )
@@ -335,7 +336,7 @@ class SignalRepository:
             result = connection.execute(
                 f"""
                 select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from mart.bar_1d_qfq
+                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                 where trade_date <= ?
                   and code in (select unnest(?))
                 order by code, trade_date
@@ -453,7 +454,7 @@ class SignalRepository:
                                partition by code
                                order by trade_date desc
                            ) as rn
-                    from mart.bar_1d_qfq
+                    from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                     where trade_date <= ?
                       and code in (select unnest(?))
                 )
@@ -481,7 +482,7 @@ class SignalRepository:
             result = connection.execute(
                 f"""
                 select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from mart.bar_1d_qfq
+                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
                 where trade_date > ?
                   and trade_date <= ?
                   and code in (select unnest(?))

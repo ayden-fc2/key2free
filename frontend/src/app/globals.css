@@ -323,43 +323,17 @@ button {
   color: var(--muted);
 }
 
-.source-table-picker {
-  border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  display: grid;
-  gap: 10px;
-  padding: 10px 12px;
-}
-
-.source-table-group {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
-.source-table-group-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  min-width: 58px;
-}
-
-.source-table-option {
-  align-items: center;
-  display: inline-flex;
-  font-size: 12px;
-  gap: 4px;
-}
-
-.source-table-option-disabled {
-  color: var(--muted);
-  opacity: 0.55;
-}
-
 .backtest-panel {
   display: grid;
   gap: 18px;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.backtest-panel .ant-table-wrapper {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .backtest-form {

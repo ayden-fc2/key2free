@@ -7,10 +7,8 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
-from app.dtos.backtest_dto import BacktestStartDTO
-from app.dtos.data_asset_dto import TaskDTO
+from app.dtos.backtest_dto import BacktestStartDTO, BacktestTaskDTO
 from app.repositories.backtest_repository import BacktestRepository
-from app.repositories.task_repository import TaskRepository
 from app.services.signal_service import SignalService
 from app.services.strategy_registry import get_strategy
 
@@ -49,7 +47,6 @@ class BacktestService:
     SIMULATION_RUNS = 50
 
     def __init__(self) -> None:
-        self.tasks = TaskRepository()
         self.repository = BacktestRepository()
 
     def request_backtest(
@@ -67,9 +64,13 @@ class BacktestService:
         if get_strategy(strategy_name) is None:
             raise ValueError(f"unknown strategy: {strategy_name}")
 
-        task = self.tasks.create_task(
-            self.TASK_TYPE,
-            (
+        task = self.repository.create_task(
+            strategy_name=strategy_name,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=float(initial_cash),
+            simulation_runs=self.SIMULATION_RUNS,
+            initial_log=(
                 f"创建回测任务: strategy={strategy_name}, "
                 f"range={start_date.isoformat()}->{end_date.isoformat()}, "
                 f"initial_cash={initial_cash:.2f}, simulation_runs={self.SIMULATION_RUNS}"
@@ -89,13 +90,13 @@ class BacktestService:
         thread.start()
         return BacktestStartDTO(task=task, message="backtest task created")
 
-    def get_backtest_task(self, task_id: int | None = None) -> TaskDTO | None:
+    def get_backtest_task(self, task_id: int | None = None) -> BacktestTaskDTO | None:
         if task_id is None:
-            return self.tasks.get_latest_task_by_type(self.TASK_TYPE)
-        return self.tasks.get_task(task_id)
+            return self.repository.get_latest_task()
+        return self.repository.get_task(task_id)
 
-    def list_backtest_tasks(self, limit: int = 100) -> list[TaskDTO]:
-        return self.tasks.list_tasks_by_type(self.TASK_TYPE, limit=limit)
+    def list_backtest_tasks(self, limit: int = 100) -> list[BacktestTaskDTO]:
+        return self.repository.list_tasks(limit=limit)
 
     def _run_backtest_task(
         self,
@@ -115,7 +116,11 @@ class BacktestService:
             )
             if not trading_dates:
                 raise RuntimeError("no trading dates in backtest range")
-            self.tasks.append_log(task_id, f"交易日数量: {len(trading_dates)}")
+            self.repository.update_task_progress(
+                task_id=task_id,
+                trading_day_count=len(trading_dates),
+            )
+            self.repository.append_task_log(task_id, f"交易日数量: {len(trading_dates)}")
 
             strategy = get_strategy(strategy_name)
             if strategy is None:
@@ -127,10 +132,11 @@ class BacktestService:
                 strategy_name=strategy_name,
             )
             random_seed = time.time_ns()
-            self.tasks.append_log(
+            self.repository.append_task_log(
                 task_id,
                 f"开始 {self.SIMULATION_RUNS} 轮随机撮合: seed={random_seed}",
             )
+            final_assets: list[float] = []
             for run_no in range(1, self.SIMULATION_RUNS + 1):
                 final_asset = self._simulate(
                     task_id=task_id,
@@ -141,13 +147,29 @@ class BacktestService:
                     strategy=strategy,
                     signals_by_date=signals_by_date,
                 )
-                self.tasks.append_log(
+                final_assets.append(final_asset)
+                self.repository.update_task_progress(
+                    task_id=task_id,
+                    completed_runs=run_no,
+                )
+                self.repository.append_task_log(
                     task_id,
                     f"随机撮合完成 {run_no}/{self.SIMULATION_RUNS}: final_asset={final_asset:.2f}",
                 )
-            self.tasks.finish_task(task_id, "success", "回测完成。")
+            self.repository.finish_task(
+                task_id=task_id,
+                status="success",
+                message="回测完成。",
+                completed_runs=len(final_assets),
+                final_assets=final_assets,
+                initial_cash=initial_cash,
+            )
         except Exception as exc:
-            self.tasks.finish_task(task_id, "error", f"回测失败: {exc}")
+            self.repository.finish_task(
+                task_id=task_id,
+                status="error",
+                message=f"回测失败: {exc}",
+            )
 
     def _precompute_signals(
         self,
@@ -157,11 +179,11 @@ class BacktestService:
         strategy_name: str,
     ) -> dict[date, list[dict[str, Any]]]:
         signals_by_date: dict[date, list[dict[str, Any]]] = {}
-        self.tasks.append_log(task_id, f"开始按股票维度预计算信号: {strategy_name}")
+        self.repository.append_task_log(task_id, f"开始按股票维度预计算信号: {strategy_name}")
         daily_results = SignalService().get_signals_for_dates_by_stock(
             trade_dates=trading_dates,
             strategy_name=strategy_name,
-            progress_callback=lambda done, total: self.tasks.append_log(
+            progress_callback=lambda done, total: self.repository.append_task_log(
                 task_id,
                 f"股票维度信号预计算进度: {done}/{total}",
             ),
@@ -186,8 +208,12 @@ class BacktestService:
                 strategy_name=strategy_name,
                 signals=signals,
             )
+            self.repository.update_task_progress(
+                task_id=task_id,
+                signal_count=sum(len(items) for items in signals_by_date.values()),
+            )
             if completed == 1 or completed % 20 == 0 or completed == len(trading_dates):
-                self.tasks.append_log(
+                self.repository.append_task_log(
                     task_id,
                     f"信号预计算 {completed}/{len(trading_dates)}: {day.isoformat()} signals={len(signals)}",
                 )
@@ -207,7 +233,7 @@ class BacktestService:
         cash = initial_cash
         holdings: dict[str, HoldingItem] = {}
         watch_pool: dict[str, WatchItem] = {}
-        self.tasks.append_log(task_id, f"开始第 {run_no} 轮事件驱动撮合。")
+        self.repository.append_task_log(task_id, f"开始第 {run_no} 轮事件驱动撮合。")
 
         for trade_index, trade_date in enumerate(trading_dates):
             bar_codes = list(
@@ -256,7 +282,7 @@ class BacktestService:
             )
             progress = trade_index + 1
             if run_no == 1 and (progress == 1 or progress % 50 == 0 or progress == len(trading_dates)):
-                self.tasks.append_log(
+                self.repository.append_task_log(
                     task_id,
                     (
                         f"第 {run_no} 轮撮合进度 {progress}/{len(trading_dates)}: "

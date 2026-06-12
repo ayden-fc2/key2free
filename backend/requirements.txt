@@ -2,3 +2,4 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 duckdb==1.4.4
 baostock==0.9.1
+tushare==1.4.24

@@ -3,31 +3,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, DatePicker, InputNumber, Modal, Select, Space, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { ReloadOutlined } from "@ant-design/icons";
 
 import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
-import {
-  getMartDataAssetSummary,
-  getSourceUpdateTask,
-  getStockDataAssetSummary,
-  refreshMartDataAssets,
-  requestStockDataAssetRefresh,
-  stopSourceUpdateTask,
-} from "@/lib/api/dataAssets";
 import { getHealth } from "@/lib/api/health";
 import { getDailySignals, getStockDataContexts } from "@/lib/api/signals";
-import type {
-  DataAssetTask,
-  MartDatasetOverview,
-  StockDatasetOverview,
-} from "@/types/dataAsset";
+import {
+  getTushareRefreshTask,
+  listTushareWatermarks,
+  startTushareRefresh,
+} from "@/lib/api/tushareAssets";
+import type { BacktestTask } from "@/types/backtest";
 import type { HealthState } from "@/types/health";
-import type {
-  DailySignalItem,
-  DailySignalResult,
-  StockDataContext,
-} from "@/types/signal";
+import type { DailySignalItem, DailySignalResult, StockDataContext } from "@/types/signal";
+import type { TushareAssetWatermark, TushareRefreshTask } from "@/types/tushareAsset";
 import { formatDateTime } from "@/utils/format";
 
 const tabs = [
@@ -38,101 +28,35 @@ const tabs = [
 ] as const;
 
 const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string }[]> = {
-  "backtest-stats": [{ key: "run", label: "回测任务" }],
+  "data-assets": [{ key: "tushare", label: "Tushare 资产" }],
   "daily-signals": [{ key: "daily", label: "当日信号" }],
-  "data-assets": [
-    { key: "source", label: "源数据" },
-    { key: "mart", label: "后处理数据" },
-  ],
+  "backtest-stats": [{ key: "run", label: "回测任务" }],
   strategies: [{ key: "placeholder", label: "占位" }],
 };
 
-const dailyRecommendedSourceTables = [
-  "trade_calendar",
-  "all_stock_snapshot",
-  "bar_1d_raw",
-  "adjust_factor",
-];
-
-const weeklyRecommendedSourceTables = [
-  "security_master",
-  "bar_5m_raw",
-  "dividend",
-  "profit",
-  "operation",
-  "growth",
-  "balance",
-  "cash_flow",
-  "dupont",
-  "deposit_rate",
-  "loan_rate",
-  "reserve_ratio",
-  "money_supply_month",
-  "money_supply_year",
-  "industry_snapshot",
-  "index_member_snapshot",
-  "performance_express",
-  "forecast",
-];
-
-const maintainedSourceTables = new Set(dailyRecommendedSourceTables);
-
 const strategyOptions = [{ label: "demo", value: "demo" }];
 
-function defaultTargetDate() {
-  const day = new Date();
-  day.setDate(day.getDate() - 1);
-  const year = day.getFullYear();
-  const month = String(day.getMonth() + 1).padStart(2, "0");
-  const date = String(day.getDate()).padStart(2, "0");
-  return `${year}-${month}-${date}`;
+function formatNumber(value: number | null | undefined, digits = 2) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "-";
+  }
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  });
 }
 
-function parseLocalDateTime(value: string | null) {
-  if (!value) {
-    return null;
+function formatReturn(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "-";
   }
-  const match = value
-    .trim()
-    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2}))?/);
-  if (!match) {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  const [, year, month, day, hour = "0", minute = "0", second = "0"] = match;
-  return new Date(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour),
-    Number(minute),
-    Number(second),
-  );
+  return `${(value * 100).toFixed(2)}%`;
 }
 
-function dateKey(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function recentUpdateClassName(value: string | null) {
-  const updatedAt = parseLocalDateTime(value);
-  if (updatedAt === null) {
-    return undefined;
-  }
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  const updatedKey = dateKey(updatedAt);
-  if (updatedKey === dateKey(today)) {
-    return "recent-update recent-update-today";
-  }
-  if (updatedKey === dateKey(yesterday)) {
-    return "recent-update recent-update-yesterday";
-  }
-  return "recent-update recent-update-stale";
+function statusTag(status: string) {
+  const color =
+    status === "success" ? "green" : status === "error" ? "red" : status === "running" ? "blue" : "default";
+  return <Tag color={color}>{status}</Tag>;
 }
 
 function formatSignalMetric(value: number | null | undefined) {
@@ -142,56 +66,44 @@ function formatSignalMetric(value: number | null | undefined) {
   return Number.isInteger(value) ? value.toString() : value.toFixed(3);
 }
 
-function parseBacktestStrategy(logs: string | null | undefined) {
-  const match = (logs ?? "").match(/strategy=([^,\]\s]+)/);
-  return match?.[1] ?? "-";
+function formatLocalDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function parseBacktestRange(logs: string | null | undefined) {
-  const match = (logs ?? "").match(/range=([^,\]\s]+)/);
-  return match?.[1] ?? "-";
+function resolveDefaultTushareEndDate() {
+  const now = new Date();
+  const endDate = new Date(now);
+  if (now.getHours() < 19) {
+    endDate.setDate(endDate.getDate() - 1);
+  }
+  return formatLocalDate(endDate);
 }
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>(
-    "data-assets",
-  );
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["key"]>("data-assets");
   const [health, setHealth] = useState<HealthState | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
-  const [datasets, setDatasets] = useState<StockDatasetOverview[]>([]);
-  const [datasetsLoading, setDatasetsLoading] = useState(false);
-  const [martDatasets, setMartDatasets] = useState<MartDatasetOverview[]>([]);
-  const [martDatasetsLoading, setMartDatasetsLoading] = useState(false);
-  const [martRefreshing, setMartRefreshing] = useState(false);
-  const [activeDataAssetSubTab, setActiveDataAssetSubTab] = useState("source");
-  const [sourceUpdateTask, setSourceUpdateTask] = useState<DataAssetTask | null>(
-    null,
-  );
-  const [sourceUpdateModalOpen, setSourceUpdateModalOpen] = useState(false);
-  const [sourceUpdateStopping, setSourceUpdateStopping] = useState(false);
-  const [sourceUpdateTargetDate, setSourceUpdateTargetDate] = useState(
-    defaultTargetDate,
-  );
-  const [selectedSourceTables, setSelectedSourceTables] = useState<string[]>(
-    dailyRecommendedSourceTables,
-  );
-  const sourceUpdateRunning = sourceUpdateTask?.status === "running";
+  const [tushareWatermarks, setTushareWatermarks] = useState<TushareAssetWatermark[]>([]);
+  const [tushareWatermarksLoading, setTushareWatermarksLoading] = useState(false);
+  const [tushareRefreshTask, setTushareRefreshTask] = useState<TushareRefreshTask | null>(null);
+  const [tushareRefreshStarting, setTushareRefreshStarting] = useState(false);
+  const [tushareRefreshEndDate, setTushareRefreshEndDate] = useState(resolveDefaultTushareEndDate);
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
   const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
-  const [dailySignalResult, setDailySignalResult] =
-    useState<DailySignalResult | null>(null);
-  const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>(
-    {},
-  );
+  const [dailySignalResult, setDailySignalResult] = useState<DailySignalResult | null>(null);
+  const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>({});
   const [stockContextsLoading, setStockContextsLoading] = useState(false);
   const [selectedSignalCode, setSelectedSignalCode] = useState<string | null>(null);
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
-  const [backtestEndDate, setBacktestEndDate] = useState("2026-05-13");
+  const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
   const [backtestInitialCash, setBacktestInitialCash] = useState(100000);
   const [backtestStrategy, setBacktestStrategy] = useState("demo");
-  const [backtestTask, setBacktestTask] = useState<DataAssetTask | null>(null);
-  const [backtestTasks, setBacktestTasks] = useState<DataAssetTask[]>([]);
+  const [backtestTask, setBacktestTask] = useState<BacktestTask | null>(null);
+  const [backtestTasks, setBacktestTasks] = useState<BacktestTask[]>([]);
   const [backtestTasksLoading, setBacktestTasksLoading] = useState(false);
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestModalOpen, setBacktestModalOpen] = useState(false);
@@ -209,16 +121,52 @@ export default function Home() {
     if (taskId !== null) {
       const parsedTaskId = Number(taskId);
       if (Number.isFinite(parsedTaskId)) {
-        getBacktestTask(parsedTaskId)
-          .then(setBacktestTask)
-          .catch(() => undefined);
+        getBacktestTask(parsedTaskId).then(setBacktestTask).catch(() => undefined);
       }
     }
   }, []);
 
+  async function fetchTushareWatermarks() {
+    setTushareWatermarksLoading(true);
+    try {
+      setTushareWatermarks(await listTushareWatermarks());
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "水位查询失败");
+    } finally {
+      setTushareWatermarksLoading(false);
+    }
+  }
+
+  async function fetchLatestTushareRefreshTask() {
+    try {
+      setTushareRefreshTask(await getTushareRefreshTask());
+    } catch {
+      setTushareRefreshTask(null);
+    }
+  }
+
+  async function requestTushareRefresh() {
+    if (!tushareRefreshEndDate) {
+      messageApi.warning("请选择截止日期");
+      return;
+    }
+    setTushareRefreshStarting(true);
+    try {
+      const result = await startTushareRefresh({ end_date: tushareRefreshEndDate });
+      messageApi.info(result.message);
+      if (result.task_id !== null) {
+        setTushareRefreshTask(await getTushareRefreshTask(result.task_id));
+      }
+      await fetchTushareWatermarks();
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "启动刷新失败");
+    } finally {
+      setTushareRefreshStarting(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
-
     async function fetchHealth() {
       try {
         const data = await getHealth();
@@ -233,120 +181,19 @@ export default function Home() {
         }
       }
     }
-
     fetchHealth();
     const timer = window.setInterval(fetchHealth, 10000);
-
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, []);
 
-  async function fetchStockDataAssets() {
-    setDatasetsLoading(true);
-    try {
-      const data = await getStockDataAssetSummary();
-      setDatasets(data.datasets);
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "刷新失败");
-    } finally {
-      setDatasetsLoading(false);
-    }
-  }
-
-  async function fetchMartDataAssets() {
-    setMartDatasetsLoading(true);
-    try {
-      const data = await getMartDataAssetSummary();
-      setMartDatasets(data.datasets);
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "刷新失败");
-    } finally {
-      setMartDatasetsLoading(false);
-    }
-  }
-
-  async function refreshMartDatasets() {
-    setMartRefreshing(true);
-    try {
-      const data = await refreshMartDataAssets();
-      messageApi.success(data.message);
-      await fetchMartDataAssets();
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "更新失败");
-    } finally {
-      setMartRefreshing(false);
-    }
-  }
-
-  async function requestRefresh() {
-    if (sourceUpdateRunning) {
-      setSourceUpdateModalOpen(true);
-      return;
-    }
-    const enabledSelectedSourceTables = selectedSourceTables.filter((datasetName) =>
-      maintainedSourceTables.has(datasetName),
-    );
-    if (enabledSelectedSourceTables.length === 0) {
-      messageApi.warning("请选择至少一个 source 表");
-      return;
-    }
-
-    try {
-      const data = await requestStockDataAssetRefresh(
-        enabledSelectedSourceTables,
-        sourceUpdateTargetDate,
-      );
-      messageApi.info(data.message);
-      if (data.task_id !== null) {
-        const task = await getSourceUpdateTask(data.task_id);
-        setSourceUpdateTask(task);
-        setSourceUpdateModalOpen(true);
-      }
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "更新请求失败");
-    }
-  }
-
-  function toggleSourceTable(datasetName: string, checked: boolean) {
-    if (!maintainedSourceTables.has(datasetName)) {
-      return;
-    }
-    setSelectedSourceTables((current) => {
-      if (checked) {
-        return current.includes(datasetName)
-          ? current
-          : [...current, datasetName];
-      }
-      return current.filter((name) => name !== datasetName);
-    });
-  }
-
-  async function stopRefresh() {
-    if (sourceUpdateTask?.id == null || !sourceUpdateRunning) {
-      return;
-    }
-
-    setSourceUpdateStopping(true);
-    try {
-      const task = await stopSourceUpdateTask(sourceUpdateTask.id);
-      setSourceUpdateTask(task);
-      messageApi.warning("更新任务已停止");
-      fetchStockDataAssets();
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "停止任务失败");
-    } finally {
-      setSourceUpdateStopping(false);
-    }
-  }
-
   async function fetchDailySignals() {
     if (dailySignalDate === null) {
       messageApi.warning("请选择交易日期");
       return;
     }
-
     setDailySignalLoading(true);
     setStockContexts({});
     setSelectedSignalCode(null);
@@ -362,18 +209,10 @@ export default function Home() {
         setSelectedSignalCode(codes[0]);
         setStockContextsLoading(true);
         try {
-          const contextResult = await getStockDataContexts({
-            codes,
-          });
-          setStockContexts(
-            Object.fromEntries(
-              contextResult.contexts.map((context) => [context.code, context]),
-            ),
-          );
+          const contextResult = await getStockDataContexts({ codes });
+          setStockContexts(Object.fromEntries(contextResult.contexts.map((context) => [context.code, context])));
         } catch (error) {
-          messageApi.error(
-            error instanceof Error ? error.message : "股票上下文加载失败",
-          );
+          messageApi.error(error instanceof Error ? error.message : "股票上下文加载失败");
         } finally {
           setStockContextsLoading(false);
         }
@@ -407,10 +246,9 @@ export default function Home() {
       return;
     }
     if (backtestInitialCash <= 0) {
-      messageApi.warning("初始仓位必须大于 0");
+      messageApi.warning("初始资金必须大于 0");
       return;
     }
-
     setBacktestLoading(true);
     try {
       const data = await runBacktest({
@@ -432,87 +270,52 @@ export default function Home() {
   }
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function fetchRunningSourceUpdateTask() {
-      try {
-        const task = await getSourceUpdateTask();
-        if (!cancelled && task.status === "running") {
-          setSourceUpdateTask(task);
-          setSourceUpdateModalOpen(true);
-        }
-      } catch {
-        // No previous source_update task exists yet.
-      }
-    }
-
-    fetchRunningSourceUpdateTask();
-
-    return () => {
-      cancelled = true;
-    };
+    fetchBacktestTasks();
   }, []);
 
   useEffect(() => {
-    if (
-      !sourceUpdateModalOpen ||
-      sourceUpdateTask?.id == null ||
-      !sourceUpdateRunning
-    ) {
+    fetchTushareWatermarks();
+    fetchLatestTushareRefreshTask();
+  }, []);
+
+  useEffect(() => {
+    if (tushareRefreshTask?.status !== "running") {
       return undefined;
     }
-
+    const taskId = tushareRefreshTask.id;
     let cancelled = false;
-    const taskId = sourceUpdateTask.id;
-
-    async function pollTask() {
+    async function pollTushareRefresh() {
       try {
-        const task = await getSourceUpdateTask(taskId);
+        const task = await getTushareRefreshTask(taskId);
         if (!cancelled) {
-          setSourceUpdateTask(task);
-          if (task.status !== "running") {
-            fetchStockDataAssets();
-          }
+          setTushareRefreshTask(task);
+          await fetchTushareWatermarks();
         }
       } catch (error) {
         if (!cancelled) {
-          messageApi.error(error instanceof Error ? error.message : "任务查询失败");
+          messageApi.error(error instanceof Error ? error.message : "刷新任务查询失败");
         }
       }
     }
-
-    const timer = window.setInterval(pollTask, 2000);
+    const timer = window.setInterval(pollTushareRefresh, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [
-    messageApi,
-    sourceUpdateModalOpen,
-    sourceUpdateTask?.id,
-    sourceUpdateRunning,
-  ]);
-
-  useEffect(() => {
-    fetchBacktestTasks();
-  }, []);
+  }, [messageApi, tushareRefreshTask?.id, tushareRefreshTask?.status]);
 
   useEffect(() => {
     if (!backtestModalOpen || backtestTask?.id == null || !backtestRunning) {
       return undefined;
     }
-
     let cancelled = false;
     const taskId = backtestTask.id;
-
     async function pollBacktestTask() {
       try {
         const task = await getBacktestTask(taskId);
         if (!cancelled) {
           setBacktestTask(task);
-          setBacktestTasks((tasks) =>
-            tasks.map((item) => (item.id === task.id ? task : item)),
-          );
+          setBacktestTasks((tasks) => tasks.map((item) => (item.id === task.id ? task : item)));
           if (task.status !== "running") {
             fetchBacktestTasks();
           }
@@ -523,7 +326,6 @@ export default function Home() {
         }
       }
     }
-
     const timer = window.setInterval(pollBacktestTask, 2000);
     return () => {
       cancelled = true;
@@ -531,161 +333,90 @@ export default function Home() {
     };
   }, [backtestModalOpen, backtestRunning, backtestTask?.id, messageApi]);
 
-  useEffect(() => {
-    if (activeTab === "data-assets" && activeDataAssetSubTab === "source") {
-      fetchStockDataAssets();
-    }
-    if (activeTab === "data-assets" && activeDataAssetSubTab === "mart") {
-      fetchMartDataAssets();
-    }
-  }, [activeTab, activeDataAssetSubTab]);
-
   const activeSubTabs = useMemo(() => subTabs[activeTab], [activeTab]);
 
-  const dataAssetColumns: ColumnsType<StockDatasetOverview> = [
+  const tushareWatermarkColumns: ColumnsType<TushareAssetWatermark> = [
     {
-      dataIndex: "dataset_name",
-      fixed: "left",
-      title: "数据集",
-      width: 190,
+      dataIndex: "asset_table_name",
+      title: "资产表名",
+      width: 220,
     },
     {
-      dataIndex: "enabled",
-      fixed: "left",
-      render: (enabled: boolean) =>
-        enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
-      title: "启用",
+      dataIndex: "earliest_trusted_watermark",
+      title: "Earliest Trusted",
+      width: 170,
+      render: (value: string | null) => value ?? "-",
+    },
+    {
+      dataIndex: "trusted_watermark",
+      title: "最新可信水位",
+      width: 180,
+    },
+    {
+      dataIndex: "issue_count",
+      title: "Issues",
       width: 90,
     },
     {
-      dataIndex: "status",
-      fixed: "left",
-      render: (status: string) => {
-        const color =
-          status === "ok"
-            ? "green"
-            : status === "warning"
-              ? "orange"
-              : status === "unknown" || status === "empty"
-                ? "default"
-                : "red";
-        return <Tag color={color}>{status}</Tag>;
-      },
-      title: "状态",
-      width: 140,
-    },
-    {
-      dataIndex: "watermark",
-      render: (value: string | null) => formatDateTime(value),
-      title: "水位",
-      width: 140,
-    },
-    {
-      dataIndex: "actual_max_date",
-      render: (value: string | null) => formatDateTime(value),
-      title: "真实最大日期",
+      dataIndex: "last_issue_scope",
+      title: "Last Scope",
       width: 160,
-    },
-    {
-      dataIndex: "updated_at",
-      render: (value: string | null) => (
-        <span className={recentUpdateClassName(value)}>{formatDateTime(value)}</span>
-      ),
-      title: "最近更新",
-      width: 210,
-    },
-    {
-      dataIndex: "latest_validation_at",
-      render: (value: string | null) => formatDateTime(value),
-      title: "最近校验",
-      width: 210,
-    },
-    {
-      dataIndex: "validation_failed_count",
-      render: (value: number) =>
-        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
-      title: "校验失败",
-      width: 110,
-    },
-    {
-      dataIndex: "latest_chunk_status",
       render: (value: string | null) => value ?? "-",
-      title: "最近分片",
-      width: 120,
     },
     {
-      dataIndex: "chunk_failed_count",
-      render: (value: number) =>
-        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
-      title: "失败分片",
-      width: 110,
-    },
-    {
-      dataIndex: "open_repair_count",
-      render: (value: number) =>
-        value > 0 ? <Tag color="orange">{value}</Tag> : <Tag>0</Tag>,
-      title: "待修复",
-      width: 100,
-    },
-    {
-      dataIndex: "endpoint",
-      title: "接口",
-      width: 173,
-    },
-    {
-      align: "right",
-      dataIndex: "row_count",
-      render: (value: number | null) => value?.toLocaleString() ?? "-",
-      title: "行数",
-      width: 130,
+      dataIndex: "last_issue_message",
+      title: "Last Issue",
+      width: 280,
+      render: (value: string | null) => value ?? "-",
     },
   ];
 
-  const backtestTaskColumns: ColumnsType<DataAssetTask> = [
+  const backtestTaskColumns: ColumnsType<BacktestTask> = [
+    { dataIndex: "id", title: "任务 ID", width: 90 },
+    { dataIndex: "strategy_name", title: "策略", width: 120 },
     {
-      dataIndex: "id",
-      title: "任务 ID",
-      width: 100,
-    },
-    {
-      render: (_value, record) => parseBacktestStrategy(record.logs),
-      title: "策略",
-      width: 120,
-    },
-    {
-      render: (_value, record) => parseBacktestRange(record.logs),
+      render: (_value, record) => `${record.start_date} -> ${record.end_date}`,
       title: "周期",
       width: 220,
     },
     {
       dataIndex: "status",
-      render: (status: DataAssetTask["status"]) => (
-        <Tag
-          color={
-            status === "success"
-              ? "green"
-              : status === "error"
-                ? "red"
-                : status === "running"
-                  ? "blue"
-                  : "default"
-          }
-        >
-          {status}
-        </Tag>
-      ),
+      render: (status: string) => statusTag(status),
       title: "状态",
+      width: 100,
+    },
+    {
+      render: (_value, record) => `${record.completed_runs}/${record.simulation_runs}`,
+      title: "完成轮次",
       width: 110,
     },
     {
-      dataIndex: "created_at",
-      render: (value: string | null | undefined) => formatDateTime(value ?? null),
-      title: "创建时间",
-      width: 180,
+      dataIndex: "trading_day_count",
+      render: (value: number | null) => value ?? "-",
+      title: "交易日",
+      width: 90,
+    },
+    {
+      dataIndex: "signal_count",
+      render: (value: number | null) => value ?? "-",
+      title: "信号数",
+      width: 90,
+    },
+    {
+      dataIndex: "final_return_avg",
+      render: (value: number | null) => formatReturn(value),
+      title: "平均最终收益率",
+      width: 140,
+    },
+    {
+      dataIndex: "final_asset_avg",
+      render: (value: number | null) => formatNumber(value),
+      title: "平均最终资产",
+      width: 140,
     },
     {
       dataIndex: "updated_at",
-      render: (value: string | null | undefined) => formatDateTime(value ?? null),
+      render: (value: string | null) => formatDateTime(value),
       title: "更新时间",
       width: 180,
     },
@@ -720,170 +451,40 @@ export default function Home() {
     },
   ];
 
-  const martDataAssetColumns: ColumnsType<MartDatasetOverview> = [
+  const dailySignalColumns: ColumnsType<DailySignalItem> = [
+    { dataIndex: "code", title: "代码", width: 120 },
+    { dataIndex: "code_name", title: "名称", width: 120 },
     {
-      dataIndex: "dataset_name",
-      fixed: "left",
-      title: "数据集",
-      width: 190,
-    },
-    {
-      dataIndex: "table_type",
-      render: (value: string) => (
-        <Tag color={value === "BASE TABLE" ? "blue" : "purple"}>{value}</Tag>
-      ),
-      title: "类型",
+      render: (_value, record) => formatSignalMetric(record.signal?.ideal_buy_price),
+      title: "理想买入价",
       width: 120,
     },
     {
-      dataIndex: "enabled",
-      render: (enabled: boolean) =>
-        enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
-      title: "启用",
-      width: 90,
-    },
-    {
-      dataIndex: "status",
-      render: (status: string) => {
-        const color =
-          status === "ok"
-            ? "green"
-            : status === "warning"
-              ? "orange"
-              : status === "unknown" || status === "empty"
-                ? "default"
-                : "red";
-        return <Tag color={color}>{status}</Tag>;
-      },
-      title: "状态",
-      width: 140,
-    },
-    {
-      dataIndex: "watermark",
-      render: (value: string | null) => formatDateTime(value),
-      title: "水位",
-      width: 140,
-    },
-    {
-      dataIndex: "actual_max_date",
-      render: (value: string | null) => formatDateTime(value),
-      title: "真实最大日期",
-      width: 160,
-    },
-    {
-      dataIndex: "updated_at",
-      render: (value: string | null) => (
-        <span className={recentUpdateClassName(value)}>{formatDateTime(value)}</span>
-      ),
-      title: "最近更新",
-      width: 210,
-    },
-    {
-      dataIndex: "latest_validation_at",
-      render: (value: string | null) => formatDateTime(value),
-      title: "最近校验",
-      width: 210,
-    },
-    {
-      dataIndex: "validation_failed_count",
-      render: (value: number) =>
-        value > 0 ? <Tag color="red">{value}</Tag> : <Tag>0</Tag>,
-      title: "校验失败",
-      width: 110,
-    },
-    {
-      align: "right",
-      dataIndex: "row_count",
-      render: (value: number | null) => value?.toLocaleString() ?? "-",
-      title: "行数",
-      width: 130,
+      render: (_value, record) => formatSignalMetric(record.signal?.min_stop_loss),
+      title: "止损价",
+      width: 120,
     },
   ];
 
-  const dailySignalColumns: ColumnsType<DailySignalItem> = [
-    {
-      dataIndex: "code",
-      fixed: "left",
-      title: "代码",
-      width: 140,
-    },
-    {
-      dataIndex: "code_name",
-      render: (value: string | null) => value ?? "-",
-      title: "名称",
-      width: 160,
-    },
-    {
-      dataIndex: "trade_date",
-      title: "交易日",
-      width: 140,
-    },
-  ];
+  const selectedSignal = dailySignalResult?.signals.find((item) => item.code === selectedSignalCode) ?? null;
+  const selectedStockContext = selectedSignalCode === null ? null : stockContexts[selectedSignalCode] ?? null;
+  const selectedSignalMetrics: [string, number | null | undefined][] =
+    selectedSignal === null
+      ? []
+      : [
+          ["止损价", selectedSignal.signal?.min_stop_loss],
+          ["参考止盈价", selectedSignal.signal?.reference_take_profit],
+          ["信号 ATR30", selectedSignal.signal?.signal_atr30],
+          ["理想买入价", selectedSignal.signal?.ideal_buy_price],
+          ["最长观察期", selectedSignal.signal?.max_watch_days],
+        ];
 
-  const selectedStockContext =
-    selectedSignalCode === null ? null : stockContexts[selectedSignalCode] ?? null;
-  const selectedSignal = dailySignalResult?.signals.find(
-    (item) => item.code === selectedSignalCode,
-  );
-  const selectedSignalMetrics: [string, number | null | undefined][] = selectedSignal?.signal
-    ? [
-        ["最低止损", selectedSignal.signal.min_stop_loss],
-        ["参考止盈", selectedSignal.signal.reference_take_profit],
-        ["信号 ATR30", selectedSignal.signal.signal_atr30],
-        ["理想买入价", selectedSignal.signal.ideal_buy_price],
-        ["最长观望", selectedSignal.signal.max_watch_days],
-      ]
-    : [];
   return (
     <main className="app-shell">
       {contextHolder}
       <Modal
         footer={[
-          <Button
-            danger
-            disabled={!sourceUpdateRunning}
-            key="stop"
-            loading={sourceUpdateStopping}
-            onClick={stopRefresh}
-          >
-            停止
-          </Button>,
-          <Button
-            key="close"
-            onClick={() => setSourceUpdateModalOpen(false)}
-            type="primary"
-          >
-            关闭
-          </Button>,
-        ]}
-        open={sourceUpdateModalOpen}
-        title="source_update 更新任务"
-        width={760}
-        onCancel={() => setSourceUpdateModalOpen(false)}
-      >
-        <div className="task-modal-header">
-          <span>任务 ID: {sourceUpdateTask?.id ?? "-"}</span>
-          <Tag
-            color={
-              sourceUpdateTask?.status === "success"
-                ? "green"
-                : sourceUpdateTask?.status === "error"
-                  ? "red"
-                  : "blue"
-            }
-          >
-            {sourceUpdateTask?.status ?? "unknown"}
-          </Tag>
-        </div>
-        <pre className="task-log">{sourceUpdateTask?.logs || "等待任务日志..."}</pre>
-      </Modal>
-      <Modal
-        footer={[
-          <Button
-            key="close"
-            onClick={() => setBacktestModalOpen(false)}
-            type="primary"
-          >
+          <Button key="close" onClick={() => setBacktestModalOpen(false)} type="primary">
             关闭
           </Button>,
         ]}
@@ -894,17 +495,7 @@ export default function Home() {
       >
         <div className="task-modal-header">
           <span>任务 ID: {backtestTask?.id ?? "-"}</span>
-          <Tag
-            color={
-              backtestTask?.status === "success"
-                ? "green"
-                : backtestTask?.status === "error"
-                  ? "red"
-                  : "blue"
-            }
-          >
-            {backtestTask?.status ?? "unknown"}
-          </Tag>
+          {statusTag(backtestTask?.status ?? "unknown")}
         </div>
         <pre className="task-log">{backtestTask?.logs || "等待任务日志..."}</pre>
       </Modal>
@@ -939,13 +530,11 @@ export default function Home() {
             />
           </label>
           <label className="form-field">
-            <span>初始仓位</span>
+            <span>初始资金</span>
             <InputNumber
               disabled={backtestLoading}
               min={1}
-              onChange={(value) =>
-                setBacktestInitialCash(typeof value === "number" ? value : 100000)
-              }
+              onChange={(value) => setBacktestInitialCash(typeof value === "number" ? value : 100000)}
               precision={2}
               style={{ width: "100%" }}
               value={backtestInitialCash}
@@ -953,12 +542,7 @@ export default function Home() {
           </label>
           <label className="form-field">
             <span>策略</span>
-            <Select
-              disabled={backtestLoading}
-              options={strategyOptions}
-              value={backtestStrategy}
-              onChange={setBacktestStrategy}
-            />
+            <Select disabled={backtestLoading} options={strategyOptions} value={backtestStrategy} onChange={setBacktestStrategy} />
           </label>
         </div>
       </Modal>
@@ -970,43 +554,20 @@ export default function Home() {
             <div className="brand-subtitle">A股交易工作台</div>
           </div>
         </div>
-
         <nav className="nav">
           {tabs.map((tab) => (
-            <button
-              className={tab.key === activeTab ? "nav-item active" : "nav-item"}
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              type="button"
-            >
+            <button className={tab.key === activeTab ? "nav-item active" : "nav-item"} key={tab.key} onClick={() => setActiveTab(tab.key)} type="button">
               {tab.label}
             </button>
           ))}
         </nav>
       </aside>
-
       <section className="workspace">
         <header className="topbar">
           <div className="topbar-title">
-            <Tabs
-              activeKey={
-                activeTab === "data-assets"
-                  ? activeDataAssetSubTab
-                  : activeSubTabs[0].key
-              }
-              className="header-tabs"
-              items={activeSubTabs}
-              onChange={(key) => {
-                if (activeTab === "data-assets") {
-                  setActiveDataAssetSubTab(key);
-                }
-              }}
-            />
+            <Tabs activeKey={activeSubTabs[0].key} className="header-tabs" items={activeSubTabs} />
           </div>
-          <div
-            className={health?.status === "ok" ? "health ok" : "health error"}
-            title={health?.checked_at ?? healthError ?? "未连接"}
-          >
+          <div className={health?.status === "ok" ? "health ok" : "health error"} title={health?.checked_at ?? healthError ?? "未连接"}>
             <span className="health-dot" />
             <span>{health?.status === "ok" ? "Backend OK" : "Backend Down"}</span>
           </div>
@@ -1014,121 +575,50 @@ export default function Home() {
 
         {activeTab === "data-assets" ? (
           <section className="content-panel">
-            {activeDataAssetSubTab === "source" ? (
-              <div className="table-panel">
-                <div className="table-toolbar">
-                  <div className="placeholder-title">源数据总览</div>
-                  <Space>
-                    <input
-                      className="target-date-input"
-                      disabled={sourceUpdateRunning}
-                      onChange={(event) => setSourceUpdateTargetDate(event.target.value)}
-                      title="source_update target date"
-                      type="date"
-                      value={sourceUpdateTargetDate}
-                    />
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={datasetsLoading}
-                      onClick={fetchStockDataAssets}
-                    >
-                      刷新
-                    </Button>
-                    <Button
-                      icon={<SyncOutlined />}
-                      onClick={requestRefresh}
-                      type="primary"
-                    >
-                      更新
-                    </Button>
-                  </Space>
-                </div>
-                <div className="source-table-picker">
-                  <div className="source-table-group">
-                    <span className="source-table-group-label">日频推荐</span>
-                    {dailyRecommendedSourceTables.map((datasetName) => (
-                      <label className="source-table-option" key={datasetName}>
-                        <input
-                          checked={selectedSourceTables.includes(datasetName)}
-                          disabled={sourceUpdateRunning}
-                          onChange={(event) =>
-                            toggleSourceTable(datasetName, event.target.checked)
-                          }
-                          type="checkbox"
-                        />
-                        <span>{datasetName}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="source-table-group">
-                    <span className="source-table-group-label">周频推荐</span>
-                    {weeklyRecommendedSourceTables.map((datasetName) => (
-                      <label
-                        className="source-table-option source-table-option-disabled"
-                        key={datasetName}
-                      >
-                        <input
-                          checked={false}
-                          disabled
-                          onChange={(event) =>
-                            toggleSourceTable(datasetName, event.target.checked)
-                          }
-                          type="checkbox"
-                        />
-                        <span>{datasetName}</span>
-                      </label>
-                    ))}
+            <div className="table-panel">
+              <div className="table-toolbar">
+                <div>
+                  <div className="placeholder-title">Tushare 数据资产</div>
+                  <div className="panel-subtitle">
+                    当前资产刷新按水位顺序轮转；每次接口成功后立即推进对应表水位。
                   </div>
                 </div>
-                <Table
-                  columns={dataAssetColumns}
-                  dataSource={datasets}
-                  loading={datasetsLoading}
-                  pagination={false}
-                  rowClassName={(record) =>
-                    record.enabled ? "" : "disabled-asset-row"
-                  }
-                  rowKey="dataset_name"
-                  scroll={{ x: 1733 }}
-                  size="middle"
-                />
+                <Space>
+                  <input
+                    className="target-date-input"
+                    disabled={tushareRefreshStarting || tushareRefreshTask?.status === "running"}
+                    onChange={(event) => setTushareRefreshEndDate(event.target.value)}
+                    type="date"
+                    value={tushareRefreshEndDate}
+                  />
+                  <Button icon={<ReloadOutlined />} loading={tushareWatermarksLoading} onClick={fetchTushareWatermarks}>
+                    刷新水位
+                  </Button>
+                  <Button
+                    loading={tushareRefreshStarting || tushareRefreshTask?.status === "running"}
+                    onClick={requestTushareRefresh}
+                    type="primary"
+                  >
+                    启动更新
+                  </Button>
+                </Space>
               </div>
-            ) : (
-              <div className="table-panel">
-                <div className="table-toolbar">
-                  <div className="placeholder-title">后处理数据总览</div>
-                  <Space>
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={martDatasetsLoading}
-                      onClick={fetchMartDataAssets}
-                    >
-                      刷新
-                    </Button>
-                    <Button
-                      icon={<SyncOutlined />}
-                      loading={martRefreshing}
-                      onClick={refreshMartDatasets}
-                      type="primary"
-                    >
-                      更新
-                    </Button>
-                  </Space>
-                </div>
-                <Table
-                  columns={martDataAssetColumns}
-                  dataSource={martDatasets}
-                  loading={martDatasetsLoading || martRefreshing}
-                  pagination={false}
-                  rowClassName={(record) =>
-                    record.enabled ? "" : "disabled-asset-row"
-                  }
-                  rowKey="dataset_name"
-                  scroll={{ x: 1410 }}
-                  size="middle"
-                />
+              <Table
+                columns={tushareWatermarkColumns}
+                dataSource={tushareWatermarks}
+                loading={tushareWatermarksLoading}
+                pagination={false}
+                rowKey="asset_table_name"
+                size="middle"
+              />
+              <div className="backtest-summary">
+                {tushareRefreshTask ? statusTag(tushareRefreshTask.status) : <Tag>no task</Tag>}
+                <span>任务 ID: {tushareRefreshTask?.id ?? "-"}</span>
+                <span>当前资产: {tushareRefreshTask?.current_asset_table_name ?? "-"}</span>
+                <span>当前水位: {tushareRefreshTask?.current_watermark ?? "-"}</span>
               </div>
-            )}
+              <pre className="task-log">{tushareRefreshTask?.logs || "暂无刷新日志"}</pre>
+            </div>
           </section>
         ) : activeTab === "daily-signals" ? (
           <section className="content-panel">
@@ -1137,33 +627,14 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">当日信号</div>
                   <div className="panel-subtitle">
-                    universe: {dailySignalResult?.universe_count ?? "-"} / signals:{" "}
-                    {dailySignalResult?.signal_count ?? "-"} / contexts:{" "}
+                    universe: {dailySignalResult?.universe_count ?? "-"} / signals: {dailySignalResult?.signal_count ?? "-"} / contexts:{" "}
                     {Object.keys(stockContexts).length || "-"}
                   </div>
                 </div>
                 <Space>
-                  <DatePicker
-                    onChange={(_, dateString) =>
-                      setDailySignalDate(
-                        typeof dateString === "string" && dateString.length > 0
-                          ? dateString
-                          : null,
-                      )
-                    }
-                    placeholder="选择交易日"
-                  />
-                  <Select
-                    options={strategyOptions}
-                    value={dailySignalStrategy}
-                    onChange={setDailySignalStrategy}
-                    style={{ width: 140 }}
-                  />
-                  <Button
-                    loading={dailySignalLoading || stockContextsLoading}
-                    onClick={fetchDailySignals}
-                    type="primary"
-                  >
+                  <DatePicker onChange={(_, dateString) => setDailySignalDate(typeof dateString === "string" && dateString.length > 0 ? dateString : null)} placeholder="选择交易日" />
+                  <Select options={strategyOptions} value={dailySignalStrategy} onChange={setDailySignalStrategy} style={{ width: 140 }} />
+                  <Button loading={dailySignalLoading || stockContextsLoading} onClick={fetchDailySignals} type="primary">
                     获取当日信号
                   </Button>
                 </Space>
@@ -1174,13 +645,9 @@ export default function Home() {
                     columns={dailySignalColumns}
                     dataSource={dailySignalResult?.signals ?? []}
                     loading={dailySignalLoading || stockContextsLoading}
-                    onRow={(record) => ({
-                      onClick: () => setSelectedSignalCode(record.code),
-                    })}
+                    onRow={(record) => ({ onClick: () => setSelectedSignalCode(record.code) })}
                     pagination={{ pageSize: 30, showSizeChanger: true }}
-                    rowClassName={(record) =>
-                      record.code === selectedSignalCode ? "selected-row" : ""
-                    }
+                    rowClassName={(record) => (record.code === selectedSignalCode ? "selected-row" : "")}
                     rowKey="code"
                     scroll={{ x: 440, y: 560 }}
                     size="small"
@@ -1188,12 +655,8 @@ export default function Home() {
                 </div>
                 <div className="signal-charts">
                   <div className="chart-header">
-                    <div className="placeholder-title">
-                      {selectedSignalCode ?? "未选择股票"}
-                    </div>
-                    <div className="panel-subtitle">
-                      {selectedSignal?.code_name ?? "从左侧列表选择一只股票"}
-                    </div>
+                    <div className="placeholder-title">{selectedSignalCode ?? "未选择股票"}</div>
+                    <div className="panel-subtitle">{selectedSignal?.code_name ?? "从左侧列表选择一只股票"}</div>
                   </div>
                   {selectedSignalMetrics.length > 0 ? (
                     <div className="signal-metrics">
@@ -1205,11 +668,7 @@ export default function Home() {
                       ))}
                     </div>
                   ) : null}
-                  {selectedStockContext === null ? (
-                    <div className="empty-chart">暂无可渲染的股票上下文</div>
-                  ) : (
-                    <StockContextCharts context={selectedStockContext} />
-                  )}
+                  {selectedStockContext === null ? <div className="empty-chart">暂无可渲染的股票上下文</div> : <StockContextCharts context={selectedStockContext} />}
                 </div>
               </div>
             </div>
@@ -1220,19 +679,13 @@ export default function Home() {
               <div className="table-toolbar">
                 <div>
                   <div className="placeholder-title">回测统计</div>
-                  <div className="panel-subtitle">
-                    回测任务允许重复创建，列表按任务 ID 倒序展示；详情入口会携带 task_id。
-                  </div>
+                  <div className="panel-subtitle">回测任务已使用独立任务表，列表直接展示结构化统计字段。</div>
                 </div>
                 <Space>
                   <Button icon={<ReloadOutlined />} onClick={fetchBacktestTasks}>
                     刷新
                   </Button>
-                  <Button
-                    loading={backtestLoading}
-                    onClick={() => setBacktestCreateModalOpen(true)}
-                    type="primary"
-                  >
+                  <Button loading={backtestLoading} onClick={() => setBacktestCreateModalOpen(true)} type="primary">
                     新建回测
                   </Button>
                 </Space>
@@ -1243,94 +696,9 @@ export default function Home() {
                 loading={backtestTasksLoading}
                 pagination={{ pageSize: 20, showSizeChanger: true }}
                 rowKey={(record) => String(record.id)}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1500, y: "calc(100vh - 270px)" }}
                 size="middle"
               />
-            </div>
-          </section>
-        ) : false && activeTab === "backtest-stats" ? (
-          <section className="content-panel">
-            <div className="backtest-panel">
-              <div className="table-toolbar">
-                <div>
-                  <div className="placeholder-title">回测统计</div>
-                  <div className="panel-subtitle">
-                    创建允许重复的回测任务，预计算一次信号后固定执行 50 轮随机撮合，订单和快照用 run_no 区分。
-                  </div>
-                </div>
-                <Button
-                  loading={backtestLoading}
-                  onClick={requestBacktest}
-                  type="primary"
-                >
-                  {backtestRunning ? "查看任务" : "开始回测"}
-                </Button>
-              </div>
-              <div className="backtest-form">
-                <label className="form-field">
-                  <span>开始日期</span>
-                  <input
-                    className="target-date-input"
-                    disabled={backtestRunning || backtestLoading}
-                    onChange={(event) => setBacktestStartDate(event.target.value)}
-                    type="date"
-                    value={backtestStartDate}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>结束日期</span>
-                  <input
-                    className="target-date-input"
-                    disabled={backtestRunning || backtestLoading}
-                    onChange={(event) => setBacktestEndDate(event.target.value)}
-                    type="date"
-                    value={backtestEndDate}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>初始仓位</span>
-                  <InputNumber
-                    disabled={backtestRunning || backtestLoading}
-                    min={1}
-                    onChange={(value) =>
-                      setBacktestInitialCash(typeof value === "number" ? value : 100000)
-                    }
-                    precision={2}
-                    style={{ width: "100%" }}
-                    value={backtestInitialCash}
-                  />
-                </label>
-                <label className="form-field">
-                  <span>策略</span>
-                  <Select
-                    disabled={backtestRunning || backtestLoading}
-                    options={strategyOptions}
-                    value={backtestStrategy}
-                    onChange={setBacktestStrategy}
-                  />
-                </label>
-              </div>
-              <div className="backtest-summary">
-                <Tag
-                  color={
-                    backtestTask?.status === "success"
-                      ? "green"
-                      : backtestTask?.status === "error"
-                        ? "red"
-                        : backtestTask?.status === "running"
-                          ? "blue"
-                          : "default"
-                  }
-                >
-                  {backtestTask?.status ?? "no task"}
-                </Tag>
-                <span>最近任务 ID: {backtestTask?.id ?? "-"}</span>
-                {backtestTask?.id != null ? (
-                  <Button size="small" onClick={() => setBacktestModalOpen(true)}>
-                    查看日志
-                  </Button>
-                ) : null}
-              </div>
             </div>
           </section>
         ) : (
