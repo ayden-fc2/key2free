@@ -803,10 +803,13 @@ class TushareRepository:
             frame[f"avg_volume_{window}"] = avg_volume
             frame[f"volume_ratio_{window}"] = self._safe_divide_series(volume, avg_volume)
 
+        # 成交额对复权不变，成交量按复权比例折算成前复权股数，使 VWAP 落在前复权价格量纲上
+        adj_ratio = frame["adj_factor"].astype(float) / frame["latest_adj_factor"].astype(float)
+        qfq_volume = self._safe_divide_series(volume, adj_ratio)
         for window in (5, 14, 20, 30):
             amount_sum = amount.rolling(window=window, min_periods=window).sum()
-            volume_sum = volume.rolling(window=window, min_periods=window).sum()
-            frame[f"vwap_{window}"] = self._safe_divide_series(amount_sum * 1000.0, volume_sum * 100.0)
+            qfq_volume_sum = qfq_volume.rolling(window=window, min_periods=window).sum()
+            frame[f"vwap_{window}"] = self._safe_divide_series(amount_sum * 1000.0, qfq_volume_sum * 100.0)
 
         for window in (5, 10, 20, 30, 60, 120):
             ma = close.rolling(window=window, min_periods=window).mean()
@@ -845,8 +848,8 @@ class TushareRepository:
         for window in (5, 14, 20):
             avg_gain = gain.rolling(window=window, min_periods=window).mean()
             avg_loss = loss.rolling(window=window, min_periods=window).mean()
-            rs = self._safe_divide_series(avg_gain, avg_loss)
-            frame[f"rsi_{window}"] = 100.0 - (100.0 / (1.0 + rs))
+            # 等价于 100 - 100/(1+RS)，且窗口内无下跌日时正确得到 100 而不是 NaN
+            frame[f"rsi_{window}"] = 100.0 * self._safe_divide_series(avg_gain, avg_gain + avg_loss)
 
         for window in (5, 10, 20, 60, 120):
             frame[f"roc_{window}"] = self._safe_divide_series(close, close.shift(window)) - 1.0

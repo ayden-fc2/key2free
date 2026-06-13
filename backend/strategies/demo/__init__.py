@@ -1,15 +1,11 @@
 from .strategy import (
+    DEMO_REQUIRED_COLUMNS,
     demo_batch_signal_strategy,
-    demo_entry_strategy,
-    demo_exit_strategy,
-    demo_signal_strategy,
-    demo_universe_filter,
+    demo_code_filter,
 )
 
 __all__ = [
-    "demo_entry_strategy",
-    "demo_exit_strategy",
+    "DEMO_REQUIRED_COLUMNS",
     "demo_batch_signal_strategy",
-    "demo_signal_strategy",
-    "demo_universe_filter",
+    "demo_code_filter",
 ]

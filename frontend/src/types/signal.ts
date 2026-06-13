@@ -8,11 +8,11 @@ export type DailySignalItem = {
 
 export type SignalDecision = {
   triggered: boolean;
-  min_stop_loss: number | null;
-  reference_take_profit: number | null;
-  signal_atr30: number | null;
-  ideal_buy_price: number | null;
+  signal_close: number | null;
+  stop_losses: number[];
+  take_profits: number[];
   max_watch_days: number | null;
+  extras: Record<string, number | null> | null;
 };
 
 export type Bar1dQfq = {

@@ -5,10 +5,11 @@ import { Button, DatePicker, InputNumber, Modal, Select, Space, Table, Tabs, Tag
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined } from "@ant-design/icons";
 
+import { BacktestDetailModal } from "@/components/backtests/BacktestDetailModal";
 import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
 import { getHealth } from "@/lib/api/health";
-import { getDailySignals, getStockDataContexts } from "@/lib/api/signals";
+import { getDailySignals, getSignalStrategies, getStockDataContexts } from "@/lib/api/signals";
 import {
   getTushareRefreshTask,
   listTushareWatermarks,
@@ -34,7 +35,7 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
   strategies: [{ key: "placeholder", label: "占位" }],
 };
 
-const strategyOptions = [{ label: "demo", value: "demo" }];
+const DEFAULT_STRATEGY_OPTIONS = [{ label: "demo", value: "demo" }];
 
 function formatNumber(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -108,6 +109,17 @@ export default function Home() {
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestModalOpen, setBacktestModalOpen] = useState(false);
   const [backtestCreateModalOpen, setBacktestCreateModalOpen] = useState(false);
+  const [backtestDetailTaskId, setBacktestDetailTaskId] = useState<number | null>(null);
+  const [backtestDetailOpen, setBacktestDetailOpen] = useState(false);
+  const [strategyOptions, setStrategyOptions] = useState(DEFAULT_STRATEGY_OPTIONS);
+
+  useEffect(() => {
+    getSignalStrategies()
+      .then((data) =>
+        setStrategyOptions(data.strategies.map((name) => ({ label: name, value: name }))),
+      )
+      .catch(() => undefined);
+  }, []);
   const [messageApi, contextHolder] = message.useMessage();
   const backtestRunning = backtestTask?.status === "running";
 
@@ -122,6 +134,8 @@ export default function Home() {
       const parsedTaskId = Number(taskId);
       if (Number.isFinite(parsedTaskId)) {
         getBacktestTask(parsedTaskId).then(setBacktestTask).catch(() => undefined);
+        setBacktestDetailTaskId(parsedTaskId);
+        setBacktestDetailOpen(true);
       }
     }
   }, []);
@@ -409,6 +423,24 @@ export default function Home() {
       width: 140,
     },
     {
+      dataIndex: "annualized_return_avg",
+      render: (value: number | null) => formatReturn(value),
+      title: "平均年化收益率",
+      width: 140,
+    },
+    {
+      dataIndex: "trades_per_year_avg",
+      render: (value: number | null) => (value === null ? "-" : value.toFixed(1)),
+      title: "平均年交易次数",
+      width: 130,
+    },
+    {
+      dataIndex: "win_rate_avg",
+      render: (value: number | null) => formatReturn(value),
+      title: "平均胜率",
+      width: 100,
+    },
+    {
       dataIndex: "final_asset_avg",
       render: (value: number | null) => formatNumber(value),
       title: "平均最终资产",
@@ -434,11 +466,13 @@ export default function Home() {
             查看日志
           </Button>
           <Button
+            disabled={record.status === "running"}
             size="small"
             type="primary"
             onClick={() => {
               if (record.id != null) {
-                window.location.href = `/?tab=backtest-stats&task_id=${encodeURIComponent(record.id)}`;
+                setBacktestDetailTaskId(record.id);
+                setBacktestDetailOpen(true);
               }
             }}
           >
@@ -455,13 +489,13 @@ export default function Home() {
     { dataIndex: "code", title: "代码", width: 120 },
     { dataIndex: "code_name", title: "名称", width: 120 },
     {
-      render: (_value, record) => formatSignalMetric(record.signal?.ideal_buy_price),
-      title: "理想买入价",
+      render: (_value, record) => formatSignalMetric(record.signal?.signal_close),
+      title: "买入价(T收盘)",
       width: 120,
     },
     {
-      render: (_value, record) => formatSignalMetric(record.signal?.min_stop_loss),
-      title: "止损价",
+      render: (_value, record) => formatSignalMetric(record.signal?.stop_losses?.[0]),
+      title: "第一止损位",
       width: 120,
     },
   ];
@@ -472,16 +506,23 @@ export default function Home() {
     selectedSignal === null
       ? []
       : [
-          ["止损价", selectedSignal.signal?.min_stop_loss],
-          ["参考止盈价", selectedSignal.signal?.reference_take_profit],
-          ["信号 ATR30", selectedSignal.signal?.signal_atr30],
-          ["理想买入价", selectedSignal.signal?.ideal_buy_price],
+          ["买入价(T收盘)", selectedSignal.signal?.signal_close],
+          ["第一止损位", selectedSignal.signal?.stop_losses?.[0]],
+          ["第二止损位", selectedSignal.signal?.stop_losses?.[1]],
+          ["第一止盈位", selectedSignal.signal?.take_profits?.[0]],
+          ["第二止盈位", selectedSignal.signal?.take_profits?.[1]],
+          ["信号 ATR30", selectedSignal.signal?.extras?.signal_atr30],
           ["最长观察期", selectedSignal.signal?.max_watch_days],
         ];
 
   return (
     <main className="app-shell">
       {contextHolder}
+      <BacktestDetailModal
+        open={backtestDetailOpen}
+        taskId={backtestDetailTaskId}
+        onClose={() => setBacktestDetailOpen(false)}
+      />
       <Modal
         footer={[
           <Button key="close" onClick={() => setBacktestModalOpen(false)} type="primary">
@@ -696,7 +737,7 @@ export default function Home() {
                 loading={backtestTasksLoading}
                 pagination={{ pageSize: 20, showSizeChanger: true }}
                 rowKey={(record) => String(record.id)}
-                scroll={{ x: 1500, y: "calc(100vh - 270px)" }}
+                scroll={{ x: 1900, y: "calc(100vh - 270px)" }}
                 size="middle"
               />
             </div>

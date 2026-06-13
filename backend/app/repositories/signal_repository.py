@@ -1,96 +1,53 @@
 from __future__ import annotations
 
-from bisect import bisect_right
-from collections.abc import Iterator
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+import numpy as np
+
+from app.entities.stock_data_context import StockDailyFrame
 from app.repositories.duckdb_repository import DuckDBRepository
 from app.repositories.tushare_sql import TUSHARE_BAR_1D_QFQ_SQL, TUSHARE_UNIVERSE_DAILY_SQL
+
+
+# 框架基础列：所有策略都会拿到（除主键 trade_date/code 外）。
+SIGNAL_BASE_FLOAT_COLUMNS: tuple[str, ...] = (
+    "qfq_open",
+    "qfq_high",
+    "qfq_low",
+    "qfq_close",
+    "vol",
+    "is_st",
+)
+SIGNAL_BASE_TEXT_COLUMNS: tuple[str, ...] = ("name",)
+
+# 行业上下文列（实验性）：来自 tmp.industry_daily（按 trade_date + industry join）。
+# 策略在 required_columns 中声明这些列时自动联表；tmp 表由
+# scripts/build_tmp_industry_daily.py 手工重建，不在 tushare 刷新流水线内。
+INDUSTRY_CONTEXT_COLUMNS: dict[str, str] = {
+    "industry_heat_rank": "ind.heat_rank",
+    "industry_strong_count": "ind.strong_count",
+    "industry_strong_ratio": "ind.strong_ratio",
+    "industry_amount_share": "ind.amount_share",
+    "industry_above_ma60_ratio": "ind.above_ma60_ratio",
+}
 
 
 class SignalRepository:
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
-        self._bar_1d_qfq_window_cache: dict[str, tuple[list[date], list[dict[str, Any]]]] = {}
-        self._bar_1d_qfq_window_cache_max_date: date | None = None
-        self._bar_1d_qfq_window_cache_limit: int | None = None
-        self._bar_1d_qfq_window_cache_db_mtime_ns: int | None = None
 
-    _BAR_1D_QFQ_CACHE_EXTRA_ROWS = 256
+    # ------------------------------------------------------------------
+    # 信号评估数据（宽表列式窗口）
+    # ------------------------------------------------------------------
 
-    _BAR_1D_QFQ_SIGNAL_COLUMNS = """
-        trade_date,
-        code,
-        open,
-        high,
-        low,
-        close,
-        preclose,
-        volume,
-        amount,
-        turn,
-        tradestatus,
-        pct_chg,
-        is_st
-    """
-
-    def get_universe_daily(self, trade_date: date) -> list[dict[str, Any]]:
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select *
-                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
-                where trade_date = ?
-                order by code
-                """,
-                [trade_date],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-        return [self._normalize_row(columns, row) for row in rows]
-
-    def get_universe_daily_range(
-        self,
-        *,
-        start_date: date,
-        end_date: date,
-    ) -> dict[date, dict[str, dict[str, Any]]]:
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select *
-                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
-                where trade_date between ? and ?
-                order by trade_date, code
-                """,
-                [start_date, end_date],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-
-        grouped: dict[date, dict[str, dict[str, Any]]] = {}
-        for row in rows:
-            item = self._normalize_row(columns, row)
-            trade_date_value = row[0]
-            code = item.get("code")
-            if not isinstance(trade_date_value, date) or not isinstance(code, str):
-                continue
-            grouped.setdefault(trade_date_value, {})[code] = item
-        return grouped
-
-    def get_universe_codes_range(
-        self,
-        *,
-        start_date: date,
-        end_date: date,
-    ) -> list[str]:
+    def get_codes_in_range(self, *, start_date: date, end_date: date) -> list[str]:
         with self.duckdb.connect(read_only=True) as connection:
             rows = connection.execute(
-                f"""
+                """
                 select distinct code
-                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
+                from tushare.stock_daily_technical
                 where trade_date between ? and ?
                   and code is not null
                 order by code
@@ -99,63 +56,119 @@ class SignalRepository:
             ).fetchall()
         return [str(row[0]) for row in rows if row and row[0] is not None]
 
-    def get_universe_daily_range_by_codes(
+    def get_universe_counts_by_date(
         self,
         *,
         start_date: date,
         end_date: date,
-        codes: list[str],
-    ) -> dict[date, dict[str, dict[str, Any]]]:
-        if not codes:
-            return {}
-
+    ) -> dict[date, int]:
         with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select *
-                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
+            rows = connection.execute(
+                """
+                select trade_date, count(*)
+                from tushare.stock_daily_technical
                 where trade_date between ? and ?
-                  and code in (select unnest(?))
-                order by trade_date, code
+                group by trade_date
                 """,
-                [start_date, end_date, codes],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
+                [start_date, end_date],
+            ).fetchall()
+        return {row[0]: int(row[1]) for row in rows if isinstance(row[0], date)}
 
-        grouped: dict[date, dict[str, dict[str, Any]]] = {}
-        for row in rows:
-            item = self._normalize_row(columns, row)
-            trade_date_value = row[0]
-            code = item.get("code")
-            if not isinstance(trade_date_value, date) or not isinstance(code, str):
-                continue
-            grouped.setdefault(trade_date_value, {})[code] = item
-        return grouped
-
-    def get_universe_daily_by_codes(
+    def load_stock_frames(
         self,
         *,
-        trade_date: date,
         codes: list[str],
-    ) -> list[dict[str, Any]]:
+        start_date: date,
+        end_date: date,
+        window: int,
+        extra_columns: tuple[str, ...] = (),
+    ) -> dict[str, StockDailyFrame]:
+        """按股票加载"区间起点前 window 根 + 区间内"的宽表行，返回列式结构。"""
         if not codes:
-            return []
-
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select *
-                from ({TUSHARE_UNIVERSE_DAILY_SQL}) universe
-                where trade_date = ?
-                  and code in (select unnest(?))
-                order by code
-                """,
-                [trade_date, codes],
+            return {}
+        float_columns = list(SIGNAL_BASE_FLOAT_COLUMNS)
+        industry_columns: list[str] = []
+        for column in extra_columns:
+            if column in INDUSTRY_CONTEXT_COLUMNS:
+                if column not in industry_columns:
+                    industry_columns.append(column)
+            elif column not in float_columns:
+                float_columns.append(column)
+        select_columns = ["trade_date", "code", *float_columns, *industry_columns, *SIGNAL_BASE_TEXT_COLUMNS]
+        column_sql = ", ".join(select_columns)
+        if industry_columns:
+            industry_select = ", ".join(
+                f"{INDUSTRY_CONTEXT_COLUMNS[column]} as {column}" for column in industry_columns
             )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-        return [self._normalize_row(columns, row) for row in rows]
+            source_sql = f"""
+                select t.trade_date, t.code,
+                       {', '.join(f't.{column}' for column in float_columns)},
+                       {industry_select},
+                       {', '.join(f't.{column}' for column in SIGNAL_BASE_TEXT_COLUMNS)}
+                from tushare.stock_daily_technical t
+                left join tmp.industry_daily ind
+                  on ind.trade_date = t.trade_date
+                 and ind.industry = t.industry
+            """
+        else:
+            source_sql = "select * from tushare.stock_daily_technical"
+        with self.duckdb.connect(read_only=True) as connection:
+            frame = connection.execute(
+                f"""
+                with src as ({source_sql}),
+                ranked_before as (
+                    select {column_sql},
+                           row_number() over (
+                               partition by code
+                               order by trade_date desc
+                           ) as rn
+                    from src
+                    where trade_date < ?
+                      and code in (select unnest(?))
+                ),
+                before_window as (
+                    select {column_sql}
+                    from ranked_before
+                    where rn <= ?
+                ),
+                in_range as (
+                    select {column_sql}
+                    from src
+                    where trade_date between ? and ?
+                      and code in (select unnest(?))
+                )
+                select * from before_window
+                union all
+                select * from in_range
+                order by code, trade_date
+                """,
+                [start_date, codes, window, start_date, end_date, codes],
+            ).fetchdf()
+        if frame.empty:
+            return {}
+
+        result: dict[str, StockDailyFrame] = {}
+        for code, group in frame.groupby("code", sort=False):
+            trade_dates = [
+                value.date() if isinstance(value, datetime) else value
+                for value in group["trade_date"].tolist()
+            ]
+            columns: dict[str, Any] = {
+                column: group[column].to_numpy(dtype=np.float64, na_value=np.nan)
+                for column in (*float_columns, *industry_columns)
+            }
+            for column in SIGNAL_BASE_TEXT_COLUMNS:
+                columns[column] = group[column].to_numpy(dtype=object)
+            result[str(code)] = StockDailyFrame(
+                code=str(code),
+                trade_dates=trade_dates,
+                columns=columns,
+            )
+        return result
+
+    # ------------------------------------------------------------------
+    # 前端图表上下文（全量历史，沿用 qfq 视图）
+    # ------------------------------------------------------------------
 
     def get_latest_universe_by_codes(self, *, codes: list[str]) -> list[dict[str, Any]]:
         if not codes:
@@ -183,38 +196,6 @@ class SignalRepository:
             rows = result.fetchall()
             columns = [item[0] for item in result.description]
         return [self._normalize_row(columns, row) for row in rows]
-
-    def get_bar_1d_qfq_history(
-        self,
-        *,
-        codes: list[str],
-        trade_date: date,
-    ) -> dict[str, list[dict[str, Any]]]:
-        if not codes:
-            return {}
-
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                where trade_date <= ?
-                  and code in (select unnest(?))
-                order by code, trade_date
-                """,
-                [trade_date, codes],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-
-        bars_by_code: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            item = self._normalize_row(columns, row)
-            code = item.get("code")
-            if not isinstance(code, str):
-                continue
-            bars_by_code.setdefault(code, []).append(item)
-        return bars_by_code
 
     def get_full_bar_1d_qfq_history(
         self,
@@ -245,320 +226,6 @@ class SignalRepository:
                 continue
             bars_by_code.setdefault(code, []).append(item)
         return bars_by_code
-
-    def get_bar_1d_qfq_history_for_signal_range(
-        self,
-        *,
-        codes: list[str],
-        start_date: date,
-        end_date: date,
-        limit_before_start: int | None,
-    ) -> dict[str, list[dict[str, Any]]]:
-        if not codes:
-            return {}
-
-        with self.duckdb.connect(read_only=True) as connection:
-            if limit_before_start is None:
-                result = connection.execute(
-                    f"""
-                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                    from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                    where trade_date <= ?
-                      and code in (select unnest(?))
-                    order by code, trade_date
-                    """,
-                    [end_date, codes],
-                )
-            else:
-                result = connection.execute(
-                    f"""
-                    with ranked_before as (
-                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS},
-                               row_number() over (
-                                   partition by code
-                                   order by trade_date desc
-                               ) as rn
-                        from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                        where trade_date < ?
-                          and code in (select unnest(?))
-                    ),
-                    limited_before as (
-                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                        from ranked_before
-                        where rn <= ?
-                    ),
-                    in_range as (
-                        select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                        from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                        where trade_date between ? and ?
-                          and code in (select unnest(?))
-                    )
-                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                    from (
-                        select * from limited_before
-                        union all
-                        select * from in_range
-                    )
-                    order by code, trade_date
-                    """,
-                    [start_date, codes, limit_before_start, start_date, end_date, codes],
-                )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-
-        bars_by_code: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            item = self._normalize_row(columns, row)
-            code = item.get("code")
-            if not isinstance(code, str):
-                continue
-            bars_by_code.setdefault(code, []).append(item)
-        return bars_by_code
-
-    def iter_bar_1d_qfq_history_groups(
-        self,
-        *,
-        codes: list[str],
-        trade_date: date,
-        limit_per_code: int | None = None,
-    ) -> Iterator[tuple[str, list[dict[str, Any]]]]:
-        if not codes:
-            return
-        if limit_per_code is not None:
-            yield from self._iter_cached_bar_1d_qfq_history_groups(
-                codes=codes,
-                trade_date=trade_date,
-                limit_per_code=limit_per_code,
-            )
-            return
-
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                where trade_date <= ?
-                  and code in (select unnest(?))
-                order by code, trade_date
-                """,
-                [trade_date, codes],
-            )
-            columns = [item[0] for item in result.description]
-            current_code: str | None = None
-            current_bars: list[dict[str, Any]] = []
-
-            while True:
-                rows = result.fetchmany(10000)
-                if not rows:
-                    break
-                for row in rows:
-                    item = self._normalize_row(columns, row)
-                    code = item.get("code")
-                    if not isinstance(code, str):
-                        continue
-                    if current_code is None:
-                        current_code = code
-                    elif code != current_code:
-                        yield current_code, current_bars
-                        current_code = code
-                        current_bars = []
-                    current_bars.append(item)
-
-            if current_code is not None:
-                yield current_code, current_bars
-
-    def _iter_cached_bar_1d_qfq_history_groups(
-        self,
-        *,
-        codes: list[str],
-        trade_date: date,
-        limit_per_code: int,
-    ) -> Iterator[tuple[str, list[dict[str, Any]]]]:
-        self._clear_bar_1d_qfq_cache_if_database_changed()
-        if self._bar_1d_qfq_window_cache_limit != limit_per_code:
-            self._clear_bar_1d_qfq_cache()
-            self._bar_1d_qfq_window_cache_limit = limit_per_code
-
-        ordered_codes = sorted(dict.fromkeys(codes))
-        if (
-            self._bar_1d_qfq_window_cache_max_date is not None
-            and trade_date < self._bar_1d_qfq_window_cache_max_date
-        ):
-            self._clear_bar_1d_qfq_cache()
-
-        missing_codes = [
-            code
-            for code in ordered_codes
-            if code not in self._bar_1d_qfq_window_cache
-        ]
-        if missing_codes:
-            self._replace_bar_1d_qfq_cache_groups(
-                self._load_limited_bar_1d_qfq_history_groups(
-                    codes=missing_codes,
-                    trade_date=trade_date,
-                    limit_per_code=limit_per_code,
-                )
-            )
-
-        stale_codes_by_start_date: dict[date, list[str]] = {}
-        for code in ordered_codes:
-            if code in missing_codes:
-                continue
-            cached = self._bar_1d_qfq_window_cache.get(code)
-            if cached is None:
-                continue
-            dates, _rows = cached
-            if dates and dates[-1] < trade_date:
-                stale_codes_by_start_date.setdefault(dates[-1], []).append(code)
-        for start_date, stale_codes in stale_codes_by_start_date.items():
-            self._append_bar_1d_qfq_cache_groups(
-                self._load_incremental_bar_1d_qfq_history_groups(
-                    codes=stale_codes,
-                    start_exclusive=start_date,
-                    end_inclusive=trade_date,
-                )
-            )
-        self._bar_1d_qfq_window_cache_max_date = max(
-            date_value
-            for date_value in (
-                self._bar_1d_qfq_window_cache_max_date,
-                trade_date,
-            )
-            if date_value is not None
-        )
-
-        for code in ordered_codes:
-            cached = self._bar_1d_qfq_window_cache.get(code)
-            if cached is None:
-                continue
-            dates, rows = cached
-            end_index = bisect_right(dates, trade_date)
-            start_index = max(0, end_index - limit_per_code)
-            yield code, rows[start_index:end_index]
-
-    def _load_limited_bar_1d_qfq_history_groups(
-        self,
-        *,
-        codes: list[str],
-        trade_date: date,
-        limit_per_code: int,
-    ) -> dict[str, tuple[list[date], list[dict[str, Any]]]]:
-        if not codes:
-            return {}
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                with ranked as (
-                    select {self._BAR_1D_QFQ_SIGNAL_COLUMNS},
-                           row_number() over (
-                               partition by code
-                               order by trade_date desc
-                           ) as rn
-                    from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                    where trade_date <= ?
-                      and code in (select unnest(?))
-                )
-                select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from ranked
-                where rn <= ?
-                order by code, trade_date
-                """,
-                [trade_date, codes, limit_per_code],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-        return self._group_bar_rows_for_cache(columns, rows)
-
-    def _load_incremental_bar_1d_qfq_history_groups(
-        self,
-        *,
-        codes: list[str],
-        start_exclusive: date,
-        end_inclusive: date,
-    ) -> dict[str, tuple[list[date], list[dict[str, Any]]]]:
-        if not codes:
-            return {}
-        with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select {self._BAR_1D_QFQ_SIGNAL_COLUMNS}
-                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                where trade_date > ?
-                  and trade_date <= ?
-                  and code in (select unnest(?))
-                order by code, trade_date
-                """,
-                [start_exclusive, end_inclusive, codes],
-            )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-        return self._group_bar_rows_for_cache(columns, rows)
-
-    def _group_bar_rows_for_cache(
-        self,
-        columns: list[str],
-        rows: list[tuple[Any, ...]],
-    ) -> dict[str, tuple[list[date], list[dict[str, Any]]]]:
-        groups: dict[str, tuple[list[date], list[dict[str, Any]]]] = {}
-        for row in rows:
-            item = self._normalize_row(columns, row)
-            code = item.get("code")
-            trade_date_value = row[0]
-            if not isinstance(code, str) or not isinstance(trade_date_value, date):
-                continue
-            dates, items = groups.setdefault(code, ([], []))
-            dates.append(trade_date_value)
-            items.append(item)
-        return groups
-
-    def _replace_bar_1d_qfq_cache_groups(
-        self,
-        groups: dict[str, tuple[list[date], list[dict[str, Any]]]],
-    ) -> None:
-        for code, group in groups.items():
-            self._bar_1d_qfq_window_cache[code] = self._trim_bar_cache_group(group)
-
-    def _append_bar_1d_qfq_cache_groups(
-        self,
-        groups: dict[str, tuple[list[date], list[dict[str, Any]]]],
-    ) -> None:
-        for code, (new_dates, new_rows) in groups.items():
-            cached = self._bar_1d_qfq_window_cache.get(code)
-            if cached is None:
-                self._bar_1d_qfq_window_cache[code] = self._trim_bar_cache_group((new_dates, new_rows))
-                continue
-            dates, rows = cached
-            dates.extend(new_dates)
-            rows.extend(new_rows)
-            self._bar_1d_qfq_window_cache[code] = self._trim_bar_cache_group((dates, rows))
-
-    def _trim_bar_cache_group(
-        self,
-        group: tuple[list[date], list[dict[str, Any]]],
-    ) -> tuple[list[date], list[dict[str, Any]]]:
-        dates, rows = group
-        cache_limit = (self._bar_1d_qfq_window_cache_limit or 0) + self._BAR_1D_QFQ_CACHE_EXTRA_ROWS
-        if cache_limit <= 0 or len(rows) <= cache_limit:
-            return dates, rows
-        return dates[-cache_limit:], rows[-cache_limit:]
-
-    def _clear_bar_1d_qfq_cache_if_database_changed(self) -> None:
-        try:
-            mtime_ns = self.duckdb.db_path.stat().st_mtime_ns
-        except OSError:
-            self._clear_bar_1d_qfq_cache()
-            self._bar_1d_qfq_window_cache_db_mtime_ns = None
-            return
-        if self._bar_1d_qfq_window_cache_db_mtime_ns is None:
-            self._bar_1d_qfq_window_cache_db_mtime_ns = mtime_ns
-            return
-        if self._bar_1d_qfq_window_cache_db_mtime_ns != mtime_ns:
-            self._clear_bar_1d_qfq_cache()
-            self._bar_1d_qfq_window_cache_db_mtime_ns = mtime_ns
-
-    def _clear_bar_1d_qfq_cache(self) -> None:
-        self._bar_1d_qfq_window_cache.clear()
-        self._bar_1d_qfq_window_cache_max_date = None
 
     def _normalize_row(self, columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
         return {

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from bisect import bisect_right
-from dataclasses import asdict, is_dataclass
 from datetime import date
 from typing import Any
 
@@ -11,8 +9,9 @@ from app.dtos.signal_dto import (
     StockDataContextDTO,
     StockDataContextResultDTO,
 )
-from app.entities.stock_data_context import StockDataContext
+from app.entities.stock_data_context import SignalDecision
 from app.repositories.signal_repository import SignalRepository
+from app.services.signal_window import SIGNAL_WINDOW_BARS
 from app.services.strategy_registry import get_strategy
 
 
@@ -21,7 +20,7 @@ class SignalServiceError(ValueError):
 
 
 class SignalService:
-    SIGNAL_CODE_BATCH_SIZE = 300
+    SIGNAL_CODE_BATCH_SIZE = 400
 
     def __init__(self) -> None:
         self.repository = SignalRepository()
@@ -53,8 +52,9 @@ class SignalService:
         trade_dates: list[date],
         strategy_name: str,
         progress_callback: Any | None = None,
-        progress_interval: int = 200,
+        progress_interval: int = 500,
     ) -> dict[date, DailySignalResultDTO]:
+        """逐股批量评估：每只股票的宽表历史只加载一次，区间内所有目标日共享。"""
         normalized_dates = sorted(set(trade_dates))
         if not normalized_dates:
             return {}
@@ -65,128 +65,67 @@ class SignalService:
 
         start_date = normalized_dates[0]
         end_date = normalized_dates[-1]
+        target_date_set = set(normalized_dates)
         result_items_by_date: dict[date, list[DailySignalItemDTO]] = {
-            day: []
-            for day in normalized_dates
+            day: [] for day in normalized_dates
         }
 
-        limit_per_code = getattr(strategy, "daily_signal_history_limit", None)
-        universe_counts_by_date: dict[date, int] = {
-            day: 0
-            for day in normalized_dates
-        }
-        all_codes = self.repository.get_universe_codes_range(
+        universe_counts = self.repository.get_universe_counts_by_date(
             start_date=start_date,
             end_date=end_date,
         )
+        all_codes = self.repository.get_codes_in_range(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if strategy.code_filter is not None:
+            all_codes = [code for code in all_codes if strategy.code_filter(code)]
         total_codes = len(all_codes)
         processed_codes = 0
 
         for code_batch in self._chunked(all_codes, self.SIGNAL_CODE_BATCH_SIZE):
-            universe_by_date = self.repository.get_universe_daily_range_by_codes(
-                start_date=start_date,
-                end_date=end_date,
+            frames = self.repository.load_stock_frames(
                 codes=code_batch,
-            )
-            eligible_by_date: dict[date, dict[str, dict[str, Any]]] = {}
-            eligible_codes_in_batch: set[str] = set()
-            for day in normalized_dates:
-                universe_by_code = universe_by_date.get(day, {})
-                universe_counts_by_date[day] += len(universe_by_code)
-                eligible_codes = self._prefilter_universe_codes(
-                    trade_date=day,
-                    universe_by_code=universe_by_code,
-                    universe_filter=getattr(strategy, "universe_filter", None),
-                )
-                eligible_by_date[day] = {
-                    code: universe_by_code[code]
-                    for code in eligible_codes
-                    if code in universe_by_code
-                }
-                eligible_codes_in_batch.update(eligible_by_date[day])
-
-            bars_by_code = self.repository.get_bar_1d_qfq_history_for_signal_range(
-                codes=sorted(eligible_codes_in_batch),
                 start_date=start_date,
                 end_date=end_date,
-                limit_before_start=limit_per_code,
+                window=SIGNAL_WINDOW_BARS,
+                extra_columns=strategy.required_columns,
             )
             for code in code_batch:
                 processed_codes += 1
-                bars = bars_by_code.get(code, [])
-                if not bars:
-                    self._report_progress(
-                        progress_callback=progress_callback,
-                        processed_codes=processed_codes,
-                        total_codes=total_codes,
-                        progress_interval=progress_interval,
-                    )
-                    continue
-                bar_dates = [
-                    trade_date_value
-                    for item in bars
-                    for trade_date_value in [self._coerce_date(item.get("trade_date"))]
-                    if trade_date_value is not None
-                ]
-                if len(bar_dates) != len(bars):
-                    self._report_progress(
-                        progress_callback=progress_callback,
-                        processed_codes=processed_codes,
-                        total_codes=total_codes,
-                        progress_interval=progress_interval,
-                    )
-                    continue
-                active_dates = [
-                    day
-                    for day in normalized_dates
-                    if code in eligible_by_date.get(day, {})
-                ]
-                batch_signal_strategy = getattr(strategy, "batch_signal_strategy", None)
-                if batch_signal_strategy is not None:
-                    signal_payloads = batch_signal_strategy(
-                        code=code,
-                        target_dates=active_dates,
-                        universe_by_date={
-                            day: eligible_by_date[day][code]
-                            for day in active_dates
-                        },
-                        bars=bars,
-                        history_limit=limit_per_code,
-                    )
-                    for day, signal_result in signal_payloads.items():
-                        universe = eligible_by_date.get(day, {}).get(code)
-                        if universe is None:
-                            continue
-                        signal_payload = self._normalize_signal_result(signal_result)
-                        if signal_payload is None:
-                            continue
-                        result_items_by_date[day].append(
-                            DailySignalItemDTO(
-                                code=code,
-                                code_name=self._optional_string(universe.get("code_name")),
-                                trade_date=day.isoformat(),
-                                universe=universe,
-                                signal=signal_payload,
+                frame = frames.get(code)
+                if frame is not None and len(frame) >= SIGNAL_WINDOW_BARS:
+                    # 目标位置：日期在请求集合内，且该位置（含自身）至少有 400 根历史
+                    target_indices = [
+                        index
+                        for index, day in enumerate(frame.trade_dates)
+                        if index + 1 >= SIGNAL_WINDOW_BARS and day in target_date_set
+                    ]
+                    if target_indices:
+                        decisions = strategy.batch_signal_strategy(frame, target_indices)
+                        for index, decision in decisions.items():
+                            if not decision.triggered:
+                                continue
+                            day = frame.trade_dates[index]
+                            name_value = frame.columns.get("name")
+                            code_name = (
+                                str(name_value[index])
+                                if name_value is not None and name_value[index] is not None
+                                else None
                             )
-                        )
-                else:
-                    for day in active_dates:
-                        end_index = bisect_right(bar_dates, day)
-                        if end_index <= 0:
-                            window_bars: list[dict[str, Any]] = []
-                        elif limit_per_code is None:
-                            window_bars = bars[:end_index]
-                        else:
-                            window_bars = bars[max(0, end_index - limit_per_code):end_index]
-                        universe = eligible_by_date[day][code]
-                        self._append_signal_if_triggered(
-                            signal_items=result_items_by_date[day],
-                            code=code,
-                            trade_date=day,
-                            universe=universe,
-                            bars=window_bars,
-                            signal_strategy=strategy.signal_strategy,
-                        )
+                            result_items_by_date[day].append(
+                                DailySignalItemDTO(
+                                    code=code,
+                                    code_name=code_name,
+                                    trade_date=day.isoformat(),
+                                    universe={
+                                        "trade_date": day.isoformat(),
+                                        "code": code,
+                                        "code_name": code_name,
+                                    },
+                                    signal=self._decision_to_payload(decision),
+                                )
+                            )
                 self._report_progress(
                     progress_callback=progress_callback,
                     processed_codes=processed_codes,
@@ -198,7 +137,7 @@ class SignalService:
             day: DailySignalResultDTO(
                 trade_date=day.isoformat(),
                 strategy_name=strategy.name,
-                universe_count=universe_counts_by_date.get(day, 0),
+                universe_count=universe_counts.get(day, 0),
                 signal_count=len(result_items_by_date[day]),
                 signals=result_items_by_date[day],
             )
@@ -236,83 +175,15 @@ class SignalService:
         ]
         return StockDataContextResultDTO(contexts=contexts)
 
-    def _append_signal_if_triggered(
-        self,
-        *,
-        signal_items: list[DailySignalItemDTO],
-        code: str,
-        trade_date: date,
-        universe: dict[str, Any],
-        bars: list[dict[str, Any]],
-        signal_strategy: Any,
-    ) -> None:
-        context = StockDataContext(
-            code=code,
-            trade_date=trade_date,
-            universe=universe,
-            bars_1d_qfq=bars,
-        )
-        signal_result = signal_strategy(context)
-        signal_payload = self._normalize_signal_result(signal_result)
-        if signal_payload is None:
-            return
-        signal_items.append(
-            DailySignalItemDTO(
-                code=code,
-                code_name=self._optional_string(universe.get("code_name")),
-                trade_date=trade_date.isoformat(),
-                universe=universe,
-                signal=signal_payload,
-            )
-        )
-
-    def _prefilter_universe_codes(
-        self,
-        *,
-        trade_date: date,
-        universe_by_code: dict[str, dict[str, Any]],
-        universe_filter: Any,
-    ) -> list[str]:
-        if universe_filter is None:
-            return list(universe_by_code)
-
-        codes: list[str] = []
-        for code, universe in universe_by_code.items():
-            context = StockDataContext(
-                code=code,
-                trade_date=trade_date,
-                universe=universe,
-                bars_1d_qfq=[],
-            )
-            if universe_filter(context):
-                codes.append(code)
-        return codes
-
-    def _optional_string(self, value: Any) -> str | None:
-        return value if isinstance(value, str) else None
-
-    def _normalize_signal_result(self, value: Any) -> dict[str, Any] | None:
-        if isinstance(value, bool):
-            return {"triggered": True} if value else None
-        if is_dataclass(value):
-            payload = asdict(value)
-        elif isinstance(value, dict):
-            payload = dict(value)
-        else:
-            triggered = getattr(value, "triggered", None)
-            if triggered is None:
-                return None
-            payload = {
-                "triggered": triggered,
-                "min_stop_loss": getattr(value, "min_stop_loss", None),
-                "reference_take_profit": getattr(value, "reference_take_profit", None),
-                "signal_atr30": getattr(value, "signal_atr30", None),
-                "ideal_buy_price": getattr(value, "ideal_buy_price", None),
-                "max_watch_days": getattr(value, "max_watch_days", None),
-            }
-        if not payload.get("triggered"):
-            return None
-        return payload
+    def _decision_to_payload(self, decision: SignalDecision) -> dict[str, Any]:
+        return {
+            "triggered": bool(decision.triggered),
+            "signal_close": decision.signal_close,
+            "stop_losses": [float(value) for value in decision.stop_losses],
+            "take_profits": [float(value) for value in decision.take_profits],
+            "max_watch_days": decision.max_watch_days,
+            "extras": decision.extras,
+        }
 
     def _normalize_codes(self, codes: list[str]) -> list[str]:
         seen: set[str] = set()
@@ -324,16 +195,6 @@ class SignalService:
             seen.add(item)
             normalized.append(item)
         return normalized
-
-    def _coerce_date(self, value: Any) -> date | None:
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
-            try:
-                return date.fromisoformat(value[:10])
-            except ValueError:
-                return None
-        return None
 
     def _chunked(self, values: list[str], size: int) -> list[list[str]]:
         return [

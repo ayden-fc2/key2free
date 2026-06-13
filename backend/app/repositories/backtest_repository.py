@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime
 from typing import Any
 
 from app.dtos.backtest_dto import BacktestTaskDTO
 from app.repositories.duckdb_repository import DuckDBRepository
-from app.repositories.tushare_sql import TUSHARE_BAR_1D_QFQ_SQL
 
 
 class BacktestRepository:
@@ -42,7 +42,10 @@ class BacktestRepository:
                     finished_at timestamp,
                     created_at timestamp not null default current_timestamp,
                     updated_at timestamp not null default current_timestamp,
-                    logs varchar not null default ''
+                    logs varchar not null default '',
+                    annualized_return_avg double,
+                    trades_per_year_avg double,
+                    win_rate_avg double
                 )
                 """
             )
@@ -59,6 +62,9 @@ class BacktestRepository:
                 "alter table meta.backtest_task add column if not exists started_at timestamp",
                 "alter table meta.backtest_task add column if not exists finished_at timestamp",
                 "alter table meta.backtest_task add column if not exists logs varchar default ''",
+                "alter table meta.backtest_task add column if not exists annualized_return_avg double",
+                "alter table meta.backtest_task add column if not exists trades_per_year_avg double",
+                "alter table meta.backtest_task add column if not exists win_rate_avg double",
             ):
                 connection.execute(statement)
             connection.execute(
@@ -115,12 +121,20 @@ class BacktestRepository:
                     buy_date date,
                     buy_price double,
                     pnl double,
+                    sell_reason varchar,
+                    level bigint,
                     created_at timestamp not null default current_timestamp
                 )
                 """
             )
             connection.execute(
                 "alter table meta.backtest_sell_order add column if not exists run_no bigint default 1"
+            )
+            connection.execute(
+                "alter table meta.backtest_sell_order add column if not exists sell_reason varchar"
+            )
+            connection.execute(
+                "alter table meta.backtest_sell_order add column if not exists level bigint"
             )
             connection.execute(
                 """
@@ -142,7 +156,6 @@ class BacktestRepository:
             connection.execute(
                 "alter table meta.backtest_daily_snapshot add column if not exists run_no bigint default 1"
             )
-            self._migrate_my_task_backtests(connection)
 
     def create_task(
         self,
@@ -156,16 +169,21 @@ class BacktestRepository:
     ) -> BacktestTaskDTO:
         self.ensure_tables()
         with self.duckdb.connect(read_only=False) as connection:
+            # 历史任务存在显式 id，序列可能落后，统一用 max(id)+1 分配
+            next_id = connection.execute(
+                "select coalesce(max(id), 0) + 1 from meta.backtest_task"
+            ).fetchone()[0]
             row = connection.execute(
                 """
                 insert into meta.backtest_task(
-                    status, strategy_name, start_date, end_date, initial_cash,
+                    id, status, strategy_name, start_date, end_date, initial_cash,
                     simulation_runs, completed_runs, started_at, logs
                 )
-                values ('running', ?, ?, ?, ?, ?, 0, current_timestamp, ?)
+                values (?, 'running', ?, ?, ?, ?, ?, 0, current_timestamp, ?)
                 returning *
                 """,
                 [
+                    next_id,
                     strategy_name,
                     start_date,
                     end_date,
@@ -230,6 +248,9 @@ class BacktestRepository:
         completed_runs: int | None = None,
         final_assets: list[float] | None = None,
         initial_cash: float | None = None,
+        annualized_return_avg: float | None = None,
+        trades_per_year_avg: float | None = None,
+        win_rate_avg: float | None = None,
     ) -> None:
         if status not in {"success", "error"}:
             raise ValueError(f"invalid backtest task status: {status}")
@@ -262,6 +283,9 @@ class BacktestRepository:
                     final_return_avg = coalesce(?, final_return_avg),
                     final_return_min = coalesce(?, final_return_min),
                     final_return_max = coalesce(?, final_return_max),
+                    annualized_return_avg = coalesce(?, annualized_return_avg),
+                    trades_per_year_avg = coalesce(?, trades_per_year_avg),
+                    win_rate_avg = coalesce(?, win_rate_avg),
                     logs = ?,
                     finished_at = current_timestamp,
                     updated_at = current_timestamp
@@ -276,6 +300,9 @@ class BacktestRepository:
                     final_return_avg,
                     final_return_min,
                     final_return_max,
+                    annualized_return_avg,
+                    trades_per_year_avg,
+                    win_rate_avg,
                     self._trim_logs(logs + self._format_log(message)),
                     task_id,
                 ],
@@ -335,19 +362,44 @@ class BacktestRepository:
             ).fetchone()
         return self._to_backtest_task(row)
 
-    def list_tasks(self, limit: int = 100) -> list[BacktestTaskDTO]:
+    def list_tasks(
+        self,
+        limit: int = 100,
+        *,
+        latest_per_strategy: bool = True,
+    ) -> list[BacktestTaskDTO]:
+        """回测任务列表；默认每种策略只返回最新一条，latest_per_strategy=False 返回全量历史。"""
         self.ensure_tables()
         normalized_limit = max(1, min(limit, 500))
         with self.duckdb.connect(read_only=True) as connection:
-            rows = connection.execute(
-                """
-                select *
-                from meta.backtest_task
-                order by id desc
-                limit ?
-                """,
-                [normalized_limit],
-            ).fetchall()
+            if latest_per_strategy:
+                rows = connection.execute(
+                    """
+                    select * exclude (rn)
+                    from (
+                        select *,
+                               row_number() over (
+                                   partition by strategy_name
+                                   order by id desc
+                               ) as rn
+                        from meta.backtest_task
+                    )
+                    where rn = 1
+                    order by id desc
+                    limit ?
+                    """,
+                    [normalized_limit],
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    select *
+                    from meta.backtest_task
+                    order by id desc
+                    limit ?
+                    """,
+                    [normalized_limit],
+                ).fetchall()
         return [task for row in rows for task in [self._to_backtest_task(row)] if task is not None]
 
     def clear_task_rows(self, task_id: int) -> None:
@@ -374,49 +426,188 @@ class BacktestRepository:
             ).fetchall()
         return [row[0] for row in rows if isinstance(row[0], date)]
 
-    def get_bar_map(self, *, trade_date: date, codes: list[str]) -> dict[str, dict[str, Any]]:
+    def load_price_data(
+        self,
+        *,
+        codes: list[str],
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, dict[date, tuple[float, float, float, float, float, float]]]:
+        """一次性装载撮合所需行情：code -> {trade_date: (open, high, low, close, vol, pct_chg)}。
+
+        价格为前复权口径；缺失值为 nan。撮合主循环禁止再查询数据库。
+        """
         if not codes:
             return {}
         with self.duckdb.connect(read_only=True) as connection:
-            result = connection.execute(
-                f"""
-                select trade_date, code, open, high, low, close, volume, tradestatus
-                from ({TUSHARE_BAR_1D_QFQ_SQL}) bar
-                where trade_date = ?
+            frame = connection.execute(
+                """
+                select code, trade_date,
+                       qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg
+                from tushare.stock_daily_technical
+                where trade_date between ? and ?
                   and code in (select unnest(?))
+                order by code, trade_date
                 """,
-                [trade_date, codes],
+                [start_date, end_date, codes],
+            ).fetchdf()
+        if frame.empty:
+            return {}
+        nan = float("nan")
+        prices: dict[str, dict[date, tuple[float, float, float, float, float, float]]] = {}
+        code_values = frame["code"].tolist()
+        date_values = frame["trade_date"].tolist()
+        opens = frame["qfq_open"].tolist()
+        highs = frame["qfq_high"].tolist()
+        lows = frame["qfq_low"].tolist()
+        closes = frame["qfq_close"].tolist()
+        vols = frame["vol"].tolist()
+        pct_chgs = frame["pct_chg"].tolist()
+        for index in range(len(code_values)):
+            day = date_values[index]
+            if isinstance(day, datetime):
+                day = day.date()
+            prices.setdefault(str(code_values[index]), {})[day] = (
+                float(opens[index]) if opens[index] is not None else nan,
+                float(highs[index]) if highs[index] is not None else nan,
+                float(lows[index]) if lows[index] is not None else nan,
+                float(closes[index]) if closes[index] is not None else nan,
+                float(vols[index]) if vols[index] is not None else nan,
+                float(pct_chgs[index]) if pct_chgs[index] is not None else nan,
             )
-            rows = result.fetchall()
-            columns = [item[0] for item in result.description]
-        return {
-            row[1]: self._normalize_row(columns, row)
-            for row in rows
-            if isinstance(row[1], str)
-        }
+        return prices
 
-    def insert_signals(
+    def get_task_detail(
         self,
         *,
         task_id: int,
-        trade_date: date,
-        strategy_name: str,
-        signals: list[dict[str, Any]],
-    ) -> None:
-        if not signals:
+        run_no: int,
+        include_curves: bool = True,
+    ) -> dict[str, Any]:
+        """回测详情：各轮收益率曲线 + 指定轮次按持仓聚合的交易列表（时间顺序）。"""
+        with self.duckdb.connect(read_only=True) as connection:
+            task_row = connection.execute(
+                "select initial_cash from meta.backtest_task where id = ?",
+                [task_id],
+            ).fetchone()
+            if task_row is None:
+                raise ValueError(f"unknown backtest task: {task_id}")
+            initial_cash = float(task_row[0] or 0)
+
+            run_rows = connection.execute(
+                "select distinct run_no from meta.backtest_daily_snapshot where task_id = ? order by run_no",
+                [task_id],
+            ).fetchall()
+            available_runs = [int(row[0]) for row in run_rows]
+
+            curves: dict[str, Any] | None = None
+            if include_curves and available_runs and initial_cash > 0:
+                snapshot_rows = connection.execute(
+                    """
+                    select run_no, trade_date, total_asset
+                    from meta.backtest_daily_snapshot
+                    where task_id = ?
+                    order by run_no, trade_date
+                    """,
+                    [task_id],
+                ).fetchall()
+                dates: list[str] = []
+                returns_by_run: dict[int, list[float]] = {}
+                first_run = available_runs[0]
+                for row_run, trade_date, total_asset in snapshot_rows:
+                    if int(row_run) == first_run:
+                        dates.append(str(trade_date))
+                    returns_by_run.setdefault(int(row_run), []).append(
+                        round(float(total_asset) / initial_cash - 1.0, 6)
+                    )
+                curves = {
+                    "dates": dates,
+                    "runs": [
+                        {"run_no": run, "returns": values}
+                        for run, values in sorted(returns_by_run.items())
+                    ],
+                }
+
+            buy_rows = connection.execute(
+                """
+                select trade_date, code, code_name, buy_price, quantity, amount, fee, signal_json
+                from meta.backtest_buy_order
+                where task_id = ? and run_no = ?
+                order by trade_date, code
+                """,
+                [task_id, run_no],
+            ).fetchall()
+            sell_rows = connection.execute(
+                """
+                select trade_date, code, buy_date, sell_price, quantity, amount, fee,
+                       pnl, sell_reason, level
+                from meta.backtest_sell_order
+                where task_id = ? and run_no = ?
+                order by trade_date
+                """,
+                [task_id, run_no],
+            ).fetchall()
+
+        sells_by_position: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for trade_date, code, buy_date, sell_price, quantity, amount, fee, pnl, reason, level in sell_rows:
+            sells_by_position.setdefault((str(code), str(buy_date)), []).append(
+                {
+                    "trade_date": str(trade_date),
+                    "sell_price": float(sell_price),
+                    "quantity": int(quantity),
+                    "amount": float(amount),
+                    "fee": float(fee),
+                    "pnl": None if pnl is None else float(pnl),
+                    "reason": reason,
+                    "level": None if level is None else int(level),
+                }
+            )
+
+        trades: list[dict[str, Any]] = []
+        for trade_date, code, code_name, buy_price, quantity, amount, fee, signal_json in buy_rows:
+            buy_date_text = str(trade_date)
+            sells = sells_by_position.get((str(code), buy_date_text), [])
+            sold_quantity = sum(item["quantity"] for item in sells)
+            closed = sold_quantity >= int(quantity)
+            total_pnl = sum(item["pnl"] for item in sells if item["pnl"] is not None)
+            last_sell_date = sells[-1]["trade_date"] if sells else None
+            holding_days = None
+            if last_sell_date is not None:
+                holding_days = (date.fromisoformat(last_sell_date) - date.fromisoformat(buy_date_text)).days
+            try:
+                signal = json.loads(signal_json) if signal_json else {}
+            except json.JSONDecodeError:
+                signal = {}
+            trades.append(
+                {
+                    "code": str(code),
+                    "code_name": code_name,
+                    "buy_date": buy_date_text,
+                    "buy_price": float(buy_price),
+                    "quantity": int(quantity),
+                    "buy_amount": float(amount),
+                    "buy_fee": float(fee),
+                    "sells": sells,
+                    "sell_count": len(sells),
+                    "total_pnl": total_pnl if sells else None,
+                    "last_sell_date": last_sell_date,
+                    "holding_days": holding_days,
+                    "closed": closed,
+                    "signal": signal,
+                }
+            )
+        return {
+            "task_id": task_id,
+            "run_no": run_no,
+            "available_runs": available_runs,
+            "equity_curves": curves,
+            "trades": trades,
+        }
+
+    def insert_signal_rows(self, rows: list[list[Any]]) -> None:
+        """批量写入预计算信号；行格式见 BacktestService._precompute_signals。"""
+        if not rows:
             return
-        rows = [
-            [
-                task_id,
-                trade_date,
-                strategy_name,
-                item["code"],
-                item.get("code_name"),
-                self._to_json(item.get("universe") or {}),
-                self._to_json(item.get("signal") or {"triggered": True}),
-            ]
-            for item in signals
-        ]
         with self.duckdb.connect(read_only=False) as connection:
             connection.executemany(
                 """
@@ -429,9 +620,11 @@ class BacktestRepository:
                 rows,
             )
 
-    def insert_buy_order(self, **kwargs: Any) -> None:
+    def insert_buy_orders(self, rows: list[list[Any]]) -> None:
+        if not rows:
+            return
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 insert into meta.backtest_buy_order(
                     task_id, run_no, trade_date, code, code_name, buy_price, quantity,
@@ -439,51 +632,29 @@ class BacktestRepository:
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    kwargs["task_id"],
-                    kwargs["run_no"],
-                    kwargs["trade_date"],
-                    kwargs["code"],
-                    kwargs.get("code_name"),
-                    kwargs["buy_price"],
-                    kwargs["quantity"],
-                    kwargs["amount"],
-                    kwargs["fee"],
-                    kwargs["cash_after"],
-                    self._to_json(kwargs.get("signal") or {}),
-                ],
+                rows,
             )
 
-    def insert_sell_order(self, **kwargs: Any) -> None:
+    def insert_sell_orders(self, rows: list[list[Any]]) -> None:
+        if not rows:
+            return
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 insert into meta.backtest_sell_order(
                     task_id, run_no, trade_date, code, code_name, sell_price, quantity,
-                    amount, fee, cash_after, buy_date, buy_price, pnl
+                    amount, fee, cash_after, buy_date, buy_price, pnl, sell_reason, level
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    kwargs["task_id"],
-                    kwargs["run_no"],
-                    kwargs["trade_date"],
-                    kwargs["code"],
-                    kwargs.get("code_name"),
-                    kwargs["sell_price"],
-                    kwargs["quantity"],
-                    kwargs["amount"],
-                    kwargs["fee"],
-                    kwargs["cash_after"],
-                    kwargs.get("buy_date"),
-                    kwargs.get("buy_price"),
-                    kwargs.get("pnl"),
-                ],
+                rows,
             )
 
-    def insert_daily_snapshot(self, **kwargs: Any) -> None:
+    def insert_daily_snapshots(self, rows: list[list[Any]]) -> None:
+        if not rows:
+            return
         with self.duckdb.connect(read_only=False) as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 insert into meta.backtest_daily_snapshot(
                     task_id, run_no, trade_date, total_asset, cash, holding_market_value,
@@ -491,96 +662,20 @@ class BacktestRepository:
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    kwargs["task_id"],
-                    kwargs["run_no"],
-                    kwargs["trade_date"],
-                    kwargs["total_asset"],
-                    kwargs["cash"],
-                    kwargs["holding_market_value"],
-                    kwargs["holding_count"],
-                    kwargs["watch_count"],
-                    self._to_json(kwargs.get("holdings") or []),
-                    self._to_json(kwargs.get("watch_items") or []),
-                ],
+                rows,
             )
 
-    def _to_json(self, value: Any) -> str:
+    def to_json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=self._normalize_value)
-
-    def _normalize_row(self, columns: list[str], row: tuple[Any, ...]) -> dict[str, Any]:
-        return {
-            column: self._normalize_value(value)
-            for column, value in zip(columns, row)
-        }
 
     def _normalize_value(self, value: Any) -> Any:
         if isinstance(value, datetime):
             return value.isoformat(sep=" ")
         if isinstance(value, date):
             return value.isoformat()
+        if isinstance(value, float) and math.isnan(value):
+            return None
         return value
-
-    def _migrate_my_task_backtests(self, connection: Any) -> None:
-        my_task_exists = connection.execute(
-            """
-            select count(*)
-            from information_schema.tables
-            where table_schema = 'meta' and table_name = 'my_task'
-            """
-        ).fetchone()[0]
-        if int(my_task_exists or 0) == 0:
-            return
-        rows = connection.execute(
-            """
-            select id, logs, status, created_at, updated_at
-            from meta.my_task
-            where type = 'backtest'
-              and id not in (select id from meta.backtest_task)
-            order by id
-            """
-        ).fetchall()
-        for task_id, logs, status, created_at, updated_at in rows:
-            parsed = self._parse_backtest_task_logs(logs or "")
-            connection.execute(
-                """
-                insert into meta.backtest_task(
-                    id, status, strategy_name, start_date, end_date, initial_cash,
-                    simulation_runs, completed_runs, started_at, finished_at,
-                    created_at, updated_at, logs
-                )
-                values (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-                """,
-                [
-                    task_id,
-                    status or "error",
-                    parsed["strategy_name"],
-                    parsed["start_date"],
-                    parsed["end_date"],
-                    parsed["initial_cash"],
-                    parsed["simulation_runs"],
-                    created_at,
-                    None if status == "running" else updated_at,
-                    created_at,
-                    updated_at,
-                    logs or "",
-                ],
-            )
-
-    def _parse_backtest_task_logs(self, logs: str) -> dict[str, Any]:
-        import re
-
-        strategy_match = re.search(r"strategy=([^,\]\s]+)", logs)
-        range_match = re.search(r"range=(\d{4}-\d{2}-\d{2})->(\d{4}-\d{2}-\d{2})", logs)
-        cash_match = re.search(r"initial_cash=([0-9.]+)", logs)
-        runs_match = re.search(r"simulation_runs=(\d+)", logs)
-        return {
-            "strategy_name": strategy_match.group(1) if strategy_match else "unknown",
-            "start_date": date.fromisoformat(range_match.group(1)) if range_match else date(1970, 1, 1),
-            "end_date": date.fromisoformat(range_match.group(2)) if range_match else date(1970, 1, 1),
-            "initial_cash": float(cash_match.group(1)) if cash_match else 0.0,
-            "simulation_runs": int(runs_match.group(1)) if runs_match else 0,
-        }
 
     def _format_log(self, message: str) -> str:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -617,6 +712,9 @@ class BacktestRepository:
             created_at,
             updated_at,
             logs,
+            annualized_return_avg,
+            trades_per_year_avg,
+            win_rate_avg,
         ) = row
         return BacktestTaskDTO(
             id=None if task_id is None else int(task_id),
@@ -635,6 +733,9 @@ class BacktestRepository:
             final_return_avg=None if final_return_avg is None else float(final_return_avg),
             final_return_min=None if final_return_min is None else float(final_return_min),
             final_return_max=None if final_return_max is None else float(final_return_max),
+            annualized_return_avg=None if annualized_return_avg is None else float(annualized_return_avg),
+            trades_per_year_avg=None if trades_per_year_avg is None else float(trades_per_year_avg),
+            win_rate_avg=None if win_rate_avg is None else float(win_rate_avg),
             started_at=None if started_at is None else str(started_at),
             finished_at=None if finished_at is None else str(finished_at),
             created_at=None if created_at is None else str(created_at),

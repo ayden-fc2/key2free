@@ -12,27 +12,68 @@ const MA_SERIES = [
   { color: "#2563eb", name: "MA30", window: 30 },
 ] as const;
 
-type Props = {
-  context: StockDataContext;
+export type TradeChartMarker = {
+  date: string;
+  price: number;
+  kind: "buy" | "sell";
+  label?: string;
 };
 
-export function StockContextCharts({ context }: Props) {
-  const chartBars = useMemo(
-    () => context.bars_1d_qfq.filter(isRenderableBar),
-    [context],
-  );
-  const chartOption = useMemo(() => buildChartOption(chartBars), [chartBars]);
+export type TradeChartPriceLine = {
+  label: string;
+  price: number;
+  color?: string;
+};
 
-  return <ReactECharts option={chartOption} style={{ height: 820, width: "100%" }} />;
+type Props = {
+  context: StockDataContext;
+  /** 买卖点标记（按交易日定位，落在 K 线主图上） */
+  markers?: TradeChartMarker[];
+  /** 水平参考线（止损/止盈位等） */
+  priceLines?: TradeChartPriceLine[];
+  /** 聚焦区间：以 startDate~endDate 为核心，左右各扩展 padBars 个交易日并默认缩放到该范围 */
+  focus?: { startDate: string; endDate: string; padBars?: number };
+  height?: number;
+};
+
+export function StockContextCharts({ context, markers, priceLines, focus, height = 820 }: Props) {
+  const chartBars = useMemo(() => {
+    const renderable = context.bars_1d_qfq.filter(isRenderableBar);
+    if (!focus) {
+      return renderable;
+    }
+    const pad = focus.padBars ?? 100;
+    const startIndex = findDateIndex(renderable, focus.startDate);
+    const endIndex = findDateIndex(renderable, focus.endDate);
+    if (startIndex === -1 || endIndex === -1) {
+      return renderable;
+    }
+    return renderable.slice(Math.max(0, startIndex - pad), Math.min(renderable.length, endIndex + pad + 1));
+  }, [context, focus]);
+
+  const chartOption = useMemo(
+    () => buildChartOption(chartBars, { markers, priceLines, zoomAll: Boolean(focus) }),
+    [chartBars, markers, priceLines, focus],
+  );
+
+  return <ReactECharts notMerge option={chartOption} style={{ height, width: "100%" }} />;
 }
 
-function buildChartOption(bars: Bar1dQfq[]) {
+function buildChartOption(
+  bars: Bar1dQfq[],
+  extras: { markers?: TradeChartMarker[]; priceLines?: TradeChartPriceLine[]; zoomAll?: boolean },
+) {
   const dates = bars.map((item) => item.trade_date);
   const closeValues = bars.map((item) => item.close ?? 0);
   const dif = subtractSeries(ema(closeValues, 12), ema(closeValues, 26));
   const dea = ema(dif, 9);
   const macd = subtractSeries(dif, dea).map((value) => value * 2);
-  const dataZoom = buildSharedZoom(bars.length);
+  const dataZoom = buildSharedZoom(bars.length, extras.zoomAll ?? false);
+  const dateSet = new Set(dates);
+  const visibleMarkers = (extras.markers ?? []).filter((item) => dateSet.has(item.date));
+  const buyMarkers = visibleMarkers.filter((item) => item.kind === "buy");
+  const sellMarkers = visibleMarkers.filter((item) => item.kind === "sell");
+  const priceLines = extras.priceLines ?? [];
 
   return {
     animation: false,
@@ -82,6 +123,21 @@ function buildChartOption(bars: Bar1dQfq[]) {
           color: "#ef4444",
           color0: "#10b981",
         },
+        markLine:
+          priceLines.length === 0
+            ? undefined
+            : {
+                data: priceLines.map((line) => ({
+                  label: {
+                    formatter: `${line.label} ${line.price.toFixed(2)}`,
+                    position: "insideEndTop",
+                  },
+                  lineStyle: { color: line.color ?? "#94a3b8", type: "dashed", width: 1.2 },
+                  yAxis: line.price,
+                })),
+                silent: true,
+                symbol: "none",
+              },
         name: "K线",
         type: "candlestick",
         xAxisIndex: 0,
@@ -97,6 +153,55 @@ function buildChartOption(bars: Bar1dQfq[]) {
         xAxisIndex: 0,
         yAxisIndex: 0,
       })),
+      ...(buyMarkers.length > 0
+        ? [
+            {
+              data: buyMarkers.map((item) => ({
+                label: {
+                  color: "#b91c1c",
+                  fontWeight: "bold",
+                  formatter: item.label ?? "B",
+                  position: "bottom",
+                  show: true,
+                },
+                value: [item.date, item.price],
+              })),
+              itemStyle: { color: "#ef4444" },
+              name: "买入",
+              symbol: "triangle",
+              symbolSize: 13,
+              type: "scatter",
+              xAxisIndex: 0,
+              yAxisIndex: 0,
+              z: 10,
+            },
+          ]
+        : []),
+      ...(sellMarkers.length > 0
+        ? [
+            {
+              data: sellMarkers.map((item) => ({
+                label: {
+                  color: "#047857",
+                  fontWeight: "bold",
+                  formatter: item.label ?? "S",
+                  position: "top",
+                  show: true,
+                },
+                value: [item.date, item.price],
+              })),
+              itemStyle: { color: "#10b981" },
+              name: "卖出",
+              symbol: "triangle",
+              symbolRotate: 180,
+              symbolSize: 13,
+              type: "scatter",
+              xAxisIndex: 0,
+              yAxisIndex: 0,
+              z: 10,
+            },
+          ]
+        : []),
       {
         data: macd.map((value) => ({
           itemStyle: { color: value >= 0 ? "#ef4444" : "#10b981" },
@@ -125,13 +230,22 @@ function buildChartOption(bars: Bar1dQfq[]) {
   };
 }
 
-function buildSharedZoom(length: number) {
-  const startValue = Math.max(0, length - 60);
+function buildSharedZoom(length: number, zoomAll: boolean) {
+  const startValue = zoomAll ? 0 : Math.max(0, length - 60);
   const endValue = Math.max(0, length - 1);
   return [
     { endValue, startValue, type: "inside", xAxisIndex: [0, 1, 2] },
     { bottom: 8, endValue, height: 18, startValue, xAxisIndex: [0, 1, 2] },
   ];
+}
+
+function findDateIndex(bars: Bar1dQfq[], target: string) {
+  const exact = bars.findIndex((item) => item.trade_date === target);
+  if (exact !== -1) {
+    return exact;
+  }
+  // 目标日不在序列中（如停牌）时取其后最近的交易日
+  return bars.findIndex((item) => item.trade_date > target);
 }
 
 function isRenderableBar(item: Bar1dQfq) {

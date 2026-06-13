@@ -1,10 +1,14 @@
-import { apiPost } from "@/lib/api/client";
+import { apiGet, apiPost } from "@/lib/api/client";
 import type {
   DailySignalRequest,
   DailySignalResult,
   StockDataContextRequest,
   StockDataContextResult,
 } from "@/types/signal";
+
+export function getSignalStrategies(): Promise<{ strategies: string[] }> {
+  return apiGet<{ strategies: string[] }>("/api/v1/signals/strategies");
+}
 
 export function getDailySignals(
   request: DailySignalRequest,
