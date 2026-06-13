@@ -22,18 +22,6 @@ SIGNAL_BASE_FLOAT_COLUMNS: tuple[str, ...] = (
 )
 SIGNAL_BASE_TEXT_COLUMNS: tuple[str, ...] = ("name",)
 
-# 行业上下文列（实验性）：来自 tmp.industry_daily（按 trade_date + industry join）。
-# 策略在 required_columns 中声明这些列时自动联表；tmp 表由
-# scripts/build_tmp_industry_daily.py 手工重建，不在 tushare 刷新流水线内。
-INDUSTRY_CONTEXT_COLUMNS: dict[str, str] = {
-    "industry_heat_rank": "ind.heat_rank",
-    "industry_strong_count": "ind.strong_count",
-    "industry_strong_ratio": "ind.strong_ratio",
-    "industry_amount_share": "ind.amount_share",
-    "industry_above_ma60_ratio": "ind.above_ma60_ratio",
-}
-
-
 class SignalRepository:
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
@@ -87,31 +75,12 @@ class SignalRepository:
         if not codes:
             return {}
         float_columns = list(SIGNAL_BASE_FLOAT_COLUMNS)
-        industry_columns: list[str] = []
         for column in extra_columns:
-            if column in INDUSTRY_CONTEXT_COLUMNS:
-                if column not in industry_columns:
-                    industry_columns.append(column)
-            elif column not in float_columns:
+            if column not in float_columns:
                 float_columns.append(column)
-        select_columns = ["trade_date", "code", *float_columns, *industry_columns, *SIGNAL_BASE_TEXT_COLUMNS]
+        select_columns = ["trade_date", "code", *float_columns, *SIGNAL_BASE_TEXT_COLUMNS]
         column_sql = ", ".join(select_columns)
-        if industry_columns:
-            industry_select = ", ".join(
-                f"{INDUSTRY_CONTEXT_COLUMNS[column]} as {column}" for column in industry_columns
-            )
-            source_sql = f"""
-                select t.trade_date, t.code,
-                       {', '.join(f't.{column}' for column in float_columns)},
-                       {industry_select},
-                       {', '.join(f't.{column}' for column in SIGNAL_BASE_TEXT_COLUMNS)}
-                from tushare.stock_daily_technical t
-                left join tmp.industry_daily ind
-                  on ind.trade_date = t.trade_date
-                 and ind.industry = t.industry
-            """
-        else:
-            source_sql = "select * from tushare.stock_daily_technical"
+        source_sql = "select * from tushare.stock_daily_technical"
         with self.duckdb.connect(read_only=True) as connection:
             frame = connection.execute(
                 f"""
@@ -155,7 +124,7 @@ class SignalRepository:
             ]
             columns: dict[str, Any] = {
                 column: group[column].to_numpy(dtype=np.float64, na_value=np.nan)
-                for column in (*float_columns, *industry_columns)
+                for column in float_columns
             }
             for column in SIGNAL_BASE_TEXT_COLUMNS:
                 columns[column] = group[column].to_numpy(dtype=object)

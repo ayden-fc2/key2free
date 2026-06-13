@@ -21,11 +21,6 @@ MAX_DRAWDOWN_FROM_HIGH = 0.20     # 回撤上限（排除主升已崩塌）
 MAX_VOLUME_RATIO_10 = 1.2         # 缩量（13 样本中位 0.92）
 HIGH_LOOKBACK = 20
 
-# v2 行业热度过滤（实验性，依赖 tmp.industry_daily）：只在当日最热的 N 个行业内出手。
-# 热度 = 行业内 roc_20>=25% 的强势股数量排名。对应他"只做最热题材"的近似表达，
-# 同时大幅降频以削减 v1 中约 -10%/年的手续费拖累。
-MAX_INDUSTRY_HEAT_RANK = 10
-
 # 交易参数（单层止盈止损）
 JIANGSHEN_POSITION_FRACTION = 1.0 / 3.0
 JIANGSHEN_MAX_HOLDING_DAYS = 3    # 持股 1~3 天，到期收盘卖出
@@ -39,7 +34,6 @@ JIANGSHEN_REQUIRED_COLUMNS: tuple[str, ...] = (
     "ma_20",
     "ma_30",
     "volume_ratio_10",
-    "industry_heat_rank",
 )
 
 
@@ -66,16 +60,12 @@ def jiangshen_batch_signal_strategy(
     ma_20 = columns["ma_20"]
     ma_30 = columns["ma_30"]
     volume_ratio_10 = columns["volume_ratio_10"]
-    industry_heat_rank = columns["industry_heat_rank"]
     st_blocked = _st_blocked_series(columns)
 
     results: dict[int, SignalDecision] = {}
     with np.errstate(invalid="ignore"):
         for index in target_indices:
             if index < HIGH_LOOKBACK or st_blocked[index]:
-                continue
-            # 0. 行业热度：只在当日最热的 N 个行业内出手（nan 视为不通过）
-            if not industry_heat_rank[index] <= MAX_INDUSTRY_HEAT_RANK:
                 continue
             # 1. 强势池：近期涨幅大 + 多头排列
             if not roc_20[index] >= MIN_ROC_20:

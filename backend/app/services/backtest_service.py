@@ -252,7 +252,7 @@ class BacktestService:
                 task_id,
                 f"股票维度信号预计算进度: {done}/{total}",
             ),
-            progress_interval=500,
+            progress_interval=100,
         )
         signals_by_date: dict[date, list[dict[str, Any]]] = {}
         signal_rows: list[list[Any]] = []
@@ -584,12 +584,19 @@ class BacktestService:
                     fraction=strategy.position_fraction,
                 )
             else:
+                risk_price = (
+                    item.signal_close
+                    if strategy.risk_price_basis == "signal_close"
+                    else buy_price
+                )
                 quantity = self._resolve_buy_quantity(
                     cash=cash,
                     total_asset=total_asset,
                     buy_price=buy_price,
+                    risk_price=risk_price,
                     first_stop=stop_losses[0] if stop_losses else None,
                     risk_per_trade=strategy.risk_per_trade,
+                    position_cap_fraction=strategy.position_cap_fraction,
                 )
             if quantity <= 0:
                 continue
@@ -667,24 +674,33 @@ class BacktestService:
         cash: float,
         total_asset: float,
         buy_price: float,
+        risk_price: float | None,
         first_stop: float | None,
         risk_per_trade: float,
+        position_cap_fraction: float | None,
     ) -> int:
         """风险敞口定仓：最坏止损亏损 <= 总资产 * risk_per_trade，取最大百股仓位。
 
         - 没有第一止损位、或买入价已不高于止损位（风险无法界定）时不买。
+        - 可选叠加单笔市值上限 position_cap_fraction。
         - 同时受可用现金约束（含买入手续费）。
         """
-        if buy_price <= 0 or first_stop is None:
+        if buy_price <= 0 or risk_price is None or first_stop is None:
             return 0
-        risk_per_share = buy_price - first_stop
+        risk_per_share = risk_price - first_stop
         if risk_per_share <= 0:
             return 0
         max_risk_amount = total_asset * risk_per_trade
         lots_by_risk = int(max_risk_amount // (risk_per_share * 100))
         cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
         lots_by_cash = int(cash // cost_per_lot)
-        return max(min(lots_by_risk, lots_by_cash), 0) * 100
+        lot_limits = [lots_by_risk, lots_by_cash]
+        if position_cap_fraction is not None:
+            if position_cap_fraction <= 0:
+                return 0
+            lots_by_cap = int((total_asset * position_cap_fraction) // (buy_price * 100))
+            lot_limits.append(lots_by_cap)
+        return max(min(lot_limits), 0) * 100
 
     def _resolve_fraction_quantity(
         self,

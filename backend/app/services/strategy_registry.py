@@ -5,6 +5,7 @@ from typing import Any, Callable, Protocol
 
 from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 from strategies.demo import (
+    DEMO_MAX_HOLDING_DAYS,
     DEMO_REQUIRED_COLUMNS,
     demo_batch_signal_strategy,
     demo_code_filter,
@@ -54,6 +55,9 @@ class StrategyRegistration:
     - entry_mode: "limit_signal_close"（默认，signal_close 限价）或
       "next_open"（次日开盘市价买入，停牌/一字板放弃）。
     - position_sizing: "risk"（默认，2% 风险定仓）或 "fraction"（总资产固定比例）。
+    - risk_price_basis: 风险定仓参考价，"buy_price" 使用实际成交价，
+      "signal_close" 使用信号日收盘价。
+    - position_cap_fraction: 可选，单笔买入市值不超过总资产的固定比例上限。
     - exit_plan_builder: 可选，成交时落定止损/止盈价位数组：
       输入 (买入成交价, 信号 dict)，返回 (stop_losses, take_profits)；
       返回 None 表示该成交价下风险无法界定，放弃买入。
@@ -69,6 +73,8 @@ class StrategyRegistration:
     entry_mode: str = "limit_signal_close"
     position_sizing: str = "risk"
     risk_per_trade: float = 0.02
+    risk_price_basis: str = "buy_price"
+    position_cap_fraction: float | None = None
     position_fraction: float = 1.0 / 3.0
     exit_plan_builder: (
         Callable[[float, dict], tuple[list[float], list[float]] | None] | None
@@ -84,6 +90,10 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         batch_signal_strategy=demo_batch_signal_strategy,
         required_columns=DEMO_REQUIRED_COLUMNS,
         code_filter=demo_code_filter,
+        entry_mode="next_open",
+        risk_price_basis="signal_close",
+        position_cap_fraction=1.0 / 4.0,
+        max_holding_days=DEMO_MAX_HOLDING_DAYS,
     ),
     "golden_pillar": StrategyRegistration(
         name="golden_pillar",
