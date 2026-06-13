@@ -25,19 +25,20 @@ MA10_SLOPE_NOISE_THRESHOLD = 0.008
 H1_REFERENCE_OFFSET_DAYS = 2
 
 MIN_T_MINUS_1_REMAINING_UPSIDE_RATIO = 0.4
-MAX_T_MINUS_1_AVG_VOLUME5_TO_H1_AVG_VOLUME5_RATIO = 0.5
-MAX_T_MINUS_1_ATR5_TO_H1_ATR5_RATIO = 0.5
-LOCAL_CONSOLIDATION_DAYS = 15
-MAX_LOCAL_CONSOLIDATION_RANGE_RATIO = 0.15
+MAX_T_MINUS_1_AVG_VOLUME10_TO_H1_AVG_VOLUME10_RATIO = 0.5
+MAX_T_MINUS_1_ATR14_TO_H1_ATR14_RATIO = 0.5
+MAX_LOCAL_CONSOLIDATION_ER20 = 0.40
 
 MIN_PILLAR_BODY_OPEN_RATIO = 0.05
-MIN_PILLAR_BODY_ATR5_MULTIPLE = 1.6
+MIN_PILLAR_BODY_ATR14_MULTIPLE = 1.6
+PRE_PILLAR_CLEAN_DAYS = 20
 ENTRY_OPEN_MAX_RATIO = 1.03
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
-    "atr_5",
+    "atr_14",
+    "er_20",
     "ma_slope_10",
-    "avg_volume_5",
+    "avg_volume_10",
 )
 
 
@@ -65,10 +66,11 @@ class GoldenPillarContext:
     ph1: float
     l2_index: int
     pl2: float
-    avg_volume5_t_minus_1: float
-    avg_volume5_th1_plus2: float
-    atr5_t_minus_1: float
-    atr5_th1_plus2: float
+    avg_volume10_t_minus_1: float
+    avg_volume10_th1_plus2: float
+    atr14_t_minus_1: float
+    atr14_th1_plus2: float
+    er20_t_minus_1: float
 
 
 def golden_pillar_code_filter(code: str) -> bool:
@@ -110,7 +112,7 @@ def golden_pillar_batch_signal_strategy(
         close_t = float(closes[index])
         close_t_minus_1 = float(closes[t_minus_1])
         open_t = float(opens[index])
-        atr5_t_minus_1 = context.atr5_t_minus_1
+        atr14_t_minus_1 = context.atr14_t_minus_1
         if not (
             np.isfinite(close_t)
             and np.isfinite(close_t_minus_1)
@@ -127,10 +129,12 @@ def golden_pillar_batch_signal_strategy(
             and pillar_body_open_ratio >= MIN_PILLAR_BODY_OPEN_RATIO
             and np.isfinite(pillar_body)
             and pillar_body > 0
-            and np.isfinite(atr5_t_minus_1)
-            and atr5_t_minus_1 > 0
-            and pillar_body >= MIN_PILLAR_BODY_ATR5_MULTIPLE * atr5_t_minus_1
+            and np.isfinite(atr14_t_minus_1)
+            and atr14_t_minus_1 > 0
+            and pillar_body >= MIN_PILLAR_BODY_ATR14_MULTIPLE * atr14_t_minus_1
         ):
+            continue
+        if _has_prior_large_bullish_body(frame=frame, index=index):
             continue
 
         entry_open_max = close_t * ENTRY_OPEN_MAX_RATIO
@@ -148,10 +152,11 @@ def golden_pillar_batch_signal_strategy(
                 "ph1": context.ph1,
                 "tl2": frame.trade_dates[context.l2_index].isoformat(),
                 "pl2": context.pl2,
-                "avg_volume5_t_minus_1": context.avg_volume5_t_minus_1,
-                "avg_volume5_th1_plus2": context.avg_volume5_th1_plus2,
-                "atr5_t_minus_1": context.atr5_t_minus_1,
-                "atr5_th1_plus2": context.atr5_th1_plus2,
+                "avg_volume10_t_minus_1": context.avg_volume10_t_minus_1,
+                "avg_volume10_th1_plus2": context.avg_volume10_th1_plus2,
+                "atr14_t_minus_1": context.atr14_t_minus_1,
+                "atr14_th1_plus2": context.atr14_th1_plus2,
+                "er20_t_minus_1": context.er20_t_minus_1,
                 "pillar_open": open_t,
                 "pillar_close": close_t,
                 "pillar_body": pillar_body,
@@ -201,14 +206,8 @@ def golden_pillar_exit_plan(
         or body <= 0
     ):
         return None
-    stop_losses = [
-        open_price + 0.5 * body,
-        close_price + body,
-    ]
-    take_profits = [
-        close_price + body,
-        close_price + 2.0 * body,
-    ]
+    stop_losses = [open_price + 0.5 * body]
+    take_profits = [close_price + body]
     if not all(np.isfinite(value) for value in [*stop_losses, *take_profits]):
         return None
     return (stop_losses, take_profits)
@@ -245,32 +244,33 @@ def _resolve_context(
     max_position = ph1 - MIN_T_MINUS_1_REMAINING_UPSIDE_RATIO * (ph1 - pl1)
     if not (np.isfinite(close_t_minus_1) and close_t_minus_1 <= max_position):
         return None
-    if not _has_local_consolidation_range(
-        frame=frame,
-        end_index=t_minus_1,
+    er20_t_minus_1 = float(frame.columns["er_20"][t_minus_1])
+    if not (
+        np.isfinite(er20_t_minus_1)
+        and er20_t_minus_1 <= MAX_LOCAL_CONSOLIDATION_ER20
     ):
         return None
 
     h1_ref_index = h1_index + H1_REFERENCE_OFFSET_DAYS
     if h1_ref_index > t_minus_1:
         return None
-    avg_volume5_t_minus_1 = float(frame.columns["avg_volume_5"][t_minus_1])
-    avg_volume5_th1_plus2 = float(frame.columns["avg_volume_5"][h1_ref_index])
-    atr5_t_minus_1 = float(frame.columns["atr_5"][t_minus_1])
-    atr5_th1_plus2 = float(frame.columns["atr_5"][h1_ref_index])
+    avg_volume10_t_minus_1 = float(frame.columns["avg_volume_10"][t_minus_1])
+    avg_volume10_th1_plus2 = float(frame.columns["avg_volume_10"][h1_ref_index])
+    atr14_t_minus_1 = float(frame.columns["atr_14"][t_minus_1])
+    atr14_th1_plus2 = float(frame.columns["atr_14"][h1_ref_index])
     if not (
-        np.isfinite(avg_volume5_t_minus_1)
-        and np.isfinite(avg_volume5_th1_plus2)
-        and avg_volume5_th1_plus2 > 0
-        and avg_volume5_t_minus_1
-        <= MAX_T_MINUS_1_AVG_VOLUME5_TO_H1_AVG_VOLUME5_RATIO * avg_volume5_th1_plus2
+        np.isfinite(avg_volume10_t_minus_1)
+        and np.isfinite(avg_volume10_th1_plus2)
+        and avg_volume10_th1_plus2 > 0
+        and avg_volume10_t_minus_1
+        <= MAX_T_MINUS_1_AVG_VOLUME10_TO_H1_AVG_VOLUME10_RATIO * avg_volume10_th1_plus2
     ):
         return None
     if not (
-        np.isfinite(atr5_t_minus_1)
-        and np.isfinite(atr5_th1_plus2)
-        and atr5_th1_plus2 > 0
-        and atr5_t_minus_1 <= MAX_T_MINUS_1_ATR5_TO_H1_ATR5_RATIO * atr5_th1_plus2
+        np.isfinite(atr14_t_minus_1)
+        and np.isfinite(atr14_th1_plus2)
+        and atr14_th1_plus2 > 0
+        and atr14_t_minus_1 <= MAX_T_MINUS_1_ATR14_TO_H1_ATR14_RATIO * atr14_th1_plus2
     ):
         return None
 
@@ -281,30 +281,46 @@ def _resolve_context(
         ph1=ph1,
         l2_index=l2_index,
         pl2=pl2,
-        avg_volume5_t_minus_1=avg_volume5_t_minus_1,
-        avg_volume5_th1_plus2=avg_volume5_th1_plus2,
-        atr5_t_minus_1=atr5_t_minus_1,
-        atr5_th1_plus2=atr5_th1_plus2,
+        avg_volume10_t_minus_1=avg_volume10_t_minus_1,
+        avg_volume10_th1_plus2=avg_volume10_th1_plus2,
+        atr14_t_minus_1=atr14_t_minus_1,
+        atr14_th1_plus2=atr14_th1_plus2,
+        er20_t_minus_1=er20_t_minus_1,
     )
 
 
-def _has_local_consolidation_range(
+def _has_prior_large_bullish_body(
     *,
     frame: StockDailyFrame,
-    end_index: int,
+    index: int,
 ) -> bool:
-    start_index = end_index + 1 - LOCAL_CONSOLIDATION_DAYS
-    if start_index < 0:
+    start = max(1, index - PRE_PILLAR_CLEAN_DAYS)
+    end = index - 1
+    if start > end:
         return False
-    highs = frame.columns["qfq_high"][start_index:end_index + 1]
-    lows = frame.columns["qfq_low"][start_index:end_index + 1]
-    if len(highs) != LOCAL_CONSOLIDATION_DAYS or np.isnan(highs).any() or np.isnan(lows).any():
-        return False
-    high = float(np.nanmax(highs))
-    low = float(np.nanmin(lows))
-    if not (np.isfinite(high) and np.isfinite(low) and low > 0 and high >= low):
-        return False
-    return (high - low) / low <= MAX_LOCAL_CONSOLIDATION_RANGE_RATIO
+    opens = frame.columns["qfq_open"]
+    closes = frame.columns["qfq_close"]
+    atr14 = frame.columns["atr_14"]
+    for position in range(start, end + 1):
+        open_price = float(opens[position])
+        close_price = float(closes[position])
+        prior_atr14 = float(atr14[position - 1])
+        body = close_price - open_price
+        body_ratio = body / open_price if open_price > 0 else float("nan")
+        if not (
+            np.isfinite(body)
+            and np.isfinite(body_ratio)
+            and np.isfinite(prior_atr14)
+            and prior_atr14 > 0
+        ):
+            continue
+        if (
+            body > 0
+            and body_ratio >= MIN_PILLAR_BODY_OPEN_RATIO
+            and body >= MIN_PILLAR_BODY_ATR14_MULTIPLE * prior_atr14
+        ):
+            return True
+    return False
 
 
 def _resolve_structure_by_ma10_slope(
