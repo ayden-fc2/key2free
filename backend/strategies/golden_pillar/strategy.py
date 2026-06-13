@@ -17,7 +17,7 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 # ---------------------------------------------------------------------------
 
 MAX_WATCH_DAYS = 1
-GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 3.0
+GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 4.0
 GOLDEN_PILLAR_MAX_HOLDING_DAYS = 15
 
 STRUCTURE_LOOKBACK = 180
@@ -27,10 +27,11 @@ H1_REFERENCE_OFFSET_DAYS = 2
 MIN_T_MINUS_1_REMAINING_UPSIDE_RATIO = 0.4
 MAX_T_MINUS_1_AVG_VOLUME5_TO_H1_AVG_VOLUME5_RATIO = 0.5
 MAX_T_MINUS_1_ATR5_TO_H1_ATR5_RATIO = 0.5
+LOCAL_CONSOLIDATION_DAYS = 15
+MAX_LOCAL_CONSOLIDATION_RANGE_RATIO = 0.15
 
 MIN_PILLAR_BODY_OPEN_RATIO = 0.05
 MIN_PILLAR_BODY_ATR5_MULTIPLE = 1.6
-PRE_PILLAR_CLEAN_DAYS = 15
 ENTRY_OPEN_MAX_RATIO = 1.03
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -131,13 +132,6 @@ def golden_pillar_batch_signal_strategy(
             and pillar_body >= MIN_PILLAR_BODY_ATR5_MULTIPLE * atr5_t_minus_1
         ):
             continue
-        if _has_prior_large_bullish_body(
-            opens=opens,
-            closes=closes,
-            atr5=columns["atr_5"],
-            index=index,
-        ):
-            continue
 
         entry_open_max = close_t * ENTRY_OPEN_MAX_RATIO
         results[index] = SignalDecision(
@@ -188,17 +182,36 @@ def golden_pillar_exit_plan(
 ) -> tuple[list[float], list[float]] | None:
     extras = signal.get("extras") or {}
     pillar_open = extras.get("pillar_open")
+    pillar_close = extras.get("pillar_close")
     pillar_body = extras.get("pillar_body")
-    if not isinstance(pillar_open, (int, float)) or not isinstance(pillar_body, (int, float)):
+    if (
+        not isinstance(pillar_open, (int, float))
+        or not isinstance(pillar_close, (int, float))
+        or not isinstance(pillar_body, (int, float))
+    ):
         return None
+    open_price = float(pillar_open)
+    close_price = float(pillar_close)
     body = float(pillar_body)
-    if not np.isfinite(buy_price) or not np.isfinite(body) or body <= 0:
+    if (
+        not np.isfinite(buy_price)
+        or not np.isfinite(open_price)
+        or not np.isfinite(close_price)
+        or not np.isfinite(body)
+        or body <= 0
+    ):
         return None
-    stop_loss = float(pillar_open)
-    take_profit = buy_price + body
-    if not np.isfinite(stop_loss) or not np.isfinite(take_profit):
+    stop_losses = [
+        open_price + 0.5 * body,
+        close_price + body,
+    ]
+    take_profits = [
+        close_price + body,
+        close_price + 2.0 * body,
+    ]
+    if not all(np.isfinite(value) for value in [*stop_losses, *take_profits]):
         return None
-    return ([stop_loss], [take_profit])
+    return (stop_losses, take_profits)
 
 
 def _resolve_context(
@@ -231,6 +244,11 @@ def _resolve_context(
     close_t_minus_1 = float(frame.columns["qfq_close"][t_minus_1])
     max_position = ph1 - MIN_T_MINUS_1_REMAINING_UPSIDE_RATIO * (ph1 - pl1)
     if not (np.isfinite(close_t_minus_1) and close_t_minus_1 <= max_position):
+        return None
+    if not _has_local_consolidation_range(
+        frame=frame,
+        end_index=t_minus_1,
+    ):
         return None
 
     h1_ref_index = h1_index + H1_REFERENCE_OFFSET_DAYS
@@ -270,36 +288,23 @@ def _resolve_context(
     )
 
 
-def _has_prior_large_bullish_body(
+def _has_local_consolidation_range(
     *,
-    opens: np.ndarray,
-    closes: np.ndarray,
-    atr5: np.ndarray,
-    index: int,
+    frame: StockDailyFrame,
+    end_index: int,
 ) -> bool:
-    start = max(0, index - 1 - PRE_PILLAR_CLEAN_DAYS)
-    end = index - 1
-    if start >= end:
+    start_index = end_index + 1 - LOCAL_CONSOLIDATION_DAYS
+    if start_index < 0:
         return False
-    for position in range(start, end):
-        open_price = float(opens[position])
-        close_price = float(closes[position])
-        prior_atr5 = float(atr5[position - 1]) if position > 0 else float("nan")
-        body = close_price - open_price
-        body_ratio = body / open_price if open_price > 0 else float("nan")
-        if not (
-            np.isfinite(body)
-            and np.isfinite(body_ratio)
-            and np.isfinite(prior_atr5)
-            and prior_atr5 > 0
-        ):
-            continue
-        if (
-            body_ratio >= MIN_PILLAR_BODY_OPEN_RATIO
-            and body >= MIN_PILLAR_BODY_ATR5_MULTIPLE * prior_atr5
-        ):
-            return True
-    return False
+    highs = frame.columns["qfq_high"][start_index:end_index + 1]
+    lows = frame.columns["qfq_low"][start_index:end_index + 1]
+    if len(highs) != LOCAL_CONSOLIDATION_DAYS or np.isnan(highs).any() or np.isnan(lows).any():
+        return False
+    high = float(np.nanmax(highs))
+    low = float(np.nanmin(lows))
+    if not (np.isfinite(high) and np.isfinite(low) and low > 0 and high >= low):
+        return False
+    return (high - low) / low <= MAX_LOCAL_CONSOLIDATION_RANGE_RATIO
 
 
 def _resolve_structure_by_ma10_slope(

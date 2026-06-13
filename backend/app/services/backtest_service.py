@@ -710,12 +710,12 @@ class BacktestService:
         buy_price: float,
         fraction: float,
     ) -> int:
-        """固定比例定仓：单笔买入金额 <= 总资产 * fraction，受可用现金约束。"""
+        """固定比例定仓：单笔股票市值 <= 总资产 * fraction，受可用现金（含手续费）约束。"""
         if buy_price <= 0 or fraction <= 0:
             return 0
         budget = total_asset * fraction
         cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
-        lots_by_budget = int(budget // cost_per_lot)
+        lots_by_budget = int(budget // (buy_price * 100))
         lots_by_cash = int(cash // cost_per_lot)
         return max(min(lots_by_budget, lots_by_cash), 0) * 100
 
