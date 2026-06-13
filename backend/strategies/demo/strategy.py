@@ -9,29 +9,22 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 
 
 # ---------------------------------------------------------------------------
-# 常量（口径见 a-obsidian-docs/strategies/demo.md）
+# Constants. See a-obsidian-docs/strategies/demo.md for the strategy contract.
 # ---------------------------------------------------------------------------
 
-# T+1 直接按开盘价买入；如果 T+1 不可交易，不顺延。
 MAX_WATCH_DAYS = 1
 DEMO_MAX_HOLDING_DAYS = 20
 
 N_BOTTOM_LOOKBACK = 90
-SWING_LEFT_BARS = 3
-SWING_RIGHT_BARS = 3
-MIN_L1_TO_T_BARS = 10
-MIN_L1_TO_H1_BARS = 3
-MIN_H1_TO_L2_BARS = 3
-L2_TO_T_BARS = 2
-
-MIN_RISE_ATR_MULTIPLE = 3.0
-L2_L1_ATR_MULTIPLE = 1.0
-KLINE_SEARCH_BEFORE_L2 = 3
-KLINE_LOW_ABOVE_L2_ATR_MULTIPLE = 0.2
+MA10_SLOPE_NOISE_THRESHOLD = 0.005
+MIN_H1_L1_RATIO = 0.25
+MIN_T_CLOSE_REBOUND_RATIO = 0.1
 MAX_T_CLOSE_REBOUND_RATIO = 0.3
-STOP_LOSS_ATR_MULTIPLE = 0.8
-TAKE_PROFIT_ATR_MULTIPLE = 0.5
-MIN_REWARD_RISK_RATIO = 1.3
+KLINE_SEARCH_BEFORE_L2 = 3
+MAX_T_AVG_VOLUME10_TO_H1_AVG_VOLUME5_RATIO = 1.0 / 3.0
+MAX_T_ATR14_TO_H1_ATR5_RATIO = 0.5
+STRUCTURE_EXIT_RETRACE_RATIO = 0.15
+MIN_REWARD_RISK_RATIO = 1.5
 
 VOLUME_AVG_MIN_RATIO = 0.8
 LONG_BODY_MIN_RATIO = 0.8
@@ -39,9 +32,11 @@ LONG_BODY_ATR_MULTIPLE = 0.618
 SMALL_CANDLE_ATR_MULTIPLE = 0.6
 BULLISH_ENGULFING_PREVIOUS_BODY_MIN_RATIO = 0.618
 
-# 策略需要的宽表列（框架基础列 qfq_open/high/low/close、vol、is_st、name 之外）。
 DEMO_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "atr_5",
     "atr_14",
+    "ma_slope_10",
+    "avg_volume_5",
     "avg_volume_10",
     "body_range_ratio",
     "body_atr14_ratio",
@@ -62,6 +57,13 @@ class NBottomContext:
     atr14_t: float
     kline_index: int
     kline_low: float
+    k_up_index: int
+    k_up_value: float
+    k_down_index: int
+    k_down_value: float
+    avg_volume10_t: float
+    avg_volume5_h1: float
+    atr5_h1: float
 
 
 @dataclass(frozen=True)
@@ -72,26 +74,32 @@ class KlineSignals:
 
 @dataclass(frozen=True)
 class NBottomSeries:
-    swing_lows: np.ndarray
-    swing_highs: np.ndarray
     close_nan_cumsum: np.ndarray
 
 
-# ---------------------------------------------------------------------------
-# 成分预过滤（代码级，静态）
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SlopeExtreme:
+    kind: str
+    index: int
+    value: float
+
+
+@dataclass(frozen=True)
+class StructurePoint:
+    kind: str
+    index: int
+    price: float
+    left_extreme: SlopeExtreme
+    right_extreme: SlopeExtreme
+
 
 def demo_code_filter(code: str) -> bool:
-    """只保留主板普通 A 股代码形态；ST 等与交易日相关的条件在信号函数内判断。"""
+    """Keep main-board common A-share codes; date-sensitive ST checks run later."""
     value = code.lower()
     if value.startswith("sh.688") or value.startswith("sz.300") or value.startswith("sz.301"):
         return False
     return value.startswith("sh.6") or value.startswith("sz.0")
 
-
-# ---------------------------------------------------------------------------
-# 信号策略（逐股批量评估）
-# ---------------------------------------------------------------------------
 
 def demo_batch_signal_strategy(
     frame: StockDailyFrame,
@@ -124,8 +132,9 @@ def demo_batch_signal_strategy(
             continue
 
         signal_close = float(closes[index])
-        stop_loss = context.pl2 - STOP_LOSS_ATR_MULTIPLE * context.atr14_t
-        take_profit = context.ph1 - TAKE_PROFIT_ATR_MULTIPLE * context.atr14_t
+        structure_range = context.ph1 - context.pl2
+        stop_loss = context.pl2 - STRUCTURE_EXIT_RETRACE_RATIO * structure_range
+        take_profit = context.ph1 - STRUCTURE_EXIT_RETRACE_RATIO * structure_range
         risk = signal_close - stop_loss
         reward = take_profit - signal_close
         if not (
@@ -155,15 +164,18 @@ def demo_batch_signal_strategy(
                 "atr14_t": context.atr14_t,
                 "kline_date": frame.trade_dates[context.kline_index].isoformat(),
                 "kline_low": context.kline_low,
+                "k_up_date": frame.trade_dates[context.k_up_index].isoformat(),
+                "k_up_value": context.k_up_value,
+                "k_down_date": frame.trade_dates[context.k_down_index].isoformat(),
+                "k_down_value": context.k_down_value,
+                "avg_volume10_t": context.avg_volume10_t,
+                "avg_volume5_h1": context.avg_volume5_h1,
+                "atr5_h1": context.atr5_h1,
                 "reward_risk_ratio": reward / risk,
             },
         )
     return results
 
-
-# ---------------------------------------------------------------------------
-# 成分筛选（交易日相关部分）
-# ---------------------------------------------------------------------------
 
 def _st_blocked_series(columns: dict[str, Any]) -> np.ndarray:
     is_st = columns.get("is_st")
@@ -177,15 +189,10 @@ def _st_blocked_series(columns: dict[str, Any]) -> np.ndarray:
             if name is None:
                 continue
             text = str(name)
-            if "st" in text.lower() or "*" in text or "＊" in text:
+            if "st" in text.lower() or "*" in text:
                 blocked[position] = True
     return blocked
 
-
-# ---------------------------------------------------------------------------
-# 趋势结构过滤：N 字结构 L1(tl1, pl1) -> H1(th1, ph1) -> L2(tl2, pl2)
-# p 使用收盘价，t 使用交易日。
-# ---------------------------------------------------------------------------
 
 def _resolve_n_bottom_context(
     *,
@@ -196,9 +203,6 @@ def _resolve_n_bottom_context(
     kline_signals: KlineSignals,
     n_bottom_series: NBottomSeries,
 ) -> NBottomContext | None:
-    l2_index = index - L2_TO_T_BARS
-    if l2_index <= 0:
-        return None
     atr14_t = float(atr14[index])
     if not np.isfinite(atr14_t) or atr14_t <= 0:
         return None
@@ -206,10 +210,40 @@ def _resolve_n_bottom_context(
     if _has_nan_in_range(n_bottom_series.close_nan_cumsum, window_start, index):
         return None
 
-    pl2 = float(closes[l2_index])
     close_t = float(closes[index])
-    if not (np.isfinite(pl2) and np.isfinite(close_t)):
+    if not np.isfinite(close_t):
         return None
+    n_context = _resolve_n_bottom_by_ma10_slope(
+        frame=frame,
+        index=index,
+        window_start=window_start,
+    )
+    if n_context is None:
+        return None
+    l1_point, h1_point, l2_point = n_context
+    l1_index = l1_point.index
+    h1_index = h1_point.index
+    l2_index = l2_point.index
+    pl1 = l1_point.price
+    ph1 = h1_point.price
+    pl2 = l2_point.price
+
+    if not (l1_index < h1_index < l2_index <= index):
+        return None
+    if ph1 - pl1 < MIN_H1_L1_RATIO * ph1:
+        return None
+    if not (pl1 - atr14_t <= pl2 <= pl1 + atr14_t):
+        return None
+    structure_range = ph1 - pl2
+    if structure_range <= 0:
+        return None
+    if not (
+        pl2 + MIN_T_CLOSE_REBOUND_RATIO * structure_range
+        <= close_t
+        <= pl2 + MAX_T_CLOSE_REBOUND_RATIO * structure_range
+    ):
+        return None
+
     try:
         kline_index, kline_low = _resolve_best_kline_pattern(
             l2_index=l2_index,
@@ -221,65 +255,23 @@ def _resolve_n_bottom_context(
     except ValueError:
         return None
 
-    swing_lows = _precomputed_pivots_in_range(
-        pivots=n_bottom_series.swing_lows,
-        start=window_start,
-        end=l2_index,
-        left=SWING_LEFT_BARS,
-        right=SWING_RIGHT_BARS,
-        series_length=len(closes),
-    )
-    swing_highs = _precomputed_pivots_in_range(
-        pivots=n_bottom_series.swing_highs,
-        start=window_start,
-        end=l2_index,
-        left=SWING_LEFT_BARS,
-        right=SWING_RIGHT_BARS,
-        series_length=len(closes),
-    )
-
-    best: tuple[float, int, float, int, float] | None = None
-    for h1_index in swing_highs:
-        h1_index = int(h1_index)
-        if h1_index > l2_index - MIN_H1_TO_L2_BARS:
-            continue
-        l1_candidates = swing_lows[
-            (swing_lows <= h1_index - MIN_L1_TO_H1_BARS)
-            & (index - swing_lows >= MIN_L1_TO_T_BARS)
-        ]
-        if len(l1_candidates) == 0:
-            continue
-        # 同一 H1 下，使用 H1 前最低的 swing low 作为 L1。
-        l1_index = int(l1_candidates[np.argmin(closes[l1_candidates])])
-        pl1 = float(closes[l1_index])
-        ph1 = float(closes[h1_index])
-        if not (np.isfinite(pl1) and np.isfinite(ph1)):
-            continue
-        if not (l1_index < h1_index < l2_index < index):
-            continue
-        if ph1 - pl1 < MIN_RISE_ATR_MULTIPLE * atr14_t:
-            continue
-        if not (
-            -L2_L1_ATR_MULTIPLE * atr14_t
-            <= pl2 - pl1
-            <= L2_L1_ATR_MULTIPLE * atr14_t
-        ):
-            continue
-        if not (pl2 <= close_t <= pl2 + MAX_T_CLOSE_REBOUND_RATIO * (ph1 - pl2)):
-            continue
-        # L2 必须是 H1 到 T 之间的最低收盘价，确保 N 字第二脚有效。
-        after_h1_closes = closes[h1_index : index + 1]
-        if len(after_h1_closes) == 0:
-            continue
-        if abs(float(np.min(after_h1_closes)) - pl2) > max(1e-8, abs(pl2) * 1e-8):
-            continue
-        score = (ph1 - pl1) / atr14_t
-        if best is None or score > best[0]:
-            best = (score, l1_index, pl1, h1_index, ph1)
-
-    if best is None:
+    avg_volume10_t = float(frame.columns["avg_volume_10"][index])
+    avg_volume5_h1 = float(frame.columns["avg_volume_5"][h1_index])
+    atr5_h1 = float(frame.columns["atr_5"][h1_index])
+    if not (
+        np.isfinite(avg_volume10_t)
+        and np.isfinite(avg_volume5_h1)
+        and avg_volume5_h1 > 0
+        and avg_volume10_t <= MAX_T_AVG_VOLUME10_TO_H1_AVG_VOLUME5_RATIO * avg_volume5_h1
+    ):
         return None
-    _score, l1_index, pl1, h1_index, ph1 = best
+    if not (
+        np.isfinite(atr5_h1)
+        and atr5_h1 > 0
+        and atr14_t <= MAX_T_ATR14_TO_H1_ATR5_RATIO * atr5_h1
+    ):
+        return None
+
     return NBottomContext(
         l1_index=l1_index,
         pl1=pl1,
@@ -290,6 +282,13 @@ def _resolve_n_bottom_context(
         atr14_t=atr14_t,
         kline_index=kline_index,
         kline_low=kline_low,
+        k_up_index=h1_point.left_extreme.index,
+        k_up_value=h1_point.left_extreme.value,
+        k_down_index=l2_point.left_extreme.index,
+        k_down_value=l2_point.left_extreme.value,
+        avg_volume10_t=avg_volume10_t,
+        avg_volume5_h1=avg_volume5_h1,
+        atr5_h1=atr5_h1,
     )
 
 
@@ -298,31 +297,7 @@ def _prepare_n_bottom_series(closes: np.ndarray) -> NBottomSeries:
         np.array([0], dtype=np.int64),
         np.cumsum(np.isnan(closes).astype(np.int64)),
     ))
-    swing_lows = np.asarray(
-        _find_pivot_indices(
-            values=closes,
-            start=0,
-            end=len(closes) - 1,
-            left=SWING_LEFT_BARS,
-            right=SWING_RIGHT_BARS,
-            mode="low",
-        ),
-        dtype=np.int64,
-    )
-    swing_highs = np.asarray(
-        _find_pivot_indices(
-            values=closes,
-            start=0,
-            end=len(closes) - 1,
-            left=SWING_LEFT_BARS,
-            right=SWING_RIGHT_BARS,
-            mode="high",
-        ),
-        dtype=np.int64,
-    )
     return NBottomSeries(
-        swing_lows=swing_lows,
-        swing_highs=swing_highs,
         close_nan_cumsum=close_nan_cumsum,
     )
 
@@ -331,22 +306,131 @@ def _has_nan_in_range(cumsum: np.ndarray, start: int, end: int) -> bool:
     return int(cumsum[end + 1] - cumsum[start]) > 0
 
 
-def _precomputed_pivots_in_range(
+def _resolve_n_bottom_by_ma10_slope(
     *,
-    pivots: np.ndarray,
-    start: int,
-    end: int,
-    left: int,
-    right: int,
-    series_length: int,
-) -> np.ndarray:
-    first = max(start + left, left)
-    last = min(end - right, series_length - 1 - right)
-    if last < first or len(pivots) == 0:
-        return np.asarray([], dtype=np.int64)
-    left_position = int(np.searchsorted(pivots, first, side="left"))
-    right_position = int(np.searchsorted(pivots, last, side="right"))
-    return pivots[left_position:right_position]
+    frame: StockDailyFrame,
+    index: int,
+    window_start: int,
+) -> tuple[StructurePoint, StructurePoint, StructurePoint] | None:
+    slope = frame.columns["ma_slope_10"]
+    extremes = _ma10_slope_extremes(
+        slope=slope,
+        start_index=window_start,
+        end_index=index,
+        threshold=MA10_SLOPE_NOISE_THRESHOLD,
+    )
+    points = _structure_points_from_slope_extremes(
+        frame=frame,
+        extremes=extremes,
+    )
+    if len(points) < 3:
+        return None
+
+    for right in range(len(points) - 1, 1, -1):
+        l1, h1, l2 = points[right - 2], points[right - 1], points[right]
+        if (l1.kind, h1.kind, l2.kind) == ("low", "high", "low"):
+            return l1, h1, l2
+    return None
+
+
+def _ma10_slope_extremes(
+    *,
+    slope: np.ndarray,
+    start_index: int,
+    end_index: int,
+    threshold: float,
+) -> list[SlopeExtreme]:
+    pending_kind: str | None = None
+    pending_index: int | None = None
+    pending_value: float | None = None
+    reversed_extremes: list[SlopeExtreme] = []
+
+    for position in range(end_index, start_index - 1, -1):
+        value = float(slope[position])
+        if not np.isfinite(value):
+            continue
+        kind = _slope_kind(value, threshold)
+        if kind is None:
+            continue
+        if pending_kind is None:
+            pending_kind = kind
+            pending_index = position
+            pending_value = value
+            continue
+        if kind == pending_kind:
+            if pending_value is None or _is_stronger_slope(kind, value, pending_value):
+                pending_index = position
+                pending_value = value
+            continue
+        reversed_extremes.append(SlopeExtreme(pending_kind, int(pending_index), float(pending_value)))
+        pending_kind = kind
+        pending_index = position
+        pending_value = value
+
+    if pending_kind is not None and pending_index is not None and pending_value is not None:
+        reversed_extremes.append(SlopeExtreme(pending_kind, pending_index, pending_value))
+    return list(reversed(reversed_extremes))
+
+
+def _structure_points_from_slope_extremes(
+    *,
+    frame: StockDailyFrame,
+    extremes: list[SlopeExtreme],
+) -> list[StructurePoint]:
+    highs = frame.columns["qfq_high"]
+    lows = frame.columns["qfq_low"]
+    points: list[StructurePoint] = []
+    for left, right in zip(extremes, extremes[1:]):
+        start = min(left.index, right.index)
+        end = max(left.index, right.index)
+        if start > end:
+            continue
+        if left.kind == "up" and right.kind == "down":
+            high_index, high_price = _highest_high(highs, start, end)
+            if high_index is not None:
+                points.append(StructurePoint("high", high_index, high_price, left, right))
+        elif left.kind == "down" and right.kind == "up":
+            low_index, low_price = _lowest_low(lows, start, end)
+            if low_index is not None:
+                points.append(StructurePoint("low", low_index, low_price, left, right))
+    points.sort(key=lambda item: item.index)
+    return points
+
+
+def _slope_kind(value: float, threshold: float) -> str | None:
+    if value > threshold:
+        return "up"
+    if value < -threshold:
+        return "down"
+    return None
+
+
+def _is_stronger_slope(kind: str, value: float, current: float) -> bool:
+    if kind == "up":
+        return value > current
+    return value < current
+
+
+def _highest_high(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+    window = values[start_index:end_index + 1]
+    if len(window) == 0 or np.isnan(window).all():
+        return None, float("nan")
+    offset = int(np.nanargmax(window))
+    index = start_index + offset
+    return index, float(values[index])
+
+
+def _lowest_low(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+    window = values[start_index:end_index + 1]
+    if len(window) == 0 or np.isnan(window).all():
+        return None, float("nan")
+    offset = int(np.nanargmin(window))
+    index = start_index + offset
+    return index, float(values[index])
+
+
+def _is_same_price(left: float, right: float) -> bool:
+    return abs(left - right) <= max(1e-8, abs(right) * 1e-8)
 
 
 def _has_valid_kline_pattern(
@@ -386,48 +470,13 @@ def _resolve_best_kline_pattern(
         low_value = float(kline_signals.pattern_lows[position])
         if not np.isfinite(low_value):
             continue
-        if low_value <= pl2 + KLINE_LOW_ABOVE_L2_ATR_MULTIPLE * atr14_t:
+        if _is_same_price(low_value, pl2):
             candidates.append((low_value, position))
     if not candidates:
         raise ValueError("no valid kline pattern")
     low_value, position = min(candidates, key=lambda item: (item[0], -item[1]))
     return position, low_value
 
-
-def _find_pivot_indices(
-    *,
-    values: np.ndarray,
-    start: int,
-    end: int,
-    left: int,
-    right: int,
-    mode: str,
-) -> list[int]:
-    """确认型 swing pivot：只使用 end 及以前数据，避免未来泄漏。"""
-    result: list[int] = []
-    first = max(start + left, left)
-    last = min(end - right, len(values) - 1 - right)
-    if last < first:
-        return result
-    for position in range(first, last + 1):
-        window = values[position - left : position + right + 1]
-        if len(window) != left + right + 1 or np.isnan(window).any():
-            continue
-        center = float(values[position])
-        if mode == "low":
-            if center <= float(np.min(window)):
-                result.append(position)
-        elif mode == "high":
-            if center >= float(np.max(window)):
-                result.append(position)
-        else:
-            raise ValueError(f"unknown pivot mode: {mode}")
-    return result
-
-
-# ---------------------------------------------------------------------------
-# K 线形态过滤
-# ---------------------------------------------------------------------------
 
 def _kline_filter_series(columns: dict[str, Any]) -> KlineSignals:
     opens = columns["qfq_open"]
@@ -555,7 +604,6 @@ def _shadow_ratio_at_least(
     short_ratio: np.ndarray,
     multiple: float,
 ) -> np.ndarray:
-    """长影线 / 短影线 >= multiple；短影线为 0 时只要求长影线 > 0。"""
     return (long_ratio > 0) & ((short_ratio <= 0) | (long_ratio >= multiple * short_ratio))
 
 
