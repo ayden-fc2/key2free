@@ -13,7 +13,7 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 # ---------------------------------------------------------------------------
 
 MAX_WATCH_DAYS = 1
-DEMO_MAX_HOLDING_DAYS = 20
+DEMO_MAX_HOLDING_DAYS = 40
 
 N_BOTTOM_LOOKBACK = 90
 MA10_SLOPE_NOISE_THRESHOLD = 0.005
