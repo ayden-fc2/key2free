@@ -4,6 +4,7 @@ import math
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -69,6 +70,7 @@ class BacktestService:
     BUY_FEE_BPS = 5
     SELL_FEE_BPS = 10
     SIMULATION_RUNS = 50
+    SIMULATION_WORKERS = 10
 
     def __init__(self) -> None:
         self.repository = BacktestRepository()
@@ -185,32 +187,60 @@ class BacktestService:
             random_seed = time.time_ns()
             self.repository.append_task_log(
                 task_id,
-                f"开始 {self.SIMULATION_RUNS} 轮随机撮合: seed={random_seed}",
+                (
+                    f"开始 {self.SIMULATION_RUNS} 轮随机撮合: "
+                    f"seed={random_seed}, workers={self.SIMULATION_WORKERS}"
+                ),
             )
-            final_assets: list[float] = []
-            run_stats_list: list[dict[str, int]] = []
-            for run_no in range(1, self.SIMULATION_RUNS + 1):
-                final_asset, run_stats = self._simulate(
-                    task_id=task_id,
-                    run_no=run_no,
-                    random_seed=random_seed,
-                    trading_dates=trading_dates,
-                    initial_cash=initial_cash,
-                    strategy=strategy,
-                    signals_by_date=signals_by_date,
-                    prices=prices,
-                )
-                final_assets.append(final_asset)
-                run_stats_list.append(run_stats)
-                if run_no == 1 or run_no % 10 == 0 or run_no == self.SIMULATION_RUNS:
-                    self.repository.update_task_progress(
+            final_assets_by_run: dict[int, float] = {}
+            run_stats_by_run: dict[int, dict[str, int]] = {}
+            max_workers = min(self.SIMULATION_WORKERS, self.SIMULATION_RUNS)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._simulate,
                         task_id=task_id,
-                        completed_runs=run_no,
-                    )
-                    self.repository.append_task_log(
-                        task_id,
-                        f"随机撮合完成 {run_no}/{self.SIMULATION_RUNS}: final_asset={final_asset:.2f}",
-                    )
+                        run_no=run_no,
+                        random_seed=random_seed,
+                        trading_dates=trading_dates,
+                        initial_cash=initial_cash,
+                        strategy=strategy,
+                        signals_by_date=signals_by_date,
+                        prices=prices,
+                    ): run_no
+                    for run_no in range(1, self.SIMULATION_RUNS + 1)
+                }
+                completed_runs = 0
+                for future in as_completed(futures):
+                    run_no = futures[future]
+                    final_asset, run_stats = future.result()
+                    final_assets_by_run[run_no] = final_asset
+                    run_stats_by_run[run_no] = run_stats
+                    completed_runs += 1
+                    if (
+                        completed_runs == 1
+                        or completed_runs % 10 == 0
+                        or completed_runs == self.SIMULATION_RUNS
+                    ):
+                        self.repository.update_task_progress(
+                            task_id=task_id,
+                            completed_runs=completed_runs,
+                        )
+                        self.repository.append_task_log(
+                            task_id,
+                            (
+                                f"随机撮合完成 {completed_runs}/{self.SIMULATION_RUNS}: "
+                                f"run_no={run_no}, final_asset={final_asset:.2f}"
+                            ),
+                        )
+            final_assets = [
+                final_assets_by_run[run_no]
+                for run_no in range(1, self.SIMULATION_RUNS + 1)
+            ]
+            run_stats_list = [
+                run_stats_by_run[run_no]
+                for run_no in range(1, self.SIMULATION_RUNS + 1)
+            ]
             summary = self._summarize_runs(
                 start_date=start_date,
                 end_date=end_date,

@@ -1,0 +1,2174 @@
+﻿{
+    "task_id":  62,
+    "run_no":  1,
+    "available_runs":  [
+                           1,
+                           2,
+                           3,
+                           4,
+                           5,
+                           6,
+                           7,
+                           8,
+                           9,
+                           10,
+                           11,
+                           12,
+                           13,
+                           14,
+                           15,
+                           16,
+                           17,
+                           18,
+                           19,
+                           20,
+                           21,
+                           22,
+                           23,
+                           24,
+                           25,
+                           26,
+                           27,
+                           28,
+                           29,
+                           30,
+                           31,
+                           32,
+                           33,
+                           34,
+                           35,
+                           36,
+                           37,
+                           38,
+                           39,
+                           40,
+                           41,
+                           42,
+                           43,
+                           44,
+                           45,
+                           46,
+                           47,
+                           48,
+                           49,
+                           50
+                       ],
+    "equity_curves":  null,
+    "trades":  [
+                   {
+                       "code":  "sh.601878",
+                       "code_name":  "æµåè¯å¸",
+                       "buy_date":  "2026-01-12",
+                       "buy_price":  10.997039544962082,
+                       "quantity":  2200,
+                       "buy_amount":  24193.486998916578,
+                       "buy_fee":  12.096743499458288,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-01-26",
+                                         "sell_price":  10.857962260743951,
+                                         "quantity":  2200,
+                                         "amount":  23887.51697363669,
+                                         "fee":  23.887516973636693,
+                                         "pnl":  -341.95428575298155,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -341.95428575298155,
+                       "last_sell_date":  "2026-01-26",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  10.97717136150235,
+                                      "stop_losses":  [
+                                                          10.728819068255689,
+                                                          10.947369086312749
+                                                      ],
+                                      "take_profits":  [
+                                                           11.349699801372342,
+                                                           11.473875947995673
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.872540628385698,
+                                                     "window_max":  15.569106175514626,
+                                                     "window_range":  5.6965655471289285,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-06",
+                                                     "current_t2":  "2026-01-07",
+                                                     "current_t3":  "2026-01-08",
+                                                     "current_t4":  "2026-01-09",
+                                                     "current_structure_low":  10.907632719393286,
+                                                     "current_structure_high":  11.185787287829543,
+                                                     "current_confirm_mid_avg":  11.008629318646925,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  10.728819068255689,
+                                                     "stop_loss_2":  10.947369086312749,
+                                                     "take_profit_1":  11.349699801372342,
+                                                     "take_profit_2":  11.473875947995673
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.601901",
+                       "code_name":  "æ¹æ­£è¯å¸",
+                       "buy_date":  "2026-01-12",
+                       "buy_price":  7.889689568378857,
+                       "quantity":  3100,
+                       "buy_amount":  24458.037661974457,
+                       "buy_fee":  12.22901883098723,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-01-13",
+                                         "sell_price":  8.374056586184395,
+                                         "quantity":  1600,
+                                         "amount":  13398.490537895032,
+                                         "fee":  13.398490537895032,
+                                         "pnl":  755.276986296263,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-01-21",
+                                         "sell_price":  7.859728721916658,
+                                         "quantity":  1500,
+                                         "amount":  11789.593082874986,
+                                         "fee":  11.789593082874985,
+                                         "pnl":  -62.64812995245761,
+                                         "reason":  "stop_loss",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  692.6288563438054,
+                       "last_sell_date":  "2026-01-21",
+                       "holding_days":  9,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  7.909663466020322,
+                                      "stop_losses":  [
+                                                          7.600068052577607,
+                                                          7.879702619558123
+                                                      ],
+                                      "take_profits":  [
+                                                           8.374056586184395,
+                                                           8.528854292905752
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  6.498249277524005,
+                                                     "window_max":  10.050756036170412,
+                                                     "window_range":  3.552506758646407,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-06",
+                                                     "current_t2":  "2026-01-07",
+                                                     "current_t3":  "2026-01-08",
+                                                     "current_t4":  "2026-01-09",
+                                                     "current_structure_low":  7.849741773095926,
+                                                     "current_structure_high":  8.069454647152046,
+                                                     "current_confirm_mid_avg":  7.949611261303253,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  7.600068052577607,
+                                                     "stop_loss_2":  7.879702619558123,
+                                                     "take_profit_1":  8.374056586184395,
+                                                     "take_profit_2":  8.528854292905752
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002797",
+                       "code_name":  "ç¬¬ä¸åä¸",
+                       "buy_date":  "2026-01-12",
+                       "buy_price":  7.06,
+                       "quantity":  3500,
+                       "buy_amount":  24710.0,
+                       "buy_fee":  12.355,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-01-26",
+                                         "sell_price":  7.09,
+                                         "quantity":  3500,
+                                         "amount":  24815.0,
+                                         "fee":  24.815,
+                                         "pnl":  67.83000000000087,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  67.83000000000087,
+                       "last_sell_date":  "2026-01-26",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  7.06,
+                                      "stop_losses":  [
+                                                          6.73,
+                                                          7.029999999999999
+                                                      ],
+                                      "take_profits":  [
+                                                           7.554999999999998,
+                                                           7.719999999999998
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  4.6669935805991445,
+                                                     "window_max":  11.269744412743702,
+                                                     "window_range":  6.602750832144557,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-06",
+                                                     "current_t2":  "2026-01-07",
+                                                     "current_t3":  "2026-01-08",
+                                                     "current_t4":  "2026-01-09",
+                                                     "current_structure_low":  6.97,
+                                                     "current_structure_high":  7.18,
+                                                     "current_confirm_mid_avg":  7.071666666666666,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  6.73,
+                                                     "stop_loss_2":  7.029999999999999,
+                                                     "take_profit_1":  7.554999999999998,
+                                                     "take_profit_2":  7.719999999999998
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.601666",
+                       "code_name":  "å¹³ç\u0085¤è¡ä»½",
+                       "buy_date":  "2026-01-13",
+                       "buy_price":  8.53,
+                       "quantity":  2900,
+                       "buy_amount":  24736.999999999996,
+                       "buy_fee":  12.3685,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-01-27",
+                                         "sell_price":  8.12,
+                                         "quantity":  2900,
+                                         "amount":  23547.999999999996,
+                                         "fee":  23.548,
+                                         "pnl":  -1224.9165000000005,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1224.9165000000005,
+                       "last_sell_date":  "2026-01-27",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  8.49,
+                                      "stop_losses":  [
+                                                          7.77,
+                                                          8.42
+                                                      ],
+                                      "take_profits":  [
+                                                           9.57,
+                                                           9.930000000000001
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  7.22,
+                                                     "window_max":  12.734733657766672,
+                                                     "window_range":  5.514733657766672,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-07",
+                                                     "current_t2":  "2026-01-08",
+                                                     "current_t3":  "2026-01-09",
+                                                     "current_t4":  "2026-01-12",
+                                                     "current_structure_low":  8.04,
+                                                     "current_structure_high":  8.68,
+                                                     "current_confirm_mid_avg":  8.426666666666668,
+                                                     "recent_pillar_count_t25_t":  3,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  7.77,
+                                                     "stop_loss_2":  8.42,
+                                                     "take_profit_1":  9.57,
+                                                     "take_profit_2":  9.930000000000001
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000403",
+                       "code_name":  "æ´¾æçç©",
+                       "buy_date":  "2026-01-14",
+                       "buy_price":  14.45,
+                       "quantity":  1000,
+                       "buy_amount":  14450.0,
+                       "buy_fee":  7.225,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-01-28",
+                                         "sell_price":  13.79,
+                                         "quantity":  1000,
+                                         "amount":  13790.0,
+                                         "fee":  13.79,
+                                         "pnl":  -681.0150000000001,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -681.0150000000001,
+                       "last_sell_date":  "2026-01-28",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  14.45,
+                                      "stop_losses":  [
+                                                          13.080000000000002,
+                                                          14.53
+                                                      ],
+                                      "take_profits":  [
+                                                           16.504999999999995,
+                                                           17.189999999999994
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  13.080000000000002,
+                                                     "window_max":  22.32172468385357,
+                                                     "window_range":  9.241724683853569,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-08",
+                                                     "current_t2":  "2026-01-09",
+                                                     "current_t3":  "2026-01-12",
+                                                     "current_t4":  "2026-01-13",
+                                                     "current_structure_low":  13.98,
+                                                     "current_structure_high":  14.76,
+                                                     "current_confirm_mid_avg":  14.410000000000002,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  13.080000000000002,
+                                                     "stop_loss_2":  14.53,
+                                                     "take_profit_1":  16.504999999999995,
+                                                     "take_profit_2":  17.189999999999994
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002372",
+                       "code_name":  "ä¼ææ°æ",
+                       "buy_date":  "2026-01-26",
+                       "buy_price":  11.226095836762212,
+                       "quantity":  2200,
+                       "buy_amount":  24697.410840876866,
+                       "buy_fee":  12.348705420438433,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-02-09",
+                                         "sell_price":  12.019664680395403,
+                                         "quantity":  2200,
+                                         "amount":  26443.262296869885,
+                                         "fee":  26.443262296869886,
+                                         "pnl":  1707.0594882757107,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  1707.0594882757107,
+                       "last_sell_date":  "2026-02-09",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  11.235773505587007,
+                                      "stop_losses":  [
+                                                          10.04542024013722,
+                                                          11.216418167937416
+                                                      ],
+                                      "take_profits":  [
+                                                           13.021303403761687,
+                                                           13.61648003648658
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.460458461813026,
+                                                     "window_max":  15.693702892156377,
+                                                     "window_range":  6.233244430343351,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-20",
+                                                     "current_t2":  "2026-01-21",
+                                                     "current_t3":  "2026-01-22",
+                                                     "current_t4":  "2026-01-23",
+                                                     "current_structure_low":  10.35510564253066,
+                                                     "current_structure_high":  11.40029387560852,
+                                                     "current_confirm_mid_avg":  11.058349577132432,
+                                                     "recent_pillar_count_t25_t":  3,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  10.04542024013722,
+                                                     "stop_loss_2":  11.216418167937416,
+                                                     "take_profit_1":  13.021303403761687,
+                                                     "take_profit_2":  13.61648003648658
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603348",
+                       "code_name":  "æç¿è¡ä»½",
+                       "buy_date":  "2026-01-27",
+                       "buy_price":  21.52,
+                       "quantity":  1100,
+                       "buy_amount":  23672.0,
+                       "buy_fee":  11.836,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-02-10",
+                                         "sell_price":  20.51,
+                                         "quantity":  1100,
+                                         "amount":  22561.0,
+                                         "fee":  22.561,
+                                         "pnl":  -1145.3969999999977,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1145.3969999999977,
+                       "last_sell_date":  "2026-02-10",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  21.64,
+                                      "stop_losses":  [
+                                                          19.62,
+                                                          21.49
+                                                      ],
+                                      "take_profits":  [
+                                                           24.67,
+                                                           25.68
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  18.14763719512195,
+                                                     "window_max":  31.002667682926823,
+                                                     "window_range":  12.855030487804875,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-21",
+                                                     "current_t2":  "2026-01-22",
+                                                     "current_t3":  "2026-01-23",
+                                                     "current_t4":  "2026-01-26",
+                                                     "current_structure_low":  20.46,
+                                                     "current_structure_high":  21.95,
+                                                     "current_confirm_mid_avg":  21.481666666666666,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  19.62,
+                                                     "stop_loss_2":  21.49,
+                                                     "take_profit_1":  24.67,
+                                                     "take_profit_2":  25.68
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.600161",
+                       "code_name":  "å¤©åçç©",
+                       "buy_date":  "2026-01-30",
+                       "buy_price":  16.75,
+                       "quantity":  1400,
+                       "buy_amount":  23450.0,
+                       "buy_fee":  11.725,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-02-13",
+                                         "sell_price":  16.3,
+                                         "quantity":  1400,
+                                         "amount":  22820.0,
+                                         "fee":  22.82,
+                                         "pnl":  -664.544999999999,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -664.544999999999,
+                       "last_sell_date":  "2026-02-13",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  16.79,
+                                      "stop_losses":  [
+                                                          16.06,
+                                                          16.69
+                                                      ],
+                                      "take_profits":  [
+                                                           17.884999999999998,
+                                                           18.25
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  16.06,
+                                                     "window_max":  27.24182128969289,
+                                                     "window_range":  11.181821289692891,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-01-26",
+                                                     "current_t2":  "2026-01-27",
+                                                     "current_t3":  "2026-01-28",
+                                                     "current_t4":  "2026-01-29",
+                                                     "current_structure_low":  16.55,
+                                                     "current_structure_high":  17.47,
+                                                     "current_confirm_mid_avg":  16.953333333333333,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  16.06,
+                                                     "stop_loss_2":  16.69,
+                                                     "take_profit_1":  17.884999999999998,
+                                                     "take_profit_2":  18.25
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.600325",
+                       "code_name":  "ååè¡ä»½",
+                       "buy_date":  "2026-02-10",
+                       "buy_price":  4.54,
+                       "quantity":  5400,
+                       "buy_amount":  24516.0,
+                       "buy_fee":  12.258,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-04",
+                                         "sell_price":  4.09,
+                                         "quantity":  5400,
+                                         "amount":  22086.0,
+                                         "fee":  22.086,
+                                         "pnl":  -2464.3440000000005,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2464.3440000000005,
+                       "last_sell_date":  "2026-03-04",
+                       "holding_days":  22,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  4.57,
+                                      "stop_losses":  [
+                                                          3.99,
+                                                          4.47
+                                                      ],
+                                      "take_profits":  [
+                                                           5.44,
+                                                           5.73
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  3.9699999999999998,
+                                                     "window_max":  7.8994165258766325,
+                                                     "window_range":  3.9294165258766327,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-02-04",
+                                                     "current_t2":  "2026-02-05",
+                                                     "current_t3":  "2026-02-06",
+                                                     "current_t4":  "2026-02-09",
+                                                     "current_structure_low":  4.07,
+                                                     "current_structure_high":  4.74,
+                                                     "current_confirm_mid_avg":  4.501666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  3.99,
+                                                     "stop_loss_2":  4.47,
+                                                     "take_profit_1":  5.44,
+                                                     "take_profit_2":  5.73
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.601666",
+                       "code_name":  "å¹³ç\u0085¤è¡ä»½",
+                       "buy_date":  "2026-02-10",
+                       "buy_price":  8.43,
+                       "quantity":  2900,
+                       "buy_amount":  24447.0,
+                       "buy_fee":  12.2235,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-02-25",
+                                         "sell_price":  8.990000000000002,
+                                         "quantity":  1500,
+                                         "amount":  13485.000000000004,
+                                         "fee":  13.485000000000003,
+                                         "pnl":  820.1925000000034,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-03-03",
+                                         "sell_price":  9.180000000000001,
+                                         "quantity":  1400,
+                                         "amount":  12852.000000000002,
+                                         "fee":  12.852000000000002,
+                                         "pnl":  1031.2470000000023,
+                                         "reason":  "take_profit_final",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  1851.4395000000059,
+                       "last_sell_date":  "2026-03-03",
+                       "holding_days":  21,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  8.42,
+                                      "stop_losses":  [
+                                                          8.04,
+                                                          8.37
+                                                      ],
+                                      "take_profits":  [
+                                                           8.990000000000002,
+                                                           9.180000000000001
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  7.22,
+                                                     "window_max":  11.249443640668158,
+                                                     "window_range":  4.029443640668158,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-02-04",
+                                                     "current_t2":  "2026-02-05",
+                                                     "current_t3":  "2026-02-06",
+                                                     "current_t4":  "2026-02-09",
+                                                     "current_structure_low":  8.05,
+                                                     "current_structure_high":  8.719999999999999,
+                                                     "current_confirm_mid_avg":  8.375,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  8.04,
+                                                     "stop_loss_2":  8.37,
+                                                     "take_profit_1":  8.990000000000002,
+                                                     "take_profit_2":  9.180000000000001
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000610",
+                       "code_name":  "è¥¿å®æ\u0085æ¸¸",
+                       "buy_date":  "2026-02-10",
+                       "buy_price":  10.640000000000002,
+                       "quantity":  2300,
+                       "buy_amount":  24472.000000000004,
+                       "buy_fee":  12.236,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-02-24",
+                                         "sell_price":  9.72,
+                                         "quantity":  2300,
+                                         "amount":  22356.0,
+                                         "fee":  22.356,
+                                         "pnl":  -2150.592000000004,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2150.592000000004,
+                       "last_sell_date":  "2026-02-24",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  10.66,
+                                      "stop_losses":  [
+                                                          9.98,
+                                                          10.49
+                                                      ],
+                                      "take_profits":  [
+                                                           11.68,
+                                                           12.02
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.98,
+                                                     "window_max":  17.39,
+                                                     "window_range":  7.41,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-02-04",
+                                                     "current_t2":  "2026-02-05",
+                                                     "current_t3":  "2026-02-06",
+                                                     "current_t4":  "2026-02-09",
+                                                     "current_structure_low":  9.98,
+                                                     "current_structure_high":  10.69,
+                                                     "current_confirm_mid_avg":  10.331666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  9.98,
+                                                     "stop_loss_2":  10.49,
+                                                     "take_profit_1":  11.68,
+                                                     "take_profit_2":  12.02
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603826",
+                       "code_name":  "å¤å½©ç§æ",
+                       "buy_date":  "2026-02-11",
+                       "buy_price":  19.21,
+                       "quantity":  100,
+                       "buy_amount":  1921.0,
+                       "buy_fee":  0.9605,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-05",
+                                         "sell_price":  22.02,
+                                         "quantity":  100,
+                                         "amount":  2202.0,
+                                         "fee":  2.202,
+                                         "pnl":  277.83749999999986,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  277.83749999999986,
+                       "last_sell_date":  "2026-03-05",
+                       "holding_days":  22,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  19.17,
+                                      "stop_losses":  [
+                                                          15.83,
+                                                          19.780000000000005
+                                                      ],
+                                      "take_profits":  [
+                                                           24.180000000000003,
+                                                           25.850000000000005
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  15.81,
+                                                     "window_max":  35.99,
+                                                     "window_range":  20.18,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-02-05",
+                                                     "current_t2":  "2026-02-06",
+                                                     "current_t3":  "2026-02-09",
+                                                     "current_t4":  "2026-02-10",
+                                                     "current_structure_low":  18.01,
+                                                     "current_structure_high":  20.88,
+                                                     "current_confirm_mid_avg":  19.636666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  15.83,
+                                                     "stop_loss_2":  19.780000000000005,
+                                                     "take_profit_1":  24.180000000000003,
+                                                     "take_profit_2":  25.850000000000005
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002694",
+                       "code_name":  "é¡¾å°ç§æ",
+                       "buy_date":  "2026-03-02",
+                       "buy_price":  3.24,
+                       "quantity":  7400,
+                       "buy_amount":  23976.0,
+                       "buy_fee":  11.988,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-04",
+                                         "sell_price":  2.98,
+                                         "quantity":  7400,
+                                         "amount":  22052.0,
+                                         "fee":  22.052,
+                                         "pnl":  -1958.0400000000018,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1958.0400000000018,
+                       "last_sell_date":  "2026-03-04",
+                       "holding_days":  2,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  3.32,
+                                      "stop_losses":  [
+                                                          3.0,
+                                                          3.44
+                                                      ],
+                                      "take_profits":  [
+                                                           3.8,
+                                                           3.9599999999999995
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  3.0,
+                                                     "window_max":  6.73,
+                                                     "window_range":  3.7300000000000004,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-02-24",
+                                                     "current_t2":  "2026-02-25",
+                                                     "current_t3":  "2026-02-26",
+                                                     "current_t4":  "2026-02-27",
+                                                     "current_structure_low":  3.15,
+                                                     "current_structure_high":  3.6,
+                                                     "current_confirm_mid_avg":  3.435,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  3.0,
+                                                     "stop_loss_2":  3.44,
+                                                     "take_profit_1":  3.8,
+                                                     "take_profit_2":  3.9599999999999995
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002124",
+                       "code_name":  "å¤©é¦é£å",
+                       "buy_date":  "2026-03-12",
+                       "buy_price":  2.54,
+                       "quantity":  9200,
+                       "buy_amount":  23368.0,
+                       "buy_fee":  11.684,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-23",
+                                         "sell_price":  2.28,
+                                         "quantity":  9200,
+                                         "amount":  20976.0,
+                                         "fee":  20.976,
+                                         "pnl":  -2424.6600000000026,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2424.6600000000026,
+                       "last_sell_date":  "2026-03-23",
+                       "holding_days":  11,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  2.53,
+                                      "stop_losses":  [
+                                                          2.37,
+                                                          2.52
+                                                      ],
+                                      "take_profits":  [
+                                                           2.7699999999999996,
+                                                           2.849999999999999
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  2.03,
+                                                     "window_max":  3.66,
+                                                     "window_range":  1.6300000000000003,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-03-06",
+                                                     "current_t2":  "2026-03-09",
+                                                     "current_t3":  "2026-03-10",
+                                                     "current_t4":  "2026-03-11",
+                                                     "current_structure_low":  2.37,
+                                                     "current_structure_high":  2.55,
+                                                     "current_confirm_mid_avg":  2.513333333333333,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  2.37,
+                                                     "stop_loss_2":  2.52,
+                                                     "take_profit_1":  2.7699999999999996,
+                                                     "take_profit_2":  2.849999999999999
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.600745",
+                       "code_name":  "é»æ³°ç§æ",
+                       "buy_date":  "2026-03-13",
+                       "buy_price":  33.17,
+                       "quantity":  700,
+                       "buy_amount":  23219.0,
+                       "buy_fee":  11.6095,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-23",
+                                         "sell_price":  31.369999999999997,
+                                         "quantity":  700,
+                                         "amount":  21959.0,
+                                         "fee":  21.959,
+                                         "pnl":  -1293.568500000003,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1293.568500000003,
+                       "last_sell_date":  "2026-03-23",
+                       "holding_days":  10,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  33.41,
+                                      "stop_losses":  [
+                                                          31.4,
+                                                          33.6
+                                                      ],
+                                      "take_profits":  [
+                                                           36.425,
+                                                           37.42999999999999
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  24.06,
+                                                     "window_max":  50.98,
+                                                     "window_range":  26.919999999999998,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-03-09",
+                                                     "current_t2":  "2026-03-10",
+                                                     "current_t3":  "2026-03-11",
+                                                     "current_t4":  "2026-03-12",
+                                                     "current_structure_low":  31.4,
+                                                     "current_structure_high":  34.94,
+                                                     "current_confirm_mid_avg":  33.52166666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  31.4,
+                                                     "stop_loss_2":  33.6,
+                                                     "take_profit_1":  36.425,
+                                                     "take_profit_2":  37.42999999999999
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.601006",
+                       "code_name":  "å¤§ç§¦éè·¯",
+                       "buy_date":  "2026-03-17",
+                       "buy_price":  5.33,
+                       "quantity":  4400,
+                       "buy_amount":  23452.0,
+                       "buy_fee":  11.726,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-31",
+                                         "sell_price":  5.36,
+                                         "quantity":  4400,
+                                         "amount":  23584.0,
+                                         "fee":  23.584,
+                                         "pnl":  96.69000000000108,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  96.69000000000108,
+                       "last_sell_date":  "2026-03-31",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  5.33,
+                                      "stop_losses":  [
+                                                          5.07,
+                                                          5.34
+                                                      ],
+                                      "take_profits":  [
+                                                           5.72,
+                                                           5.85
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  4.95,
+                                                     "window_max":  7.1240158880272375,
+                                                     "window_range":  2.1740158880272373,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-03-11",
+                                                     "current_t2":  "2026-03-12",
+                                                     "current_t3":  "2026-03-13",
+                                                     "current_t4":  "2026-03-16",
+                                                     "current_structure_low":  5.22,
+                                                     "current_structure_high":  5.43,
+                                                     "current_confirm_mid_avg":  5.366666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  5.07,
+                                                     "stop_loss_2":  5.34,
+                                                     "take_profit_1":  5.72,
+                                                     "take_profit_2":  5.85
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.601728",
+                       "code_name":  "ä¸­å½çµä¿¡",
+                       "buy_date":  "2026-03-19",
+                       "buy_price":  5.961976753637324,
+                       "quantity":  3900,
+                       "buy_amount":  23251.709339185563,
+                       "buy_fee":  11.625854669592782,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-03-26",
+                                         "sell_price":  5.646632528651549,
+                                         "quantity":  3900,
+                                         "amount":  22021.86686174104,
+                                         "fee":  22.021866861741042,
+                                         "pnl":  -1263.490198975858,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1263.490198975858,
+                       "last_sell_date":  "2026-03-26",
+                       "holding_days":  7,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  5.981685767698935,
+                                      "stop_losses":  [
+                                                          5.656487035682354,
+                                                          6.011249288791351
+                                                      ],
+                                      "take_profits":  [
+                                                           6.469483865723807,
+                                                           6.632083231732097
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  5.253873039096155,
+                                                     "window_max":  8.188702755425506,
+                                                     "window_range":  2.934829716329351,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-03-13",
+                                                     "current_t2":  "2026-03-16",
+                                                     "current_t3":  "2026-03-17",
+                                                     "current_t4":  "2026-03-18",
+                                                     "current_structure_low":  5.892995204421686,
+                                                     "current_structure_high":  6.168921401284239,
+                                                     "current_confirm_mid_avg":  6.024388631499092,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  5.656487035682354,
+                                                     "stop_loss_2":  6.011249288791351,
+                                                     "take_profit_1":  6.469483865723807,
+                                                     "take_profit_2":  6.632083231732097
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002840",
+                       "code_name":  "åç»è¡ä»½",
+                       "buy_date":  "2026-03-27",
+                       "buy_price":  10.93,
+                       "quantity":  2000,
+                       "buy_amount":  21860.0,
+                       "buy_fee":  10.93,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-04-08",
+                                         "sell_price":  13.215,
+                                         "quantity":  1000,
+                                         "amount":  13215.0,
+                                         "fee":  13.215,
+                                         "pnl":  2266.3199999999997,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-04-13",
+                                         "sell_price":  12.76,
+                                         "quantity":  1000,
+                                         "amount":  12760.0,
+                                         "fee":  12.76,
+                                         "pnl":  1811.775,
+                                         "reason":  "time_stop",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  4078.095,
+                       "last_sell_date":  "2026-04-13",
+                       "holding_days":  17,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  10.98,
+                                      "stop_losses":  [
+                                                          9.49,
+                                                          10.8
+                                                      ],
+                                      "take_profits":  [
+                                                           13.215,
+                                                           13.96
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.29,
+                                                     "window_max":  15.19,
+                                                     "window_range":  5.9,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-03-23",
+                                                     "current_t2":  "2026-03-24",
+                                                     "current_t3":  "2026-03-25",
+                                                     "current_t4":  "2026-03-26",
+                                                     "current_structure_low":  9.9,
+                                                     "current_structure_high":  11.37,
+                                                     "current_confirm_mid_avg":  10.838333333333333,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  9.49,
+                                                     "stop_loss_2":  10.8,
+                                                     "take_profit_1":  13.215,
+                                                     "take_profit_2":  13.96
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002755",
+                       "code_name":  "å¥¥èµåº·",
+                       "buy_date":  "2026-04-08",
+                       "buy_price":  16.26,
+                       "quantity":  1400,
+                       "buy_amount":  22764.000000000004,
+                       "buy_fee":  11.382000000000001,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-04-22",
+                                         "sell_price":  16.34,
+                                         "quantity":  1400,
+                                         "amount":  22876.0,
+                                         "fee":  22.876,
+                                         "pnl":  77.7419999999976,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  77.7419999999976,
+                       "last_sell_date":  "2026-04-22",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  15.9,
+                                      "stop_losses":  [
+                                                          13.86,
+                                                          16.06
+                                                      ],
+                                      "take_profits":  [
+                                                           18.96,
+                                                           19.980000000000004
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.787191571943442,
+                                                     "window_max":  29.0,
+                                                     "window_range":  19.212808428056558,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-04-01",
+                                                     "current_t2":  "2026-04-02",
+                                                     "current_t3":  "2026-04-03",
+                                                     "current_t4":  "2026-04-07",
+                                                     "current_structure_low":  15.52,
+                                                     "current_structure_high":  17.43,
+                                                     "current_confirm_mid_avg":  16.325,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  13.86,
+                                                     "stop_loss_2":  16.06,
+                                                     "take_profit_1":  18.96,
+                                                     "take_profit_2":  19.980000000000004
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002773",
+                       "code_name":  "åº·å¼è¯ä¸",
+                       "buy_date":  "2026-04-08",
+                       "buy_price":  27.823125514968414,
+                       "quantity":  800,
+                       "buy_amount":  22258.500411974732,
+                       "buy_fee":  11.129250205987367,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-04-22",
+                                         "sell_price":  25.832999176050535,
+                                         "quantity":  800,
+                                         "amount":  20666.399340840428,
+                                         "fee":  20.666399340840428,
+                                         "pnl":  -1623.8967206811305,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1623.8967206811305,
+                       "last_sell_date":  "2026-04-22",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  27.465675638560832,
+                                      "stop_losses":  [
+                                                          24.036088986542158,
+                                                          27.658891787970337
+                                                      ],
+                                      "take_profits":  [
+                                                           32.610055616588845,
+                                                           34.32484894259818
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  15.740538313650097,
+                                                     "window_max":  45.76324498764075,
+                                                     "window_range":  30.022706673990655,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-04-01",
+                                                     "current_t2":  "2026-04-02",
+                                                     "current_t3":  "2026-04-03",
+                                                     "current_t4":  "2026-04-07",
+                                                     "current_structure_low":  26.972974457566604,
+                                                     "current_structure_high":  29.56207085965394,
+                                                     "current_confirm_mid_avg":  28.137101757758856,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  24.036088986542158,
+                                                     "stop_loss_2":  27.658891787970337,
+                                                     "take_profit_1":  32.610055616588845,
+                                                     "take_profit_2":  34.32484894259818
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603815",
+                       "code_name":  "äº¤å»ºè¡ä»½",
+                       "buy_date":  "2026-04-27",
+                       "buy_price":  7.01,
+                       "quantity":  3200,
+                       "buy_amount":  22432.0,
+                       "buy_fee":  11.216,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-05-14",
+                                         "sell_price":  7.02,
+                                         "quantity":  3200,
+                                         "amount":  22464.0,
+                                         "fee":  22.464,
+                                         "pnl":  -1.6800000000006818,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -1.6800000000006818,
+                       "last_sell_date":  "2026-05-14",
+                       "holding_days":  17,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  7.14,
+                                      "stop_losses":  [
+                                                          5.82,
+                                                          7.11
+                                                      ],
+                                      "take_profits":  [
+                                                           9.12,
+                                                           9.779999999999998
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  4.962317475270843,
+                                                     "window_max":  14.93,
+                                                     "window_range":  9.967682524729156,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-04-21",
+                                                     "current_t2":  "2026-04-22",
+                                                     "current_t3":  "2026-04-23",
+                                                     "current_t4":  "2026-04-24",
+                                                     "current_structure_low":  6.24,
+                                                     "current_structure_high":  7.550000000000001,
+                                                     "current_confirm_mid_avg":  7.075,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  5.82,
+                                                     "stop_loss_2":  7.11,
+                                                     "take_profit_1":  9.12,
+                                                     "take_profit_2":  9.779999999999998
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002676",
+                       "code_name":  "é¡ºå¨è¡ä»½",
+                       "buy_date":  "2026-05-06",
+                       "buy_price":  7.087783843490452,
+                       "quantity":  3200,
+                       "buy_amount":  22680.908299169445,
+                       "buy_fee":  11.340454149584723,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-05-08",
+                                         "sell_price":  8.125994434649618,
+                                         "quantity":  1600,
+                                         "amount":  13001.59109543939,
+                                         "fee":  13.00159109543939,
+                                         "pnl":  1642.4651276844345,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-05-13",
+                                         "sell_price":  6.708437665951526,
+                                         "quantity":  1600,
+                                         "amount":  10733.500265522442,
+                                         "fee":  10.73350026552244,
+                                         "pnl":  -623.357611402596,
+                                         "reason":  "stop_loss",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  1019.1075162818385,
+                       "last_sell_date":  "2026-05-13",
+                       "holding_days":  7,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  7.107749431781976,
+                                      "stop_losses":  [
+                                                          6.428919429870214,
+                                                          7.047852666907406
+                                                      ],
+                                      "take_profits":  [
+                                                           8.125994434649618,
+                                                           8.4654094356055
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  3.7685047900248527,
+                                                     "window_max":  12.63821738853368,
+                                                     "window_range":  8.869712598508828,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-04-27",
+                                                     "current_t2":  "2026-04-28",
+                                                     "current_t3":  "2026-04-29",
+                                                     "current_t4":  "2026-04-30",
+                                                     "current_structure_low":  6.698454871805765,
+                                                     "current_structure_high":  7.177628990802304,
+                                                     "current_confirm_mid_avg":  7.057835461053169,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  6.428919429870214,
+                                                     "stop_loss_2":  7.047852666907406,
+                                                     "take_profit_1":  8.125994434649618,
+                                                     "take_profit_2":  8.4654094356055
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000856",
+                       "code_name":  "åä¸è£\u0085å¤",
+                       "buy_date":  "2026-05-08",
+                       "buy_price":  10.40955964177839,
+                       "quantity":  2300,
+                       "buy_amount":  23941.987176090297,
+                       "buy_fee":  11.970993588045149,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-05-22",
+                                         "sell_price":  10.698161199724444,
+                                         "quantity":  2300,
+                                         "amount":  24605.77075936622,
+                                         "fee":  24.60577075936622,
+                                         "pnl":  627.206818928512,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  627.206818928512,
+                       "last_sell_date":  "2026-05-22",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  10.369752530337554,
+                                      "stop_losses":  [
+                                                          9.394478300037092,
+                                                          10.091102750251709
+                                                      ],
+                                      "take_profits":  [
+                                                           11.832663875788246,
+                                                           12.320300990938478
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  5.73222404748026,
+                                                     "window_max":  17.574839701128713,
+                                                     "window_range":  11.842615653648453,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-04-29",
+                                                     "current_t2":  "2026-04-30",
+                                                     "current_t3":  "2026-05-06",
+                                                     "current_t4":  "2026-05-07",
+                                                     "current_structure_low":  9.394478300037092,
+                                                     "current_structure_high":  10.71806475544486,
+                                                     "current_confirm_mid_avg":  10.185644639923693,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  9.394478300037092,
+                                                     "stop_loss_2":  10.091102750251709,
+                                                     "take_profit_1":  11.832663875788246,
+                                                     "take_profit_2":  12.320300990938478
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603322",
+                       "code_name":  "è¶\u0085è®¯éä¿¡",
+                       "buy_date":  "2026-05-13",
+                       "buy_price":  35.5,
+                       "quantity":  600,
+                       "buy_amount":  21300.0,
+                       "buy_fee":  10.65,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-05-20",
+                                         "sell_price":  39.97000000000001,
+                                         "quantity":  300,
+                                         "amount":  11991.000000000004,
+                                         "fee":  11.991000000000003,
+                                         "pnl":  1323.6840000000038,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-05-21",
+                                         "sell_price":  35.54,
+                                         "quantity":  300,
+                                         "amount":  10662.0,
+                                         "fee":  10.662,
+                                         "pnl":  -3.987000000000257,
+                                         "reason":  "stop_loss",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  1319.6970000000035,
+                       "last_sell_date":  "2026-05-21",
+                       "holding_days":  8,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  35.77,
+                                      "stop_losses":  [
+                                                          32.97,
+                                                          36.08
+                                                      ],
+                                      "take_profits":  [
+                                                           39.97000000000001,
+                                                           41.37000000000001
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  22.93,
+                                                     "window_max":  60.0,
+                                                     "window_range":  37.07,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-07",
+                                                     "current_t2":  "2026-05-08",
+                                                     "current_t3":  "2026-05-11",
+                                                     "current_t4":  "2026-05-12",
+                                                     "current_structure_low":  33.99,
+                                                     "current_structure_high":  36.99,
+                                                     "current_confirm_mid_avg":  36.18833333333333,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  32.97,
+                                                     "stop_loss_2":  36.08,
+                                                     "take_profit_1":  39.97000000000001,
+                                                     "take_profit_2":  41.37000000000001
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002575",
+                       "code_name":  "ç¾¤å\u0085´ç©å\u0085·",
+                       "buy_date":  "2026-05-13",
+                       "buy_price":  7.02,
+                       "quantity":  3300,
+                       "buy_amount":  23166.0,
+                       "buy_fee":  11.583,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-05-21",
+                                         "sell_price":  6.18,
+                                         "quantity":  3300,
+                                         "amount":  20394.0,
+                                         "fee":  20.394,
+                                         "pnl":  -2803.9769999999994,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2803.9769999999994,
+                       "last_sell_date":  "2026-05-21",
+                       "holding_days":  8,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  7.08,
+                                      "stop_losses":  [
+                                                          6.33,
+                                                          7.04
+                                                      ],
+                                      "take_profits":  [
+                                                           8.205,
+                                                           8.58
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  4.13,
+                                                     "window_max":  13.74,
+                                                     "window_range":  9.61,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-07",
+                                                     "current_t2":  "2026-05-08",
+                                                     "current_t3":  "2026-05-11",
+                                                     "current_t4":  "2026-05-12",
+                                                     "current_structure_low":  6.87,
+                                                     "current_structure_high":  7.620000000000001,
+                                                     "current_confirm_mid_avg":  7.125,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  6.33,
+                                                     "stop_loss_2":  7.04,
+                                                     "take_profit_1":  8.205,
+                                                     "take_profit_2":  8.58
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000802",
+                       "code_name":  "åäº¬æå",
+                       "buy_date":  "2026-05-19",
+                       "buy_price":  5.26,
+                       "quantity":  4400,
+                       "buy_amount":  23144.0,
+                       "buy_fee":  11.572,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-06-02",
+                                         "sell_price":  5.3,
+                                         "quantity":  4400,
+                                         "amount":  23320.0,
+                                         "fee":  23.32,
+                                         "pnl":  141.10800000000017,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  141.10800000000017,
+                       "last_sell_date":  "2026-06-02",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  5.24,
+                                      "stop_losses":  [
+                                                          4.29,
+                                                          5.3
+                                                      ],
+                                      "take_profits":  [
+                                                           6.665000000000001,
+                                                           7.140000000000001
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  3.76,
+                                                     "window_max":  8.38,
+                                                     "window_range":  4.620000000000001,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-13",
+                                                     "current_t2":  "2026-05-14",
+                                                     "current_t3":  "2026-05-15",
+                                                     "current_t4":  "2026-05-18",
+                                                     "current_structure_low":  4.89,
+                                                     "current_structure_high":  5.380000000000001,
+                                                     "current_confirm_mid_avg":  5.156666666666666,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  4.29,
+                                                     "stop_loss_2":  5.3,
+                                                     "take_profit_1":  6.665000000000001,
+                                                     "take_profit_2":  7.140000000000001
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603363",
+                       "code_name":  "å²åçç©",
+                       "buy_date":  "2026-05-21",
+                       "buy_price":  3.4799999999999995,
+                       "quantity":  6400,
+                       "buy_amount":  22271.999999999996,
+                       "buy_fee":  11.136,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-06-03",
+                                         "sell_price":  3.13,
+                                         "quantity":  6400,
+                                         "amount":  20032.0,
+                                         "fee":  20.032,
+                                         "pnl":  -2271.167999999998,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2271.167999999998,
+                       "last_sell_date":  "2026-06-03",
+                       "holding_days":  13,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  3.47,
+                                      "stop_losses":  [
+                                                          3.1400000000000006,
+                                                          3.5100000000000002
+                                                      ],
+                                      "take_profits":  [
+                                                           3.965,
+                                                           4.129999999999999
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  2.97,
+                                                     "window_max":  6.200000000000001,
+                                                     "window_range":  3.230000000000001,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-15",
+                                                     "current_t2":  "2026-05-18",
+                                                     "current_t3":  "2026-05-19",
+                                                     "current_t4":  "2026-05-20",
+                                                     "current_structure_low":  3.1400000000000006,
+                                                     "current_structure_high":  3.74,
+                                                     "current_confirm_mid_avg":  3.5316666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  3.1400000000000006,
+                                                     "stop_loss_2":  3.5100000000000002,
+                                                     "take_profit_1":  3.965,
+                                                     "take_profit_2":  4.129999999999999
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.600446",
+                       "code_name":  "éè¯è¡ä»½",
+                       "buy_date":  "2026-05-22",
+                       "buy_price":  13.94,
+                       "quantity":  1600,
+                       "buy_amount":  22304.0,
+                       "buy_fee":  11.152,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-06-05",
+                                         "sell_price":  12.47,
+                                         "quantity":  1600,
+                                         "amount":  19952.0,
+                                         "fee":  19.952,
+                                         "pnl":  -2383.1039999999985,
+                                         "reason":  "time_stop",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -2383.1039999999985,
+                       "last_sell_date":  "2026-06-05",
+                       "holding_days":  14,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  13.81,
+                                      "stop_losses":  [
+                                                          11.88,
+                                                          14.16
+                                                      ],
+                                      "take_profits":  [
+                                                           16.705,
+                                                           17.67
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  9.2,
+                                                     "window_max":  23.6,
+                                                     "window_range":  14.400000000000002,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-18",
+                                                     "current_t2":  "2026-05-19",
+                                                     "current_t3":  "2026-05-20",
+                                                     "current_t4":  "2026-05-21",
+                                                     "current_structure_low":  12.71,
+                                                     "current_structure_high":  14.68,
+                                                     "current_confirm_mid_avg":  14.195,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  11.88,
+                                                     "stop_loss_2":  14.16,
+                                                     "take_profit_1":  16.705,
+                                                     "take_profit_2":  17.67
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.600690",
+                       "code_name":  "æµ·å°æºå®¶",
+                       "buy_date":  "2026-06-04",
+                       "buy_price":  20.63,
+                       "quantity":  1000,
+                       "buy_amount":  20630.0,
+                       "buy_fee":  10.315,
+                       "sells":  [
+
+                                 ],
+                       "sell_count":  0,
+                       "total_pnl":  null,
+                       "last_sell_date":  null,
+                       "holding_days":  null,
+                       "closed":  false,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  20.7,
+                                      "stop_losses":  [
+                                                          20.06,
+                                                          21.0
+                                                      ],
+                                      "take_profits":  [
+                                                           21.66,
+                                                           21.98
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  19.91,
+                                                     "window_max":  31.687708762540566,
+                                                     "window_range":  11.777708762540566,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-29",
+                                                     "current_t2":  "2026-06-01",
+                                                     "current_t3":  "2026-06-02",
+                                                     "current_t4":  "2026-06-03",
+                                                     "current_structure_low":  20.06,
+                                                     "current_structure_high":  21.28,
+                                                     "current_confirm_mid_avg":  20.965,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  20.06,
+                                                     "stop_loss_2":  21.0,
+                                                     "take_profit_1":  21.66,
+                                                     "take_profit_2":  21.98
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603170",
+                       "code_name":  "å®ç«é£å",
+                       "buy_date":  "2026-06-04",
+                       "buy_price":  12.29,
+                       "quantity":  400,
+                       "buy_amount":  4916.0,
+                       "buy_fee":  2.458,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-06-08",
+                                         "sell_price":  11.89,
+                                         "quantity":  400,
+                                         "amount":  4756.0,
+                                         "fee":  4.756,
+                                         "pnl":  -167.21399999999943,
+                                         "reason":  "stop_loss",
+                                         "level":  0
+                                     }
+                                 ],
+                       "sell_count":  1,
+                       "total_pnl":  -167.21399999999943,
+                       "last_sell_date":  "2026-06-08",
+                       "holding_days":  4,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  12.3,
+                                      "stop_losses":  [
+                                                          12.03,
+                                                          12.36
+                                                      ],
+                                      "take_profits":  [
+                                                           12.705000000000002,
+                                                           12.840000000000003
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  11.441183116413594,
+                                                     "window_max":  16.568352313810557,
+                                                     "window_range":  5.127169197396963,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-29",
+                                                     "current_t2":  "2026-06-01",
+                                                     "current_t3":  "2026-06-02",
+                                                     "current_t4":  "2026-06-03",
+                                                     "current_structure_low":  12.03,
+                                                     "current_structure_high":  12.875039768618944,
+                                                     "current_confirm_mid_avg":  12.495159074475778,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  12.03,
+                                                     "stop_loss_2":  12.36,
+                                                     "take_profit_1":  12.705000000000002,
+                                                     "take_profit_2":  12.840000000000003
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000651",
+                       "code_name":  "æ ¼åçµå¨",
+                       "buy_date":  "2026-06-04",
+                       "buy_price":  39.5,
+                       "quantity":  500,
+                       "buy_amount":  19750.0,
+                       "buy_fee":  9.875,
+                       "sells":  [
+
+                                 ],
+                       "sell_count":  0,
+                       "total_pnl":  null,
+                       "last_sell_date":  null,
+                       "holding_days":  null,
+                       "closed":  false,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  39.5,
+                                      "stop_losses":  [
+                                                          37.36,
+                                                          39.52
+                                                      ],
+                                      "take_profits":  [
+                                                           42.71,
+                                                           43.78
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  36.6,
+                                                     "window_max":  46.118784416720814,
+                                                     "window_range":  9.518784416720813,
+                                                     "current_pillar_type":  "golden_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-29",
+                                                     "current_t2":  "2026-06-01",
+                                                     "current_t3":  "2026-06-02",
+                                                     "current_t4":  "2026-06-03",
+                                                     "current_structure_low":  38.0,
+                                                     "current_structure_high":  39.73,
+                                                     "current_confirm_mid_avg":  39.27,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  2,
+                                                     "stop_loss_1":  37.36,
+                                                     "stop_loss_2":  39.52,
+                                                     "take_profit_1":  42.71,
+                                                     "take_profit_2":  43.78
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000926",
+                       "code_name":  "ç¦æè¡ä»½",
+                       "buy_date":  "2026-06-04",
+                       "buy_price":  2.27,
+                       "quantity":  9600,
+                       "buy_amount":  21792.0,
+                       "buy_fee":  10.896,
+                       "sells":  [
+
+                                 ],
+                       "sell_count":  0,
+                       "total_pnl":  null,
+                       "last_sell_date":  null,
+                       "holding_days":  null,
+                       "closed":  false,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  2.32,
+                                      "stop_losses":  [
+                                                          1.95,
+                                                          2.41
+                                                      ],
+                                      "take_profits":  [
+                                                           2.8749999999999996,
+                                                           3.0599999999999996
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  1.8800000000000001,
+                                                     "window_max":  3.49,
+                                                     "window_range":  1.61,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-05-29",
+                                                     "current_t2":  "2026-06-01",
+                                                     "current_t3":  "2026-06-02",
+                                                     "current_t4":  "2026-06-03",
+                                                     "current_structure_low":  2.29,
+                                                     "current_structure_high":  2.74,
+                                                     "current_confirm_mid_avg":  2.43,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  1.95,
+                                                     "stop_loss_2":  2.41,
+                                                     "take_profit_1":  2.8749999999999996,
+                                                     "take_profit_2":  3.0599999999999996
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.000069",
+                       "code_name":  "åä¾¨åï¼¡",
+                       "buy_date":  "2026-06-05",
+                       "buy_price":  1.9,
+                       "quantity":  10500,
+                       "buy_amount":  19950.0,
+                       "buy_fee":  9.975,
+                       "sells":  [
+                                     {
+                                         "trade_date":  "2026-06-08",
+                                         "sell_price":  1.9400000000000004,
+                                         "quantity":  5300,
+                                         "amount":  10282.000000000002,
+                                         "fee":  10.282000000000002,
+                                         "pnl":  196.68300000000252,
+                                         "reason":  "take_profit_partial",
+                                         "level":  0
+                                     },
+                                     {
+                                         "trade_date":  "2026-06-08",
+                                         "sell_price":  1.9,
+                                         "quantity":  5200,
+                                         "amount":  9880.0,
+                                         "fee":  9.88,
+                                         "pnl":  -14.82,
+                                         "reason":  "stop_loss",
+                                         "level":  1
+                                     }
+                                 ],
+                       "sell_count":  2,
+                       "total_pnl":  181.86300000000253,
+                       "last_sell_date":  "2026-06-08",
+                       "holding_days":  3,
+                       "closed":  true,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  1.91,
+                                      "stop_losses":  [
+                                                          1.8899999999999997,
+                                                          1.9500000000000002
+                                                      ],
+                                      "take_profits":  [
+                                                           1.9400000000000004,
+                                                           1.9500000000000004
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  1.84,
+                                                     "window_max":  3.49,
+                                                     "window_range":  1.6500000000000001,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-06-01",
+                                                     "current_t2":  "2026-06-02",
+                                                     "current_t3":  "2026-06-03",
+                                                     "current_t4":  "2026-06-04",
+                                                     "current_structure_low":  1.8899999999999997,
+                                                     "current_structure_high":  2.09,
+                                                     "current_confirm_mid_avg":  1.9716666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  1.8899999999999997,
+                                                     "stop_loss_2":  1.9500000000000002,
+                                                     "take_profit_1":  1.9400000000000004,
+                                                     "take_profit_2":  1.9500000000000004
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sh.603633",
+                       "code_name":  "å¾æ¨è¡ä»½",
+                       "buy_date":  "2026-06-08",
+                       "buy_price":  8.38,
+                       "quantity":  400,
+                       "buy_amount":  3352.0000000000005,
+                       "buy_fee":  1.6760000000000004,
+                       "sells":  [
+
+                                 ],
+                       "sell_count":  0,
+                       "total_pnl":  null,
+                       "last_sell_date":  null,
+                       "holding_days":  null,
+                       "closed":  false,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  8.72,
+                                      "stop_losses":  [
+                                                          7.97,
+                                                          8.5
+                                                      ],
+                                      "take_profits":  [
+                                                           9.845000000000002,
+                                                           10.220000000000002
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  6.183118811881189,
+                                                     "window_max":  13.37,
+                                                     "window_range":  7.18688118811881,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-06-02",
+                                                     "current_t2":  "2026-06-03",
+                                                     "current_t3":  "2026-06-04",
+                                                     "current_t4":  "2026-06-05",
+                                                     "current_structure_low":  8.05,
+                                                     "current_structure_high":  9.45,
+                                                     "current_confirm_mid_avg":  8.696666666666667,
+                                                     "recent_pillar_count_t25_t":  2,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  7.97,
+                                                     "stop_loss_2":  8.5,
+                                                     "take_profit_1":  9.845000000000002,
+                                                     "take_profit_2":  10.220000000000002
+                                                 }
+                                  }
+                   },
+                   {
+                       "code":  "sz.002575",
+                       "code_name":  "ç¾¤å\u0085´ç©å\u0085·",
+                       "buy_date":  "2026-06-08",
+                       "buy_price":  5.55,
+                       "quantity":  3800,
+                       "buy_amount":  21090.0,
+                       "buy_fee":  10.545,
+                       "sells":  [
+
+                                 ],
+                       "sell_count":  0,
+                       "total_pnl":  null,
+                       "last_sell_date":  null,
+                       "holding_days":  null,
+                       "closed":  false,
+                       "signal":  {
+                                      "triggered":  true,
+                                      "signal_close":  5.83,
+                                      "stop_losses":  [
+                                                          5.44,
+                                                          5.95
+                                                      ],
+                                      "take_profits":  [
+                                                           6.414999999999999,
+                                                           6.609999999999999
+                                                       ],
+                                      "max_watch_days":  1,
+                                      "extras":  {
+                                                     "pattern":  "golden_pillar_platform",
+                                                     "window_min":  4.96,
+                                                     "window_max":  13.74,
+                                                     "window_range":  8.780000000000001,
+                                                     "current_pillar_type":  "general_pillar",
+                                                     "current_t4_kind":  "short",
+                                                     "current_t1":  "2026-06-02",
+                                                     "current_t2":  "2026-06-03",
+                                                     "current_t3":  "2026-06-04",
+                                                     "current_t4":  "2026-06-05",
+                                                     "current_structure_low":  5.44,
+                                                     "current_structure_high":  6.28,
+                                                     "current_confirm_mid_avg":  5.935,
+                                                     "recent_pillar_count_t25_t":  3,
+                                                     "recent_golden_count_t25_t":  1,
+                                                     "stop_loss_1":  5.44,
+                                                     "stop_loss_2":  5.95,
+                                                     "take_profit_1":  6.414999999999999,
+                                                     "take_profit_2":  6.609999999999999
+                                                 }
+                                  }
+                   }
+               ]
+}

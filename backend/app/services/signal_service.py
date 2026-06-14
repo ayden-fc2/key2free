@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any
 
@@ -21,6 +22,7 @@ class SignalServiceError(ValueError):
 
 class SignalService:
     SIGNAL_CODE_BATCH_SIZE = 400
+    SIGNAL_WORKERS = 10
 
     def __init__(self) -> None:
         self.repository = SignalRepository()
@@ -82,6 +84,47 @@ class SignalService:
             all_codes = [code for code in all_codes if strategy.code_filter(code)]
         total_codes = len(all_codes)
         processed_codes = 0
+        code_order = {code: index for index, code in enumerate(all_codes)}
+        max_workers = min(self.SIGNAL_WORKERS, max(total_codes, 1))
+
+        def evaluate_code(code: str) -> tuple[int, list[DailySignalItemDTO]]:
+            frame = frames.get(code)
+            if frame is None or len(frame) < SIGNAL_WINDOW_BARS:
+                return code_order[code], []
+            # 目标位置：日期在请求集合内，且该位置（含自身）至少有 400 根历史
+            target_indices = [
+                index
+                for index, day in enumerate(frame.trade_dates)
+                if index + 1 >= SIGNAL_WINDOW_BARS and day in target_date_set
+            ]
+            if not target_indices:
+                return code_order[code], []
+            decisions = strategy.batch_signal_strategy(frame, target_indices)
+            items: list[DailySignalItemDTO] = []
+            for index, decision in decisions.items():
+                if not decision.triggered:
+                    continue
+                day = frame.trade_dates[index]
+                name_value = frame.columns.get("name")
+                code_name = (
+                    str(name_value[index])
+                    if name_value is not None and name_value[index] is not None
+                    else None
+                )
+                items.append(
+                    DailySignalItemDTO(
+                        code=code,
+                        code_name=code_name,
+                        trade_date=day.isoformat(),
+                        universe={
+                            "trade_date": day.isoformat(),
+                            "code": code,
+                            "code_name": code_name,
+                        },
+                        signal=self._decision_to_payload(decision),
+                    )
+                )
+            return code_order[code], items
 
         for code_batch in self._chunked(all_codes, self.SIGNAL_CODE_BATCH_SIZE):
             frames = self.repository.load_stock_frames(
@@ -91,47 +134,21 @@ class SignalService:
                 window=SIGNAL_WINDOW_BARS,
                 extra_columns=strategy.required_columns,
             )
-            for code in code_batch:
-                processed_codes += 1
-                frame = frames.get(code)
-                if frame is not None and len(frame) >= SIGNAL_WINDOW_BARS:
-                    # 目标位置：日期在请求集合内，且该位置（含自身）至少有 400 根历史
-                    target_indices = [
-                        index
-                        for index, day in enumerate(frame.trade_dates)
-                        if index + 1 >= SIGNAL_WINDOW_BARS and day in target_date_set
-                    ]
-                    if target_indices:
-                        decisions = strategy.batch_signal_strategy(frame, target_indices)
-                        for index, decision in decisions.items():
-                            if not decision.triggered:
-                                continue
-                            day = frame.trade_dates[index]
-                            name_value = frame.columns.get("name")
-                            code_name = (
-                                str(name_value[index])
-                                if name_value is not None and name_value[index] is not None
-                                else None
-                            )
-                            result_items_by_date[day].append(
-                                DailySignalItemDTO(
-                                    code=code,
-                                    code_name=code_name,
-                                    trade_date=day.isoformat(),
-                                    universe={
-                                        "trade_date": day.isoformat(),
-                                        "code": code,
-                                        "code_name": code_name,
-                                    },
-                                    signal=self._decision_to_payload(decision),
-                                )
-                            )
-                self._report_progress(
-                    progress_callback=progress_callback,
-                    processed_codes=processed_codes,
-                    total_codes=total_codes,
-                    progress_interval=progress_interval,
-                )
+            batch_results: list[tuple[int, list[DailySignalItemDTO]]] = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(evaluate_code, code) for code in code_batch]
+                for future in as_completed(futures):
+                    batch_results.append(future.result())
+                    processed_codes += 1
+                    self._report_progress(
+                        progress_callback=progress_callback,
+                        processed_codes=processed_codes,
+                        total_codes=total_codes,
+                        progress_interval=progress_interval,
+                    )
+            for _order, items in sorted(batch_results, key=lambda item: item[0]):
+                for item in items:
+                    result_items_by_date[date.fromisoformat(item.trade_date)].append(item)
 
         return {
             day: DailySignalResultDTO(
