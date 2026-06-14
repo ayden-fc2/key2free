@@ -28,12 +28,10 @@ MIN_T_MINUS_1_REMAINING_UPSIDE_RATIO = 0.4
 MAX_T_MINUS_1_AVG_VOLUME10_TO_H1_AVG_VOLUME10_RATIO = 0.5
 MAX_T_MINUS_1_ATR14_TO_H1_ATR14_RATIO = 0.5
 MAX_LOCAL_CONSOLIDATION_ER20 = 0.40
-LOCAL_CONSOLIDATION_RANGE_DAYS = 15
-MAX_TRIMMED_LOCAL_CONSOLIDATION_RANGE_RATIO = 0.15
 
 MIN_PILLAR_BODY_OPEN_RATIO = 0.05
 MIN_PILLAR_BODY_ATR14_MULTIPLE = 1.6
-PRE_PILLAR_CLEAN_DAYS = 20
+ENTRY_OPEN_MIN_RATIO = 0.96
 ENTRY_OPEN_MAX_RATIO = 1.03
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -73,7 +71,6 @@ class GoldenPillarContext:
     atr14_t_minus_1: float
     atr14_th1_plus2: float
     er20_t_minus_1: float
-    trimmed_range15_t_minus_1: float
 
 
 def golden_pillar_code_filter(code: str) -> bool:
@@ -137,9 +134,8 @@ def golden_pillar_batch_signal_strategy(
             and pillar_body >= MIN_PILLAR_BODY_ATR14_MULTIPLE * atr14_t_minus_1
         ):
             continue
-        if _has_prior_large_bullish_body(frame=frame, index=index):
-            continue
 
+        entry_open_min = close_t * ENTRY_OPEN_MIN_RATIO
         entry_open_max = close_t * ENTRY_OPEN_MAX_RATIO
         results[index] = SignalDecision(
             triggered=True,
@@ -160,11 +156,11 @@ def golden_pillar_batch_signal_strategy(
                 "atr14_t_minus_1": context.atr14_t_minus_1,
                 "atr14_th1_plus2": context.atr14_th1_plus2,
                 "er20_t_minus_1": context.er20_t_minus_1,
-                "trimmed_range15_t_minus_1": context.trimmed_range15_t_minus_1,
                 "pillar_open": open_t,
                 "pillar_close": close_t,
                 "pillar_body": pillar_body,
                 "pillar_body_open_ratio": pillar_body_open_ratio,
+                "entry_open_min": entry_open_min,
                 "entry_open_max": entry_open_max,
             },
         )
@@ -175,10 +171,13 @@ def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float
     """T+1 open must not exceed T close by more than 3%; otherwise skip the signal."""
     open_price = float(bar[0])
     extras = (watch.signal or {}).get("extras") or {}
+    entry_open_min = extras.get("entry_open_min")
     entry_open_max = extras.get("entry_open_max")
     if not (
         np.isfinite(open_price)
+        and isinstance(entry_open_min, (int, float))
         and isinstance(entry_open_max, (int, float))
+        and open_price >= float(entry_open_min)
         and open_price <= float(entry_open_max)
     ):
         return None
@@ -210,8 +209,14 @@ def golden_pillar_exit_plan(
         or body <= 0
     ):
         return None
-    stop_losses = [open_price]
-    take_profits = [close_price + body]
+    stop_losses = [
+        open_price + 0.5 * body,
+        close_price + body,
+    ]
+    take_profits = [
+        close_price + body,
+        close_price + 2.0 * body,
+    ]
     if not all(np.isfinite(value) for value in [*stop_losses, *take_profits]):
         return None
     return (stop_losses, take_profits)
@@ -254,16 +259,6 @@ def _resolve_context(
         and er20_t_minus_1 <= MAX_LOCAL_CONSOLIDATION_ER20
     ):
         return None
-    trimmed_range15_t_minus_1 = _trimmed_local_consolidation_range(
-        frame=frame,
-        end_index=t_minus_1,
-        days=LOCAL_CONSOLIDATION_RANGE_DAYS,
-    )
-    if not (
-        np.isfinite(trimmed_range15_t_minus_1)
-        and trimmed_range15_t_minus_1 <= MAX_TRIMMED_LOCAL_CONSOLIDATION_RANGE_RATIO
-    ):
-        return None
 
     h1_ref_index = h1_index + H1_REFERENCE_OFFSET_DAYS
     if h1_ref_index > t_minus_1:
@@ -300,75 +295,7 @@ def _resolve_context(
         atr14_t_minus_1=atr14_t_minus_1,
         atr14_th1_plus2=atr14_th1_plus2,
         er20_t_minus_1=er20_t_minus_1,
-        trimmed_range15_t_minus_1=trimmed_range15_t_minus_1,
     )
-
-
-def _trimmed_local_consolidation_range(
-    *,
-    frame: StockDailyFrame,
-    end_index: int,
-    days: int,
-) -> float:
-    start_index = end_index - days + 1
-    if start_index < 0:
-        return float("nan")
-    highs: list[float] = []
-    lows: list[float] = []
-    high_values = frame.columns["qfq_high"]
-    low_values = frame.columns["qfq_low"]
-    for position in range(start_index, end_index + 1):
-        high = float(high_values[position])
-        low = float(low_values[position])
-        if not (np.isfinite(high) and np.isfinite(low) and high > 0 and low > 0 and high >= low):
-            return float("nan")
-        highs.append(high)
-        lows.append(low)
-    if len(highs) <= 2:
-        return float("nan")
-    highest_index = int(np.argmax(highs))
-    lowest_index = int(np.argmin(lows))
-    kept_highs = [value for index, value in enumerate(highs) if index != highest_index]
-    kept_lows = [value for index, value in enumerate(lows) if index != lowest_index]
-    max_high = max(kept_highs)
-    min_low = min(kept_lows)
-    if min_low <= 0:
-        return float("nan")
-    return (max_high - min_low) / min_low
-
-
-def _has_prior_large_bullish_body(
-    *,
-    frame: StockDailyFrame,
-    index: int,
-) -> bool:
-    start = max(1, index - PRE_PILLAR_CLEAN_DAYS)
-    end = index - 1
-    if start > end:
-        return False
-    opens = frame.columns["qfq_open"]
-    closes = frame.columns["qfq_close"]
-    atr14 = frame.columns["atr_14"]
-    for position in range(start, end + 1):
-        open_price = float(opens[position])
-        close_price = float(closes[position])
-        prior_atr14 = float(atr14[position - 1])
-        body = close_price - open_price
-        body_ratio = body / open_price if open_price > 0 else float("nan")
-        if not (
-            np.isfinite(body)
-            and np.isfinite(body_ratio)
-            and np.isfinite(prior_atr14)
-            and prior_atr14 > 0
-        ):
-            continue
-        if (
-            body > 0
-            and body_ratio >= MIN_PILLAR_BODY_OPEN_RATIO
-            and body >= MIN_PILLAR_BODY_ATR14_MULTIPLE * prior_atr14
-        ):
-            return True
-    return False
 
 
 def _resolve_structure_by_ma10_slope(
