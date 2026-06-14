@@ -40,6 +40,9 @@ MIN_TAKE_PROFIT_2_RATIO = 1.09
 MAX_TAKE_PROFIT_2_RATIO = 1.15
 TAKE_PROFIT_1_RISK_MULTIPLE = 1.5
 TAKE_PROFIT_2_RISK_MULTIPLE = 2.2
+MA10_SLOPE_NOISE_THRESHOLD = 0.008
+MAX_N_RANGE_CLOSE_POSITION_RATIO = 0.40
+MAX_TAKE_PROFIT_2_N_RANGE_RATIO = 0.90
 
 PILLAR_TYPE_GOLDEN = "golden_pillar"
 PILLAR_TYPE_GENERAL = "general_pillar"
@@ -47,6 +50,7 @@ PILLAR_TYPE_GENERAL = "general_pillar"
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
     "atr_5",
     "avg_volume_5",
+    "ma_slope_10",
 )
 
 
@@ -72,6 +76,29 @@ class ConsolidationRange:
     low: float
     avg_daily_range_ratio: float
     total_range_ratio: float
+
+
+@dataclass(frozen=True)
+class SlopeExtreme:
+    kind: str
+    index: int
+    value: float
+
+
+@dataclass(frozen=True)
+class StructurePoint:
+    kind: str
+    index: int
+    price: float
+    left_extreme: SlopeExtreme
+    right_extreme: SlopeExtreme
+
+
+@dataclass(frozen=True)
+class NRange:
+    low: StructurePoint
+    high: StructurePoint
+    trend_type: str
 
 
 def golden_pillar_code_filter(code: str) -> bool:
@@ -134,6 +161,25 @@ def golden_pillar_batch_signal_strategy(
         if not recent_patterns:
             continue
 
+        n_range = _resolve_recent_n_range(
+            frame=frame,
+            index=index,
+            window_start=window_start,
+        )
+        if n_range is None:
+            continue
+        n_low = n_range.low.price
+        n_high = n_range.high.price
+        n_range_size = n_high - n_low
+        if not (
+            np.isfinite(n_low)
+            and np.isfinite(n_high)
+            and n_low > 0
+            and n_high > n_low
+            and close_t <= n_low + MAX_N_RANGE_CLOSE_POSITION_RATIO * n_range_size
+        ):
+            continue
+
         consolidation_mid = (consolidation.high + consolidation.low) / 2.0
         if not (
             np.isfinite(consolidation.high)
@@ -160,6 +206,9 @@ def golden_pillar_batch_signal_strategy(
             close_t * MIN_TAKE_PROFIT_2_RATIO,
             close_t * MAX_TAKE_PROFIT_2_RATIO,
         )
+        n_take_profit_2_limit = n_low + MAX_TAKE_PROFIT_2_N_RANGE_RATIO * n_range_size
+        if not take_profit_2 < n_take_profit_2_limit:
+            continue
 
         results[index] = SignalDecision(
             triggered=True,
@@ -181,6 +230,13 @@ def golden_pillar_batch_signal_strategy(
                 "latest_pillar_type": recent_patterns[-1].type,
                 "latest_pillar_t1": frame.trade_dates[recent_patterns[-1].t1_index].isoformat(),
                 "latest_pillar_t4": frame.trade_dates[recent_patterns[-1].t4_index].isoformat(),
+                "n_low": n_low,
+                "n_low_date": frame.trade_dates[n_range.low.index].isoformat(),
+                "n_high": n_high,
+                "n_high_date": frame.trade_dates[n_range.high.index].isoformat(),
+                "n_trend_type": n_range.trend_type,
+                "n_close_position_ratio": (close_t - n_low) / n_range_size,
+                "n_take_profit_2_limit": n_take_profit_2_limit,
                 "breakout_ratio": close_t / consolidation.high,
                 "risk": risk,
                 "stop_loss_1": float(stop_loss_1),
@@ -363,6 +419,146 @@ def _detect_consolidation_range(
         avg_daily_range_ratio=avg_daily_range_ratio,
         total_range_ratio=total_range_ratio,
     )
+
+
+def _resolve_recent_n_range(
+    *,
+    frame: StockDailyFrame,
+    index: int,
+    window_start: int,
+) -> NRange | None:
+    slope = frame.columns["ma_slope_10"]
+    extremes = _ma10_slope_extremes(
+        slope=slope,
+        start_index=window_start,
+        end_index=index,
+        threshold=MA10_SLOPE_NOISE_THRESHOLD,
+    )
+    points = _structure_points_from_slope_extremes(
+        frame=frame,
+        extremes=extremes,
+    )
+    low = _latest_structure_point(points, "low")
+    high = _latest_structure_point(points, "high")
+    if low is None or high is None:
+        return None
+
+    current_slope = float(slope[index])
+    if current_slope > MA10_SLOPE_NOISE_THRESHOLD:
+        trend_type = "up"
+    elif current_slope < -MA10_SLOPE_NOISE_THRESHOLD:
+        trend_type = "down"
+    else:
+        trend_type = "straight"
+
+    return NRange(low=low, high=high, trend_type=trend_type)
+
+
+def _ma10_slope_extremes(
+    *,
+    slope: np.ndarray,
+    start_index: int,
+    end_index: int,
+    threshold: float,
+) -> list[SlopeExtreme]:
+    pending_kind: str | None = None
+    pending_index: int | None = None
+    pending_value: float | None = None
+    reversed_extremes: list[SlopeExtreme] = []
+
+    for position in range(end_index, start_index - 1, -1):
+        value = float(slope[position])
+        if not np.isfinite(value):
+            continue
+        kind = _slope_kind(value, threshold)
+        if kind is None:
+            continue
+        if pending_kind is None:
+            pending_kind = kind
+            pending_index = position
+            pending_value = value
+            continue
+        if kind == pending_kind:
+            if pending_value is None or _is_stronger_slope(kind, value, pending_value):
+                pending_index = position
+                pending_value = value
+            continue
+        reversed_extremes.append(SlopeExtreme(pending_kind, int(pending_index), float(pending_value)))
+        pending_kind = kind
+        pending_index = position
+        pending_value = value
+
+    if pending_kind is not None and pending_index is not None and pending_value is not None:
+        reversed_extremes.append(SlopeExtreme(pending_kind, pending_index, pending_value))
+    return list(reversed(reversed_extremes))
+
+
+def _structure_points_from_slope_extremes(
+    *,
+    frame: StockDailyFrame,
+    extremes: list[SlopeExtreme],
+) -> list[StructurePoint]:
+    highs = frame.columns["qfq_high"]
+    lows = frame.columns["qfq_low"]
+    points: list[StructurePoint] = []
+    for left, right in zip(extremes, extremes[1:]):
+        start = min(left.index, right.index)
+        end = max(left.index, right.index)
+        if start > end:
+            continue
+        if left.kind == "up" and right.kind == "down":
+            high_index, high_price = _highest_high(highs, start, end)
+            if high_index is not None:
+                points.append(StructurePoint("high", high_index, high_price, left, right))
+        elif left.kind == "down" and right.kind == "up":
+            low_index, low_price = _lowest_low(lows, start, end)
+            if low_index is not None:
+                points.append(StructurePoint("low", low_index, low_price, left, right))
+
+    points.sort(key=lambda item: item.index)
+    return points
+
+
+def _latest_structure_point(
+    points: list[StructurePoint],
+    kind: str,
+) -> StructurePoint | None:
+    for point in reversed(points):
+        if point.kind == kind:
+            return point
+    return None
+
+
+def _slope_kind(value: float, threshold: float) -> str | None:
+    if value > threshold:
+        return "up"
+    if value < -threshold:
+        return "down"
+    return None
+
+
+def _is_stronger_slope(kind: str, value: float, current: float) -> bool:
+    if kind == "up":
+        return value > current
+    return value < current
+
+
+def _highest_high(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+    window = values[start_index : end_index + 1]
+    if len(window) == 0 or np.isnan(window).all():
+        return None, float("nan")
+    offset = int(np.nanargmax(window))
+    index = start_index + offset
+    return index, float(values[index])
+
+
+def _lowest_low(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+    window = values[start_index : end_index + 1]
+    if len(window) == 0 or np.isnan(window).all():
+        return None, float("nan")
+    offset = int(np.nanargmin(window))
+    index = start_index + offset
+    return index, float(values[index])
 
 
 def _mid_body(opens: np.ndarray, closes: np.ndarray, index: int) -> float:
