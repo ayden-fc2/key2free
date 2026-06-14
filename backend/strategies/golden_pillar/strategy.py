@@ -22,6 +22,8 @@ GOLDEN_PILLAR_MAX_HOLDING_DAYS = 15
 LOOKBACK_BARS = 400
 RECENT_CONSOLIDATION_BARS = 10
 RECENT_PILLAR_BARS = 5
+MIN_T_CLOSE_TO_PILLAR_T1_CLOSE_RATIO = 0.98
+MAX_T_CLOSE_TO_PILLAR_T1_CLOSE_RATIO = 1.05
 
 T1_VOLUME_TO_AVG5_MULTIPLE = 1.2
 T1_BODY_OPEN_RATIO = 0.035
@@ -158,6 +160,18 @@ def golden_pillar_batch_signal_strategy(
         )
         if not recent_patterns:
             continue
+        matched_patterns = [
+            pattern
+            for pattern in recent_patterns
+            if _close_matches_pillar_t1(
+                closes=closes,
+                close_t=close_t,
+                pattern=pattern,
+            )
+        ]
+        if not matched_patterns:
+            continue
+        matched_pattern = matched_patterns[-1]
 
         n_range = _resolve_recent_n_range(
             frame=frame,
@@ -220,9 +234,12 @@ def golden_pillar_batch_signal_strategy(
                 "consolidation_total_range_ratio": consolidation.total_range_ratio,
                 "pillar_count_t5_t": len(recent_patterns),
                 "pillar_types_t5_t": [pattern.type for pattern in recent_patterns],
-                "latest_pillar_type": recent_patterns[-1].type,
-                "latest_pillar_t1": frame.trade_dates[recent_patterns[-1].t1_index].isoformat(),
-                "latest_pillar_t4": frame.trade_dates[recent_patterns[-1].t4_index].isoformat(),
+                "matched_pillar_count_t5_t": len(matched_patterns),
+                "matched_pillar_type": matched_pattern.type,
+                "matched_pillar_t1": frame.trade_dates[matched_pattern.t1_index].isoformat(),
+                "matched_pillar_t4": frame.trade_dates[matched_pattern.t4_index].isoformat(),
+                "matched_pillar_t1_close": float(closes[matched_pattern.t1_index]),
+                "matched_pillar_close_ratio": close_t / float(closes[matched_pattern.t1_index]),
                 "n_low": n_low,
                 "n_low_date": frame.trade_dates[n_range.low.index].isoformat(),
                 "n_high": n_high,
@@ -253,6 +270,22 @@ def _scan_pillar_patterns(
         if pattern is not None and pattern.t4_index <= end_index:
             patterns.append(pattern)
     return patterns
+
+
+def _close_matches_pillar_t1(
+    *,
+    closes: np.ndarray,
+    close_t: float,
+    pattern: PillarPattern,
+) -> bool:
+    t1_close = float(closes[pattern.t1_index])
+    return (
+        np.isfinite(t1_close)
+        and t1_close > 0
+        and MIN_T_CLOSE_TO_PILLAR_T1_CLOSE_RATIO * t1_close
+        <= close_t
+        <= MAX_T_CLOSE_TO_PILLAR_T1_CLOSE_RATIO * t1_close
+    )
 
 
 def _detect_pillar_pattern(frame: StockDailyFrame, t1_index: int) -> PillarPattern | None:
