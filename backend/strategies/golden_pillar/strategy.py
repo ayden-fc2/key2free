@@ -31,7 +31,9 @@ MAX_LOCAL_CONSOLIDATION_ER20 = 0.40
 
 MIN_PILLAR_BODY_OPEN_RATIO = 0.05
 MIN_PILLAR_BODY_ATR14_MULTIPLE = 1.6
-ENTRY_OPEN_MIN_RATIO = 0.96
+MAX_PILLAR_ER20 = 0.30
+EXIT_UNIT_MAX_CLOSE_RATIO = 0.09
+ENTRY_OPEN_MIN_RATIO = 0.98
 ENTRY_OPEN_MAX_RATIO = 1.03
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -91,6 +93,7 @@ def golden_pillar_batch_signal_strategy(
     columns = frame.columns
     opens = columns["qfq_open"]
     closes = columns["qfq_close"]
+    er20 = columns["er_20"]
 
     with np.errstate(invalid="ignore", divide="ignore"):
         st_blocked = _st_blocked_series(columns)
@@ -112,13 +115,16 @@ def golden_pillar_batch_signal_strategy(
         close_t = float(closes[index])
         close_t_minus_1 = float(closes[t_minus_1])
         open_t = float(opens[index])
+        er20_t = float(er20[index])
         atr14_t_minus_1 = context.atr14_t_minus_1
         if not (
             np.isfinite(close_t)
             and np.isfinite(close_t_minus_1)
             and np.isfinite(open_t)
+            and np.isfinite(er20_t)
             and close_t_minus_1 > 0
             and close_t > open_t
+            and er20_t <= MAX_PILLAR_ER20
         ):
             continue
 
@@ -156,6 +162,7 @@ def golden_pillar_batch_signal_strategy(
                 "atr14_t_minus_1": context.atr14_t_minus_1,
                 "atr14_th1_plus2": context.atr14_th1_plus2,
                 "er20_t_minus_1": context.er20_t_minus_1,
+                "er20_t": er20_t,
                 "pillar_open": open_t,
                 "pillar_close": close_t,
                 "pillar_body": pillar_body,
@@ -209,13 +216,14 @@ def golden_pillar_exit_plan(
         or body <= 0
     ):
         return None
+    exit_unit = min(body, close_price * EXIT_UNIT_MAX_CLOSE_RATIO)
     stop_losses = [
-        open_price + 0.5 * body,
-        close_price + body,
+        open_price + 0.5 * exit_unit,
+        close_price,
     ]
     take_profits = [
-        close_price + body,
-        close_price + 2.0 * body,
+        close_price + exit_unit,
+        close_price + 2.0 * exit_unit,
     ]
     if not all(np.isfinite(value) for value in [*stop_losses, *take_profits]):
         return None
