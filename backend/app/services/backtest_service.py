@@ -42,6 +42,7 @@ class HoldingItem:
     level: int
     stop_losses: list[float]
     take_profits: list[float]
+    max_high_since_buy: float
     signal: dict[str, Any] = field(default_factory=dict)
     realized_pnl: float = 0.0
 
@@ -55,6 +56,7 @@ class HoldingItem:
             "level": self.level,
             "stop_losses": self.stop_losses,
             "take_profits": self.take_profits,
+            "max_high_since_buy": self.max_high_since_buy,
         }
 
 
@@ -509,18 +511,14 @@ class BacktestService:
         trade_index: int,
         max_holding_days: int | None,
     ) -> list[SellAction]:
-        """通用阶梯止盈止损引擎。
-
-        单日顺序：止盈（盘中触及成交）→ 止损（收盘价确认、收盘价成交，
-        盘中影线刺破不算）→ 持仓时限（到期日收盘卖出）。
-        部分止盈升档后，当日收盘的止损检查使用升档后的价位。
-        """
+        """Generic ladder exit engine for take profit, stop loss, and time stops."""
         open_price, high, _low, close, _vol, _pct = bar
         actions: list[SellAction] = []
         level = holding.level
         remaining = holding.quantity
+        if math.isfinite(high):
+            holding.max_high_since_buy = max(holding.max_high_since_buy, high)
 
-        # 1. 止盈（盘中触及）
         take = holding.take_profits[level] if level < len(holding.take_profits) else None
         if take is not None and math.isfinite(take) and (open_price >= take or high >= take):
             price = open_price if open_price >= take else take
@@ -532,13 +530,23 @@ class BacktestService:
             remaining -= half
             level += 1
 
-        # 2. 止损（收盘价确认）
         stop = holding.stop_losses[level] if level < len(holding.stop_losses) else None
         if stop is not None and math.isfinite(stop) and close <= stop:
             actions.append(SellAction("stop_loss", close, remaining, False))
             return actions
 
-        # 3. 持仓时限（到期日收盘卖出）
+        failed_start_days = self._positive_int(holding.signal.get("failed_start_days"))
+        failed_start_return_ratio = self._to_float(holding.signal.get("failed_start_return_ratio"))
+        if (
+            failed_start_days is not None
+            and failed_start_return_ratio is not None
+            and failed_start_return_ratio > 0
+            and trade_index - holding.buy_trade_index >= failed_start_days - 1
+            and holding.max_high_since_buy < holding.buy_price * failed_start_return_ratio
+        ):
+            actions.append(SellAction("failed_start_time_stop", close, remaining, False))
+            return actions
+
         if (
             max_holding_days is not None
             and trade_index - holding.buy_trade_index >= max_holding_days
@@ -646,6 +654,7 @@ class BacktestService:
                 level=0,
                 stop_losses=[float(value) for value in stop_losses],
                 take_profits=[float(value) for value in take_profits],
+                max_high_since_buy=self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
                 signal=item.signal,
             )
             watch_pool.pop(item.code, None)
@@ -749,6 +758,12 @@ class BacktestService:
         lots_by_cash = int(cash // cost_per_lot)
         return max(min(lots_by_budget, lots_by_cash), 0) * 100
 
+    def _initial_max_high_since_buy(self, *, bar: Bar, buy_price: float) -> float:
+        high = bar[1]
+        if math.isfinite(high):
+            return max(high, buy_price)
+        return buy_price
+
     def _default_entry(self, *, bar: Bar, watch: WatchItem) -> float | None:
         """框架默认入场：以 signal_close 为限价买单。
 
@@ -796,4 +811,11 @@ class BacktestService:
     def _to_float(self, value: Any) -> float | None:
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
+        return None
+
+    def _positive_int(self, value: Any) -> int | None:
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value.is_integer() and value > 0:
+            return int(value)
         return None
