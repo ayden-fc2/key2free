@@ -31,9 +31,9 @@ T1_BODY_ATR5_MULTIPLE = 1.5
 MAX_T1_BODY_OPEN_RATIO = 0.072
 CONFIRM_BODY_TO_T1_BODY_RATIO = 0.5
 
-CONSOLIDATION_BARS = 30
-MAX_CONSOLIDATION_AVG_DAILY_RANGE_RATIO = 0.03
-MAX_CONSOLIDATION_TOTAL_RANGE_RATIO = 0.10
+CONSOLIDATION_BARS = 20
+MAX_CONSOLIDATION_AVG_DAILY_RANGE_RATIO = 0.028
+MAX_CONSOLIDATION_TOTAL_RANGE_RATIO = 0.08
 
 BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO = 1.02
 STOP_LOSS_1_CONSOLIDATION_HIGH_RATIO = 0.98
@@ -73,6 +73,7 @@ class ConsolidationRange:
     end_index: int
     high: float
     low: float
+    close_high: float
     avg_daily_range_ratio: float
     total_range_ratio: float
 
@@ -195,9 +196,11 @@ def golden_pillar_batch_signal_strategy(
         if not (
             np.isfinite(consolidation.high)
             and np.isfinite(consolidation.low)
+            and np.isfinite(consolidation.close_high)
             and consolidation.high > 0
             and consolidation.low > 0
-            and close_t >= BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO * consolidation.high
+            and consolidation.close_high > 0
+            and close_t >= BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO * consolidation.close_high
         ):
             continue
 
@@ -230,6 +233,7 @@ def golden_pillar_batch_signal_strategy(
                 "consolidation_end": frame.trade_dates[consolidation.end_index].isoformat(),
                 "consolidation_high": consolidation.high,
                 "consolidation_low": consolidation.low,
+                "consolidation_close_high": consolidation.close_high,
                 "consolidation_avg_daily_range_ratio": consolidation.avg_daily_range_ratio,
                 "consolidation_total_range_ratio": consolidation.total_range_ratio,
                 "pillar_count_t5_t": len(recent_patterns),
@@ -247,7 +251,7 @@ def golden_pillar_batch_signal_strategy(
                 "n_trend_type": n_range.trend_type,
                 "n_close_position_ratio": (close_t - n_low) / n_range_size,
                 "n_take_profit_2_limit": n_take_profit_2_limit,
-                "breakout_ratio": close_t / consolidation.high,
+                "breakout_ratio": close_t / consolidation.close_high,
                 "stop_loss_1": float(stop_loss_1),
                 "stop_loss_2": float(stop_loss_2),
                 "take_profit_1": float(take_profit_1),
@@ -420,6 +424,7 @@ def _detect_consolidation_range(
     avg_daily_range_ratio = float(np.mean(daily_range_ratios))
     high = float(np.max(highs))
     low = float(np.min(lows))
+    close_high = float(np.max(closes))
     if low <= 0:
         return None
     total_range_ratio = (high - low) / low
@@ -434,6 +439,7 @@ def _detect_consolidation_range(
         end_index=end_index,
         high=high,
         low=low,
+        close_high=close_high,
         avg_daily_range_ratio=avg_daily_range_ratio,
         total_range_ratio=total_range_ratio,
     )
