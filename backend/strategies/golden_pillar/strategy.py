@@ -20,29 +20,27 @@ GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 4.0
 GOLDEN_PILLAR_MAX_HOLDING_DAYS = 15
 
 LOOKBACK_BARS = 400
-RECENT_SIGNAL_BARS = 10
+RECENT_CONSOLIDATION_BARS = 10
+RECENT_PILLAR_BARS = 5
 
 T1_VOLUME_TO_AVG5_MULTIPLE = 1.2
-T1_BODY_OPEN_RATIO = 0.04
+T1_BODY_OPEN_RATIO = 0.035
 T1_BODY_ATR5_MULTIPLE = 1.5
+MAX_T1_BODY_OPEN_RATIO = 0.072
 CONFIRM_BODY_TO_T1_BODY_RATIO = 0.5
-MAX_T4_UP_BODY_TO_T1_BODY_RATIO = 1.2
 
 CONSOLIDATION_BARS = 30
 MAX_CONSOLIDATION_AVG_DAILY_RANGE_RATIO = 0.03
 MAX_CONSOLIDATION_TOTAL_RANGE_RATIO = 0.10
 
-BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO = 1.03
-STOP_LOSS_2_RATIO = 1.03
-MIN_TAKE_PROFIT_1_RATIO = 1.06
-MAX_TAKE_PROFIT_1_RATIO = 1.10
-MIN_TAKE_PROFIT_2_RATIO = 1.09
-MAX_TAKE_PROFIT_2_RATIO = 1.15
-TAKE_PROFIT_1_RISK_MULTIPLE = 1.5
-TAKE_PROFIT_2_RISK_MULTIPLE = 2.2
+BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO = 1.02
+STOP_LOSS_1_CONSOLIDATION_HIGH_RATIO = 0.98
+STOP_LOSS_2_RATIO = 1.02
+TAKE_PROFIT_1_RATIO = 1.06
+TAKE_PROFIT_2_RATIO = 1.10
 MA10_SLOPE_NOISE_THRESHOLD = 0.008
 MAX_N_RANGE_CLOSE_POSITION_RATIO = 0.40
-MAX_TAKE_PROFIT_2_N_RANGE_RATIO = 0.90
+MAX_TAKE_PROFIT_2_N_HIGH_RATIO = 0.92
 
 PILLAR_TYPE_GOLDEN = "golden_pillar"
 PILLAR_TYPE_GENERAL = "general_pillar"
@@ -57,7 +55,6 @@ GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
 @dataclass(frozen=True)
 class PillarPattern:
     type: str
-    t4_kind: str
     t1_index: int
     t2_index: int
     t3_index: int
@@ -140,12 +137,13 @@ def golden_pillar_batch_signal_strategy(
             continue
 
         window_start = index + 1 - LOOKBACK_BARS
-        recent_start = max(window_start, index - RECENT_SIGNAL_BARS)
+        recent_consolidation_start = max(window_start, index - RECENT_CONSOLIDATION_BARS)
+        recent_pillar_start = max(window_start, index - RECENT_PILLAR_BARS)
 
         recent_consolidations = _slice_by_index_range(
             all_consolidations,
             consolidation_end_indices,
-            recent_start,
+            recent_consolidation_start,
             index,
         )
         if not recent_consolidations:
@@ -155,7 +153,7 @@ def golden_pillar_batch_signal_strategy(
         recent_patterns = _slice_by_index_range(
             all_patterns,
             pattern_t4_indices,
-            recent_start,
+            recent_pillar_start,
             index,
         )
         if not recent_patterns:
@@ -180,34 +178,30 @@ def golden_pillar_batch_signal_strategy(
         ):
             continue
 
-        consolidation_mid = (consolidation.high + consolidation.low) / 2.0
         if not (
             np.isfinite(consolidation.high)
             and np.isfinite(consolidation.low)
             and consolidation.high > 0
             and consolidation.low > 0
-            and np.isfinite(consolidation_mid)
             and close_t >= BREAKOUT_TO_CONSOLIDATION_HIGH_RATIO * consolidation.high
         ):
             continue
 
-        stop_loss_1 = consolidation_mid
+        stop_loss_1 = consolidation.high * STOP_LOSS_1_CONSOLIDATION_HIGH_RATIO
         stop_loss_2 = close_t * STOP_LOSS_2_RATIO
-        risk = close_t - stop_loss_1
-        if not np.isfinite(risk) or risk <= 0:
+        take_profit_1 = close_t * TAKE_PROFIT_1_RATIO
+        take_profit_2 = close_t * TAKE_PROFIT_2_RATIO
+        if not (
+            np.isfinite(stop_loss_1)
+            and np.isfinite(stop_loss_2)
+            and np.isfinite(take_profit_1)
+            and np.isfinite(take_profit_2)
+            and stop_loss_1 > 0
+            and stop_loss_1 < close_t
+        ):
             continue
-        take_profit_1 = _clamp(
-            close_t + risk * TAKE_PROFIT_1_RISK_MULTIPLE,
-            close_t * MIN_TAKE_PROFIT_1_RATIO,
-            close_t * MAX_TAKE_PROFIT_1_RATIO,
-        )
-        take_profit_2 = _clamp(
-            close_t + risk * TAKE_PROFIT_2_RISK_MULTIPLE,
-            close_t * MIN_TAKE_PROFIT_2_RATIO,
-            close_t * MAX_TAKE_PROFIT_2_RATIO,
-        )
-        n_take_profit_2_limit = n_low + MAX_TAKE_PROFIT_2_N_RANGE_RATIO * n_range_size
-        if not take_profit_2 < n_take_profit_2_limit:
+        n_take_profit_2_limit = n_high * MAX_TAKE_PROFIT_2_N_HIGH_RATIO
+        if take_profit_2 >= n_take_profit_2_limit:
             continue
 
         results[index] = SignalDecision(
@@ -222,11 +216,10 @@ def golden_pillar_batch_signal_strategy(
                 "consolidation_end": frame.trade_dates[consolidation.end_index].isoformat(),
                 "consolidation_high": consolidation.high,
                 "consolidation_low": consolidation.low,
-                "consolidation_mid": consolidation_mid,
                 "consolidation_avg_daily_range_ratio": consolidation.avg_daily_range_ratio,
                 "consolidation_total_range_ratio": consolidation.total_range_ratio,
-                "pillar_count_t10_t": len(recent_patterns),
-                "pillar_types_t10_t": [pattern.type for pattern in recent_patterns],
+                "pillar_count_t5_t": len(recent_patterns),
+                "pillar_types_t5_t": [pattern.type for pattern in recent_patterns],
                 "latest_pillar_type": recent_patterns[-1].type,
                 "latest_pillar_t1": frame.trade_dates[recent_patterns[-1].t1_index].isoformat(),
                 "latest_pillar_t4": frame.trade_dates[recent_patterns[-1].t4_index].isoformat(),
@@ -238,7 +231,6 @@ def golden_pillar_batch_signal_strategy(
                 "n_close_position_ratio": (close_t - n_low) / n_range_size,
                 "n_take_profit_2_limit": n_take_profit_2_limit,
                 "breakout_ratio": close_t / consolidation.high,
-                "risk": risk,
                 "stop_loss_1": float(stop_loss_1),
                 "stop_loss_2": float(stop_loss_2),
                 "take_profit_1": float(take_profit_1),
@@ -306,6 +298,7 @@ def _detect_pillar_pattern(frame: StockDailyFrame, t1_index: int) -> PillarPatte
         and atr5_t0 > 0
         and volume1 >= T1_VOLUME_TO_AVG5_MULTIPLE * avg_volume5_t0
         and body1 >= min(T1_BODY_OPEN_RATIO * open1, T1_BODY_ATR5_MULTIPLE * atr5_t0)
+        and body1 <= MAX_T1_BODY_OPEN_RATIO * open1
     ):
         return None
 
@@ -313,14 +306,7 @@ def _detect_pillar_pattern(frame: StockDailyFrame, t1_index: int) -> PillarPatte
     body3 = abs(float(closes[t3_index]) - float(opens[t3_index]))
     body4 = abs(float(closes[t4_index]) - float(opens[t4_index]))
     max_confirm_body = CONFIRM_BODY_TO_T1_BODY_RATIO * body1
-    if body2 > max_confirm_body or body3 > max_confirm_body:
-        return None
-    t4_is_short = body4 <= max_confirm_body
-    t4_is_up_pillar = (
-        max_confirm_body <= body4 <= MAX_T4_UP_BODY_TO_T1_BODY_RATIO * body1
-        and float(closes[t4_index]) > float(opens[t4_index])
-    )
-    if not (t4_is_short or t4_is_up_pillar):
+    if body2 > max_confirm_body or body3 > max_confirm_body or body4 > max_confirm_body:
         return None
 
     confirm_mid_avg = float(
@@ -349,7 +335,6 @@ def _detect_pillar_pattern(frame: StockDailyFrame, t1_index: int) -> PillarPatte
 
     return PillarPattern(
         type=pattern_type,
-        t4_kind="short" if t4_is_short else "up_pillar",
         t1_index=t1_index,
         t2_index=t2_index,
         t3_index=t3_index,
@@ -498,8 +483,7 @@ def _structure_points_from_slope_extremes(
     frame: StockDailyFrame,
     extremes: list[SlopeExtreme],
 ) -> list[StructurePoint]:
-    highs = frame.columns["qfq_high"]
-    lows = frame.columns["qfq_low"]
+    closes = frame.columns["qfq_close"]
     points: list[StructurePoint] = []
     for left, right in zip(extremes, extremes[1:]):
         start = min(left.index, right.index)
@@ -507,11 +491,11 @@ def _structure_points_from_slope_extremes(
         if start > end:
             continue
         if left.kind == "up" and right.kind == "down":
-            high_index, high_price = _highest_high(highs, start, end)
+            high_index, high_price = _highest_value(closes, start, end)
             if high_index is not None:
                 points.append(StructurePoint("high", high_index, high_price, left, right))
         elif left.kind == "down" and right.kind == "up":
-            low_index, low_price = _lowest_low(lows, start, end)
+            low_index, low_price = _lowest_value(closes, start, end)
             if low_index is not None:
                 points.append(StructurePoint("low", low_index, low_price, left, right))
 
@@ -543,7 +527,7 @@ def _is_stronger_slope(kind: str, value: float, current: float) -> bool:
     return value < current
 
 
-def _highest_high(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+def _highest_value(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
     window = values[start_index : end_index + 1]
     if len(window) == 0 or np.isnan(window).all():
         return None, float("nan")
@@ -552,7 +536,7 @@ def _highest_high(values: np.ndarray, start_index: int, end_index: int) -> tuple
     return index, float(values[index])
 
 
-def _lowest_low(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
+def _lowest_value(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
     window = values[start_index : end_index + 1]
     if len(window) == 0 or np.isnan(window).all():
         return None, float("nan")
@@ -563,10 +547,6 @@ def _lowest_low(values: np.ndarray, start_index: int, end_index: int) -> tuple[i
 
 def _mid_body(opens: np.ndarray, closes: np.ndarray, index: int) -> float:
     return (float(opens[index]) + float(closes[index])) / 2.0
-
-
-def _clamp(value: float, lower: float, upper: float) -> float:
-    return min(max(value, lower), upper)
 
 
 def _slice_by_index_range(
