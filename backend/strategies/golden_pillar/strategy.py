@@ -15,7 +15,7 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 
 T = TypeVar("T")
 
-MAX_WATCH_DAYS = 1
+MAX_WATCH_DAYS = 3
 GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 4.0
 GOLDEN_PILLAR_MAX_HOLDING_DAYS = 1
 
@@ -40,7 +40,8 @@ GENERAL_PILLAR_MIN_AVG_POSITION = 0.6
 RECENT_CLOSE_BREAKOUT_DAYS = 3
 RECENT_CLOSE_BREAKOUT_MIN_COUNT = 2
 RECENT_CLOSE_BREAKOUT_RATIO = 1.02
-MAX_CONFIRM_AFTER_T4_DAYS = 2
+POST_PILLAR_CONFIRM_BREAKOUT_RATIO = 1.01
+MAX_CONFIRM_AFTER_T4_DAYS = 4
 ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO = 0.98
 ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO = 1.04
 ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO = 1.01
@@ -201,6 +202,10 @@ def golden_pillar_batch_signal_strategy(
                 "recent_close_breakout_ratio": RECENT_CLOSE_BREAKOUT_RATIO,
                 "recent_close_breakout_days": RECENT_CLOSE_BREAKOUT_DAYS,
                 "recent_close_breakout_min_count": RECENT_CLOSE_BREAKOUT_MIN_COUNT,
+                "post_pillar_confirm_breakout_ratio": POST_PILLAR_CONFIRM_BREAKOUT_RATIO,
+                "post_pillar_confirm_threshold": matched_pillar.t1_close
+                * POST_PILLAR_CONFIRM_BREAKOUT_RATIO,
+                "post_pillar_support_price": matched_pillar.t1_open,
                 "max_confirm_after_t4_days": MAX_CONFIRM_AFTER_T4_DAYS,
                 "confirm_lag_days": index - matched_pillar.t4_index,
                 "entry_open_floor": float(entry_open_floor),
@@ -273,6 +278,7 @@ def _resolve_confirmed_pillar(
     index: int,
 ) -> PillarPattern | None:
     closes = frame.columns["qfq_close"]
+    lows = frame.columns["qfq_low"]
     close_t = float(closes[index])
     if not np.isfinite(close_t):
         return None
@@ -285,14 +291,21 @@ def _resolve_confirmed_pillar(
         pattern = _detect_pillar_pattern(frame, t1_index)
         if pattern is None or pattern.t4_index != t4_index:
             continue
-        t1_close = pattern.t1_close
-        if close_t < t1_close:
+        confirm_threshold = pattern.t1_close * POST_PILLAR_CONFIRM_BREAKOUT_RATIO
+        if close_t < confirm_threshold:
             continue
         if _has_prior_t1_close_confirmation(
             closes=closes,
             start_index=pattern.t4_index,
             end_index=index - 1,
-            threshold=t1_close,
+            threshold=confirm_threshold,
+        ):
+            continue
+        if _breaks_t1_open_after_pillar(
+            lows=lows,
+            start_index=pattern.t4_index + 1,
+            end_index=index,
+            t1_open=pattern.t1_open,
         ):
             continue
         return pattern
@@ -311,6 +324,24 @@ def _has_prior_t1_close_confirmation(
     for position in range(start_index, end_index + 1):
         close_value = float(closes[position])
         if np.isfinite(close_value) and close_value >= threshold:
+            return True
+    return False
+
+
+def _breaks_t1_open_after_pillar(
+    *,
+    lows: np.ndarray,
+    start_index: int,
+    end_index: int,
+    t1_open: float,
+) -> bool:
+    if end_index < start_index:
+        return False
+    if not np.isfinite(t1_open):
+        return True
+    for position in range(start_index, end_index + 1):
+        low_value = float(lows[position])
+        if not np.isfinite(low_value) or low_value < t1_open:
             return True
     return False
 
