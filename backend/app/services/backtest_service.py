@@ -451,7 +451,14 @@ class BacktestService:
             if not self._is_tradeable(bar):
                 continue
             if strategy.exit_strategy is not None:
-                actions = [strategy.exit_strategy(bar=bar, holding=holding)]
+                actions = [
+                    self._call_exit_strategy(
+                        strategy=strategy,
+                        bar=bar,
+                        holding=holding,
+                        trade_index=trade_index,
+                    )
+                ]
             else:
                 actions = self._ladder_exit_actions(
                     bar=bar,
@@ -502,6 +509,27 @@ class BacktestService:
                     if action.advance_level:
                         holding.level += 1
         return cash
+
+    def _call_exit_strategy(
+        self,
+        *,
+        strategy: StrategyRegistration,
+        bar: Bar,
+        holding: HoldingItem,
+        trade_index: int,
+    ) -> Any:
+        if strategy.exit_strategy is None:
+            return None
+        try:
+            return strategy.exit_strategy(
+                bar=bar,
+                holding=holding,
+                trade_index=trade_index,
+            )
+        except TypeError as exc:
+            if "trade_index" not in str(exc):
+                raise
+            return strategy.exit_strategy(bar=bar, holding=holding)
 
     def _ladder_exit_actions(
         self,

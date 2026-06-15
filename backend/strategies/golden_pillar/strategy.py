@@ -15,23 +15,23 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 
 T = TypeVar("T")
 
-MAX_WATCH_DAYS = 4
+MAX_WATCH_DAYS = 1
 GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 4.0
 GOLDEN_PILLAR_MAX_HOLDING_DAYS = 1
 
 LOOKBACK_BARS = 400
 RECENT_CONSOLIDATION_BARS = 5
-RECENT_PILLAR_BARS = 6
-CONSOLIDATION_BARS = 14
-MAX_CONSOLIDATION_AVG_DAILY_BODY_RATIO = 0.027
-MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.072
-MAX_CONSOLIDATION_ATR14_RATIO = 0.032
+CONSOLIDATION_BARS = 20
+MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.08
+MAX_CONSOLIDATION_AVG_BODY_RATIO = 0.022
+MAX_CONSOLIDATION_ER20 = 0.22
 
 T1_VOLUME_TO_AVG5_MULTIPLE = 1.4
 T1_BODY_OPEN_RATIO = 0.032
 T1_BODY_ATR5_MULTIPLE = 1.5
 MAX_T1_BODY_OPEN_RATIO = 0.080
-CONFIRM_BODY_TO_T1_CLOSE_RATIO = 0.03
+CONFIRM_BODY_TO_T1_BODY_RATIO = 0.5
+CONFIRM_BODY_HIGH_TO_T1_CLOSE_CEILING_RATIO = 1.06
 MAX_T4_BODY_OPEN_RATIO = 0.08
 GOLDEN_PILLAR_MIN_CONFIRM_POSITION = 0.8
 GENERAL_PILLAR_MIN_CONFIRM_POSITION = 0.4
@@ -40,20 +40,19 @@ GENERAL_PILLAR_MIN_AVG_POSITION = 0.6
 RECENT_CLOSE_BREAKOUT_DAYS = 3
 RECENT_CLOSE_BREAKOUT_MIN_COUNT = 2
 RECENT_CLOSE_BREAKOUT_RATIO = 1.02
-ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO = 0.96
-ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO = 1.1
-ENTRY_TRIGGER_TO_T1_CLOSE_RATIO = 1.01
+MAX_CONFIRM_AFTER_T4_DAYS = 2
+ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO = 0.98
+ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO = 1.04
+ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO = 1.01
 ENTRY_TRIGGER_TO_OPEN_RATIO = 1.01
-NEXT_DAY_OPEN_EXIT_PROFIT_RATIO = 1.02
-NEXT_DAY_OPEN_EXIT_LOSS_RATIO = 0.98
 
 PILLAR_TYPE_GOLDEN = "golden_pillar"
 PILLAR_TYPE_GENERAL = "general_pillar"
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
     "atr_5",
-    "atr_pct_14",
     "avg_volume_5",
+    "er_20",
 )
 
 
@@ -69,7 +68,7 @@ class ConsolidationRange:
     close_low: float
     avg_daily_body_ratio: float
     close_range_ratio: float
-    atr_pct_14_end: float
+    er20_end: float
 
 
 @dataclass(frozen=True)
@@ -114,8 +113,6 @@ def golden_pillar_batch_signal_strategy(
     with np.errstate(invalid="ignore", divide="ignore"):
         st_blocked = _st_blocked_series(columns)
 
-    all_pillars = _scan_pillar_patterns(frame, 0, len(frame) - 1)
-    pillar_t4_indices = [item.t4_index for item in all_pillars]
     all_consolidations = _scan_consolidation_ranges(frame, 0, len(frame) - 1)
     consolidation_end_indices = [item.end_index for item in all_consolidations]
 
@@ -128,25 +125,25 @@ def golden_pillar_batch_signal_strategy(
         if not np.isfinite(close_t):
             continue
 
-        window_start = index + 1 - LOOKBACK_BARS
-        recent_pillar_start = max(window_start, index - RECENT_PILLAR_BARS)
-        recent_consolidation_start = max(window_start, index - RECENT_CONSOLIDATION_BARS)
-
-        recent_pillars = _slice_by_index_range(
-            all_pillars,
-            pillar_t4_indices,
-            recent_pillar_start,
-            index,
+        matched_pillar = _resolve_confirmed_pillar(
+            frame=frame,
+            index=index,
         )
-        matched_pillar = recent_pillars[-1] if recent_pillars else None
         if matched_pillar is None:
             continue
+
+        window_start = index + 1 - LOOKBACK_BARS
+        latest_consolidation_end = matched_pillar.t1_index - 1
+        recent_consolidation_start = max(
+            window_start,
+            latest_consolidation_end - RECENT_CONSOLIDATION_BARS,
+        )
 
         recent_consolidations = _slice_by_index_range(
             all_consolidations,
             consolidation_end_indices,
             recent_consolidation_start,
-            index,
+            latest_consolidation_end,
         )
         if not recent_consolidations:
             continue
@@ -155,19 +152,20 @@ def golden_pillar_batch_signal_strategy(
         if not (
             np.isfinite(consolidation.body_high)
             and consolidation.body_high > 0
-            and _recent_close_breakout_count(
+            and matched_pillar.t1_close >= RECENT_CLOSE_BREAKOUT_RATIO * consolidation.body_high
+            and _close_breakout_count(
                 closes=closes,
-                index=index,
+                start_index=matched_pillar.t1_index + 1,
+                end_index=matched_pillar.t4_index,
                 threshold=RECENT_CLOSE_BREAKOUT_RATIO * consolidation.body_high,
-                days=RECENT_CLOSE_BREAKOUT_DAYS,
             )
             >= RECENT_CLOSE_BREAKOUT_MIN_COUNT
         ):
             continue
 
-        entry_open_floor = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO
-        entry_open_ceiling = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO
-        entry_trigger_price = matched_pillar.t1_close * ENTRY_TRIGGER_TO_T1_CLOSE_RATIO
+        entry_open_floor = close_t * ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO
+        entry_open_ceiling = close_t * ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO
+        entry_trigger_price = close_t * ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO
         results[index] = SignalDecision(
             triggered=True,
             signal_close=close_t,
@@ -186,7 +184,7 @@ def golden_pillar_batch_signal_strategy(
                 "consolidation_close_low": consolidation.close_low,
                 "consolidation_avg_daily_body_ratio": consolidation.avg_daily_body_ratio,
                 "consolidation_close_range_ratio": consolidation.close_range_ratio,
-                "consolidation_atr_pct_14_end": consolidation.atr_pct_14_end,
+                "consolidation_er20_end": consolidation.er20_end,
                 "pillar_type": matched_pillar.pattern_type,
                 "pillar_t1_date": frame.trade_dates[matched_pillar.t1_index].isoformat(),
                 "pillar_t4_date": frame.trade_dates[matched_pillar.t4_index].isoformat(),
@@ -203,16 +201,16 @@ def golden_pillar_batch_signal_strategy(
                 "recent_close_breakout_ratio": RECENT_CLOSE_BREAKOUT_RATIO,
                 "recent_close_breakout_days": RECENT_CLOSE_BREAKOUT_DAYS,
                 "recent_close_breakout_min_count": RECENT_CLOSE_BREAKOUT_MIN_COUNT,
+                "max_confirm_after_t4_days": MAX_CONFIRM_AFTER_T4_DAYS,
+                "confirm_lag_days": index - matched_pillar.t4_index,
                 "entry_open_floor": float(entry_open_floor),
                 "entry_open_ceiling": float(entry_open_ceiling),
                 "entry_trigger_price": float(entry_trigger_price),
-                "entry_open_to_t1_close_floor_ratio": ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO,
-                "entry_open_to_t1_close_ceiling_ratio": ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO,
-                "entry_trigger_to_t1_close_ratio": ENTRY_TRIGGER_TO_T1_CLOSE_RATIO,
+                "entry_open_to_signal_close_floor_ratio": ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO,
+                "entry_open_to_signal_close_ceiling_ratio": ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO,
+                "entry_trigger_to_signal_close_ratio": ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO,
                 "entry_trigger_to_open_ratio": ENTRY_TRIGGER_TO_OPEN_RATIO,
-                "next_day_open_exit_profit_ratio": NEXT_DAY_OPEN_EXIT_PROFIT_RATIO,
-                "next_day_open_exit_loss_ratio": NEXT_DAY_OPEN_EXIT_LOSS_RATIO,
-                "exit_rule": "next_open_if_abs_return_ge_2pct_else_next_close",
+                "exit_rule": "next_trade_day_close",
             },
         )
     return results
@@ -246,38 +244,75 @@ def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float
     if not (np.isfinite(open_price) and np.isfinite(high_price)):
         return None
     entry_trigger_price = max(entry_trigger_price, open_price * ENTRY_TRIGGER_TO_OPEN_RATIO)
+    if entry_trigger_price > entry_open_ceiling:
+        return None
     if open_price < entry_open_floor or open_price > entry_open_ceiling or high_price < entry_trigger_price:
         return None
     return entry_trigger_price
 
 
-def golden_pillar_exit_strategy(*, bar: tuple[float, float, float, float, float, float], holding: Any) -> ImmediateSellAction | None:
-    open_price = float(bar[0])
+def golden_pillar_exit_strategy(
+    *,
+    bar: tuple[float, float, float, float, float, float],
+    holding: Any,
+    trade_index: int | None = None,
+) -> ImmediateSellAction | None:
     close_price = float(bar[3])
-    buy_price = float(holding.buy_price)
-    if not (
-        np.isfinite(open_price)
-        and np.isfinite(close_price)
-        and np.isfinite(buy_price)
-        and open_price > 0
-        and close_price > 0
-        and buy_price > 0
-    ):
+    if not (np.isfinite(close_price) and close_price > 0):
         return None
-    if (
-        open_price >= buy_price * NEXT_DAY_OPEN_EXIT_PROFIT_RATIO
-        or open_price <= buy_price * NEXT_DAY_OPEN_EXIT_LOSS_RATIO
-    ):
-        return ImmediateSellAction(
-            reason="next_open_exit_abs_return_ge_2pct",
-            price=open_price,
-            quantity=int(holding.quantity),
-        )
     return ImmediateSellAction(
-        reason="next_close_exit_abs_return_lt_2pct",
+        reason="next_close_exit",
         price=close_price,
         quantity=int(holding.quantity),
     )
+
+
+def _resolve_confirmed_pillar(
+    *,
+    frame: StockDailyFrame,
+    index: int,
+) -> PillarPattern | None:
+    closes = frame.columns["qfq_close"]
+    close_t = float(closes[index])
+    if not np.isfinite(close_t):
+        return None
+
+    for lag in range(0, MAX_CONFIRM_AFTER_T4_DAYS + 1):
+        t4_index = index - lag
+        t1_index = t4_index - 3
+        if t1_index < 1:
+            continue
+        pattern = _detect_pillar_pattern(frame, t1_index)
+        if pattern is None or pattern.t4_index != t4_index:
+            continue
+        t1_close = pattern.t1_close
+        if close_t < t1_close:
+            continue
+        if _has_prior_t1_close_confirmation(
+            closes=closes,
+            start_index=pattern.t4_index,
+            end_index=index - 1,
+            threshold=t1_close,
+        ):
+            continue
+        return pattern
+    return None
+
+
+def _has_prior_t1_close_confirmation(
+    *,
+    closes: np.ndarray,
+    start_index: int,
+    end_index: int,
+    threshold: float,
+) -> bool:
+    if end_index < start_index:
+        return False
+    for position in range(start_index, end_index + 1):
+        close_value = float(closes[position])
+        if np.isfinite(close_value) and close_value >= threshold:
+            return True
+    return False
 
 
 def _scan_pillar_patterns(
@@ -333,7 +368,7 @@ def _detect_pillar_pattern(
     if not (min_t1_body <= t1_body <= max_t1_body):
         return None
 
-    max_confirm_body = CONFIRM_BODY_TO_T1_CLOSE_RATIO * t1_close
+    max_confirm_body = CONFIRM_BODY_TO_T1_BODY_RATIO * t1_body
     confirm_positions: list[tuple[float, float, float]] = []
     for position in range(t1_index + 1, t4_index + 1):
         open_value = float(opens[position])
@@ -349,6 +384,8 @@ def _detect_pillar_pattern(
                 return None
         body_low = min(open_value, close_value)
         body_high = max(open_value, close_value)
+        if body_high > CONFIRM_BODY_HIGH_TO_T1_CLOSE_CEILING_RATIO * t1_close:
+            return None
         position_low = (body_low - t1_open) / t1_body
         position_high = (body_high - t1_open) / t1_body
         position_mid = (((open_value + close_value) / 2.0) - t1_open) / t1_body
@@ -415,8 +452,8 @@ def _detect_consolidation_range(
     lows = columns["qfq_low"][start_index : end_index + 1]
     closes = columns["qfq_close"][start_index : end_index + 1]
     opens = columns["qfq_open"][start_index : end_index + 1]
-    atr_pct_14_end = float(columns["atr_pct_14"][end_index])
-    values = [*highs, *lows, *closes, *opens, atr_pct_14_end]
+    er20_end = float(columns["er_20"][end_index])
+    values = [*highs, *lows, *closes, *opens, er20_end]
     if not all(np.isfinite(float(value)) for value in values):
         return None
     if np.any(closes <= 0):
@@ -440,9 +477,9 @@ def _detect_consolidation_range(
         return None
     close_range_ratio = (close_high - close_low) / close_low
     if not (
-        avg_daily_body_ratio <= MAX_CONSOLIDATION_AVG_DAILY_BODY_RATIO
-        and close_range_ratio <= MAX_CONSOLIDATION_CLOSE_RANGE_RATIO
-        and atr_pct_14_end <= MAX_CONSOLIDATION_ATR14_RATIO
+        close_range_ratio <= MAX_CONSOLIDATION_CLOSE_RANGE_RATIO
+        and avg_daily_body_ratio <= MAX_CONSOLIDATION_AVG_BODY_RATIO
+        and er20_end <= MAX_CONSOLIDATION_ER20
     ):
         return None
 
@@ -457,20 +494,19 @@ def _detect_consolidation_range(
         close_low=close_low,
         avg_daily_body_ratio=avg_daily_body_ratio,
         close_range_ratio=close_range_ratio,
-        atr_pct_14_end=atr_pct_14_end,
+        er20_end=er20_end,
     )
 
 
-def _recent_close_breakout_count(
+def _close_breakout_count(
     *,
     closes: np.ndarray,
-    index: int,
+    start_index: int,
+    end_index: int,
     threshold: float,
-    days: int,
 ) -> int:
-    start_index = max(0, index - days + 1)
     count = 0
-    for position in range(start_index, index + 1):
+    for position in range(start_index, end_index + 1):
         close_value = float(closes[position])
         if np.isfinite(close_value) and close_value >= threshold:
             count += 1
