@@ -5,7 +5,6 @@
     golden_pillar_batch_signal_strategy,
     golden_pillar_code_filter,
     golden_pillar_entry_strategy,
-    golden_pillar_exit_strategy,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     "golden_pillar_batch_signal_strategy",
     "golden_pillar_code_filter",
     "golden_pillar_entry_strategy",
-    "golden_pillar_exit_strategy",
 ]

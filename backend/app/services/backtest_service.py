@@ -15,7 +15,7 @@ from app.services.signal_service import SignalService
 from app.services.strategy_registry import StrategyRegistration, get_strategy
 
 
-Bar = tuple[float, float, float, float, float, float]
+Bar = tuple[float, ...]
 """(qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg)，缺失为 nan。"""
 
 
@@ -465,6 +465,7 @@ class BacktestService:
                     holding=holding,
                     trade_index=trade_index,
                     max_holding_days=strategy.max_holding_days,
+                    time_exit_price=strategy.time_exit_price,
                 )
             for action in actions:
                 if action is None or code not in holdings:
@@ -538,9 +539,10 @@ class BacktestService:
         holding: HoldingItem,
         trade_index: int,
         max_holding_days: int | None,
+        time_exit_price: str = "close",
     ) -> list[SellAction]:
         """Generic ladder exit engine for take profit, stop loss, and time stops."""
-        open_price, high, _low, close, _vol, _pct = bar
+        open_price, high, _low, close, _vol, _pct = bar[:6]
         actions: list[SellAction] = []
         level = holding.level
         remaining = holding.quantity
@@ -595,7 +597,8 @@ class BacktestService:
             max_holding_days is not None
             and trade_index - holding.buy_trade_index >= max_holding_days
         ):
-            actions.append(SellAction("time_stop", close, remaining, False))
+            price = open_price if time_exit_price == "open" else close
+            actions.append(SellAction(f"time_stop_{time_exit_price}", price, remaining, False))
         return actions
 
     def _process_watches(
@@ -817,7 +820,7 @@ class BacktestService:
         signal_close = watch.signal_close
         if signal_close is None or signal_close <= 0:
             return None
-        open_price, _high, low, _close, _vol, _pct = bar
+        open_price, _high, low, _close, _vol, _pct = bar[:6]
         if open_price <= signal_close:
             return open_price
         if low <= signal_close:
@@ -828,7 +831,7 @@ class BacktestService:
         """撮合边界：停牌（无行情/零量）与一字板（open==high==low==close）不可交易。"""
         if bar is None:
             return False
-        open_price, high, low, close, vol, _pct = bar
+        open_price, high, low, close, vol, _pct = bar[:6]
         if not (
             math.isfinite(open_price)
             and math.isfinite(high)

@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from app.entities.stock_data_context import SignalDecision, StockDailyFrame
+from strategies.channel_breakout import (
+    CHANNEL_BREAKOUT_MAX_HOLDING_DAYS,
+    CHANNEL_BREAKOUT_POSITION_FRACTION,
+    CHANNEL_BREAKOUT_REQUIRED_COLUMNS,
+    channel_breakout_batch_signal_strategy,
+    channel_breakout_code_filter,
+    channel_breakout_entry_strategy,
+)
 from strategies.demo import (
     DEMO_MAX_HOLDING_DAYS,
     DEMO_REQUIRED_COLUMNS,
@@ -17,7 +25,6 @@ from strategies.golden_pillar import (
     golden_pillar_batch_signal_strategy,
     golden_pillar_code_filter,
     golden_pillar_entry_strategy,
-    golden_pillar_exit_strategy,
 )
 from strategies.jiangshen import (
     JIANGSHEN_MAX_HOLDING_DAYS,
@@ -63,7 +70,8 @@ class StrategyRegistration:
       输入 (买入成交价, 信号 dict)，返回 (stop_losses, take_profits)；
       返回 None 表示该成交价下风险无法界定，放弃买入。
       缺省直接使用信号中携带的 stop_losses / take_profits。
-    - max_holding_days: 可选，持仓时限（交易日），到期日收盘强制卖出。
+    - max_holding_days: 可选，持仓时限（交易日），到期日按 time_exit_price 强制卖出。
+    - time_exit_price: "close"（默认）或 "open"，控制通用持仓到期卖出价格。
     - entry_strategy / exit_strategy: 可选，完全覆写入场/出场判定（一般不需要）。
     """
 
@@ -81,20 +89,34 @@ class StrategyRegistration:
         Callable[[float, dict], tuple[list[float], list[float]] | None] | None
     ) = None
     max_holding_days: int | None = None
+    time_exit_price: str = "close"
     entry_strategy: Callable[..., Any] | None = None
     exit_strategy: Callable[..., Any] | None = None
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
+    "channel_breakout": StrategyRegistration(
+        name="channel_breakout",
+        batch_signal_strategy=channel_breakout_batch_signal_strategy,
+        required_columns=CHANNEL_BREAKOUT_REQUIRED_COLUMNS,
+        code_filter=channel_breakout_code_filter,
+        entry_mode="next_open",
+        position_sizing="fraction",
+        position_fraction=CHANNEL_BREAKOUT_POSITION_FRACTION,
+        max_holding_days=CHANNEL_BREAKOUT_MAX_HOLDING_DAYS,
+        time_exit_price="open",
+        entry_strategy=channel_breakout_entry_strategy,
+    ),
     "demo": StrategyRegistration(
         name="demo",
         batch_signal_strategy=demo_batch_signal_strategy,
         required_columns=DEMO_REQUIRED_COLUMNS,
         code_filter=demo_code_filter,
         entry_mode="next_open",
-        risk_price_basis="signal_close",
-        position_cap_fraction=1.0 / 4.0,
+        position_sizing="fraction",
+        position_fraction=1.0 / 4.0,
         max_holding_days=DEMO_MAX_HOLDING_DAYS,
+        time_exit_price="close",
     ),
     "golden_pillar": StrategyRegistration(
         name="golden_pillar",
@@ -105,8 +127,8 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         position_sizing="fraction",
         position_fraction=GOLDEN_PILLAR_POSITION_FRACTION,
         max_holding_days=GOLDEN_PILLAR_MAX_HOLDING_DAYS,
+        time_exit_price="open",
         entry_strategy=golden_pillar_entry_strategy,
-        exit_strategy=golden_pillar_exit_strategy,
     ),
     "jiangshen": StrategyRegistration(
         name="jiangshen",

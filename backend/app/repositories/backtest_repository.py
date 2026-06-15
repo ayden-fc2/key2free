@@ -432,7 +432,7 @@ class BacktestRepository:
         codes: list[str],
         start_date: date,
         end_date: date,
-    ) -> dict[str, dict[date, tuple[float, float, float, float, float, float]]]:
+    ) -> dict[str, dict[date, tuple[float, ...]]]:
         """一次性装载撮合所需行情：code -> {trade_date: (open, high, low, close, vol, pct_chg)}。
 
         价格为前复权口径；缺失值为 nan。撮合主循环禁止再查询数据库。
@@ -443,7 +443,8 @@ class BacktestRepository:
             frame = connection.execute(
                 """
                 select code, trade_date,
-                       qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg
+                       qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg,
+                       lag(ma_10) over(partition by code order by trade_date) as prev_ma_10
                 from tushare.stock_daily_technical
                 where trade_date between ? and ?
                   and code in (select unnest(?))
@@ -454,7 +455,7 @@ class BacktestRepository:
         if frame.empty:
             return {}
         nan = float("nan")
-        prices: dict[str, dict[date, tuple[float, float, float, float, float, float]]] = {}
+        prices: dict[str, dict[date, tuple[float, ...]]] = {}
         code_values = frame["code"].tolist()
         date_values = frame["trade_date"].tolist()
         opens = frame["qfq_open"].tolist()
@@ -463,6 +464,7 @@ class BacktestRepository:
         closes = frame["qfq_close"].tolist()
         vols = frame["vol"].tolist()
         pct_chgs = frame["pct_chg"].tolist()
+        prev_ma10s = frame["prev_ma_10"].tolist()
         for index in range(len(code_values)):
             day = date_values[index]
             if isinstance(day, datetime):
@@ -474,6 +476,7 @@ class BacktestRepository:
                 float(closes[index]) if closes[index] is not None else nan,
                 float(vols[index]) if vols[index] is not None else nan,
                 float(pct_chgs[index]) if pct_chgs[index] is not None else nan,
+                float(prev_ma10s[index]) if prev_ma10s[index] is not None else nan,
             )
         return prices
 

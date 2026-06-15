@@ -21,10 +21,10 @@ GOLDEN_PILLAR_MAX_HOLDING_DAYS = 1
 
 LOOKBACK_BARS = 400
 RECENT_CONSOLIDATION_BARS = 5
-CONSOLIDATION_BARS = 20
-MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.08
-MAX_CONSOLIDATION_AVG_BODY_RATIO = 0.022
-MAX_CONSOLIDATION_ER20 = 0.22
+CONSOLIDATION_BARS = 15
+MIN_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.04
+MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.07
+MAX_CONSOLIDATION_AVG_BODY_RATIO = 0.025
 
 T1_VOLUME_TO_AVG5_MULTIPLE = 1.4
 T1_BODY_OPEN_RATIO = 0.032
@@ -33,27 +33,29 @@ MAX_T1_BODY_OPEN_RATIO = 0.080
 CONFIRM_BODY_TO_T1_BODY_RATIO = 0.5
 CONFIRM_BODY_HIGH_TO_T1_CLOSE_CEILING_RATIO = 1.06
 MAX_T4_BODY_OPEN_RATIO = 0.08
-GOLDEN_PILLAR_MIN_CONFIRM_POSITION = 0.8
-GENERAL_PILLAR_MIN_CONFIRM_POSITION = 0.4
-GENERAL_PILLAR_MAX_CONFIRM_POSITION = 0.8
-GENERAL_PILLAR_MIN_AVG_POSITION = 0.6
+GOLDEN_PILLAR_MIN_CONFIRM_POSITION = 1.0
 RECENT_CLOSE_BREAKOUT_DAYS = 3
 RECENT_CLOSE_BREAKOUT_MIN_COUNT = 2
 RECENT_CLOSE_BREAKOUT_RATIO = 1.02
-POST_PILLAR_CONFIRM_BREAKOUT_RATIO = 1.01
-MAX_CONFIRM_AFTER_T4_DAYS = 4
-ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO = 0.98
-ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO = 1.04
-ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO = 1.01
+T1_CLOSE_TO_CONSOLIDATION_BODY_HIGH_CEILING_RATIO = 1.05
+SIGNAL_CLOSE_TO_T1_CLOSE_FLOOR_RATIO = 0.98
+SIGNAL_CLOSE_TO_T1_CLOSE_CEILING_RATIO = 1.04
+MAX_SIGNAL_BODY_RETURN_RATIO = 0.015
+MAX_CONFIRM_AFTER_T4_DAYS = 0
+ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO = 0.98
+ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO = 1.04
+ENTRY_TRIGGER_TO_T1_CLOSE_RATIO = 1.005
 ENTRY_TRIGGER_TO_OPEN_RATIO = 1.01
+ENTRY_BUY_PRICE_TO_CONSOLIDATION_HIGH_CEILING_RATIO = 1.08
+ENTRY_BUY_PRICE_TO_MA10_CEILING_RATIO = 1.06
+ENTRY_BUY_PRICE_TO_T1_CLOSE_CEILING_RATIO = 1.05
 
 PILLAR_TYPE_GOLDEN = "golden_pillar"
-PILLAR_TYPE_GENERAL = "general_pillar"
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
     "atr_5",
     "avg_volume_5",
-    "er_20",
+    "ma_10",
 )
 
 
@@ -69,7 +71,6 @@ class ConsolidationRange:
     close_low: float
     avg_daily_body_ratio: float
     close_range_ratio: float
-    er20_end: float
 
 
 @dataclass(frozen=True)
@@ -83,14 +84,6 @@ class PillarPattern:
     confirm_position_min: float
     confirm_position_max: float
     confirm_position_avg: float
-
-
-@dataclass(frozen=True)
-class ImmediateSellAction:
-    reason: str
-    price: float
-    quantity: int
-    advance_level: bool = False
 
 
 def golden_pillar_code_filter(code: str) -> bool:
@@ -109,7 +102,9 @@ def golden_pillar_batch_signal_strategy(
         return {}
 
     columns = frame.columns
+    opens = columns["qfq_open"]
     closes = columns["qfq_close"]
+    ma10 = columns["ma_10"]
 
     with np.errstate(invalid="ignore", divide="ignore"):
         st_blocked = _st_blocked_series(columns)
@@ -123,7 +118,11 @@ def golden_pillar_batch_signal_strategy(
             continue
 
         close_t = float(closes[index])
-        if not np.isfinite(close_t):
+        open_t = float(opens[index])
+        if not (np.isfinite(open_t) and np.isfinite(close_t) and open_t > 0):
+            continue
+        signal_body_return = (close_t - open_t) / open_t
+        if signal_body_return > MAX_SIGNAL_BODY_RETURN_RATIO:
             continue
 
         matched_pillar = _resolve_confirmed_pillar(
@@ -154,6 +153,8 @@ def golden_pillar_batch_signal_strategy(
             np.isfinite(consolidation.body_high)
             and consolidation.body_high > 0
             and matched_pillar.t1_close >= RECENT_CLOSE_BREAKOUT_RATIO * consolidation.body_high
+            and matched_pillar.t1_close
+            <= T1_CLOSE_TO_CONSOLIDATION_BODY_HIGH_CEILING_RATIO * consolidation.body_high
             and _close_breakout_count(
                 closes=closes,
                 start_index=matched_pillar.t1_index + 1,
@@ -164,9 +165,20 @@ def golden_pillar_batch_signal_strategy(
         ):
             continue
 
-        entry_open_floor = close_t * ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO
-        entry_open_ceiling = close_t * ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO
-        entry_trigger_price = close_t * ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO
+        entry_open_floor = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO
+        entry_open_ceiling = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO
+        entry_trigger_price = matched_pillar.t1_close * ENTRY_TRIGGER_TO_T1_CLOSE_RATIO
+        ma10_t = float(ma10[index])
+        if not (np.isfinite(ma10_t) and ma10_t > 0):
+            continue
+        entry_buy_price_ceiling = min(
+            entry_open_ceiling,
+            consolidation.high * ENTRY_BUY_PRICE_TO_CONSOLIDATION_HIGH_CEILING_RATIO,
+            ma10_t * ENTRY_BUY_PRICE_TO_MA10_CEILING_RATIO,
+            matched_pillar.t1_close * ENTRY_BUY_PRICE_TO_T1_CLOSE_CEILING_RATIO,
+        )
+        if entry_trigger_price > entry_buy_price_ceiling:
+            continue
         results[index] = SignalDecision(
             triggered=True,
             signal_close=close_t,
@@ -185,7 +197,6 @@ def golden_pillar_batch_signal_strategy(
                 "consolidation_close_low": consolidation.close_low,
                 "consolidation_avg_daily_body_ratio": consolidation.avg_daily_body_ratio,
                 "consolidation_close_range_ratio": consolidation.close_range_ratio,
-                "consolidation_er20_end": consolidation.er20_end,
                 "pillar_type": matched_pillar.pattern_type,
                 "pillar_t1_date": frame.trade_dates[matched_pillar.t1_index].isoformat(),
                 "pillar_t4_date": frame.trade_dates[matched_pillar.t4_index].isoformat(),
@@ -199,23 +210,36 @@ def golden_pillar_batch_signal_strategy(
                     matched_pillar.t1_close / consolidation.body_high
                 ),
                 "signal_close_to_consolidation_body_high": close_t / consolidation.body_high,
+                "ma10": ma10_t,
                 "recent_close_breakout_ratio": RECENT_CLOSE_BREAKOUT_RATIO,
+                "t1_close_to_consolidation_body_high_ceiling_ratio": (
+                    T1_CLOSE_TO_CONSOLIDATION_BODY_HIGH_CEILING_RATIO
+                ),
                 "recent_close_breakout_days": RECENT_CLOSE_BREAKOUT_DAYS,
                 "recent_close_breakout_min_count": RECENT_CLOSE_BREAKOUT_MIN_COUNT,
-                "post_pillar_confirm_breakout_ratio": POST_PILLAR_CONFIRM_BREAKOUT_RATIO,
-                "post_pillar_confirm_threshold": matched_pillar.t1_close
-                * POST_PILLAR_CONFIRM_BREAKOUT_RATIO,
+                "signal_close_to_t1_close_floor_ratio": SIGNAL_CLOSE_TO_T1_CLOSE_FLOOR_RATIO,
+                "signal_close_to_t1_close_ceiling_ratio": SIGNAL_CLOSE_TO_T1_CLOSE_CEILING_RATIO,
+                "signal_body_return": float(signal_body_return),
+                "max_signal_body_return_ratio": MAX_SIGNAL_BODY_RETURN_RATIO,
                 "post_pillar_support_price": matched_pillar.t1_open,
                 "max_confirm_after_t4_days": MAX_CONFIRM_AFTER_T4_DAYS,
                 "confirm_lag_days": index - matched_pillar.t4_index,
                 "entry_open_floor": float(entry_open_floor),
                 "entry_open_ceiling": float(entry_open_ceiling),
                 "entry_trigger_price": float(entry_trigger_price),
-                "entry_open_to_signal_close_floor_ratio": ENTRY_OPEN_TO_SIGNAL_CLOSE_FLOOR_RATIO,
-                "entry_open_to_signal_close_ceiling_ratio": ENTRY_OPEN_TO_SIGNAL_CLOSE_CEILING_RATIO,
-                "entry_trigger_to_signal_close_ratio": ENTRY_TRIGGER_TO_SIGNAL_CLOSE_RATIO,
+                "entry_buy_price_ceiling": float(entry_buy_price_ceiling),
+                "entry_open_to_t1_close_floor_ratio": ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO,
+                "entry_open_to_t1_close_ceiling_ratio": ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO,
+                "entry_trigger_to_t1_close_ratio": ENTRY_TRIGGER_TO_T1_CLOSE_RATIO,
                 "entry_trigger_to_open_ratio": ENTRY_TRIGGER_TO_OPEN_RATIO,
-                "exit_rule": "next_trade_day_close",
+                "entry_buy_price_to_consolidation_high_ceiling_ratio": (
+                    ENTRY_BUY_PRICE_TO_CONSOLIDATION_HIGH_CEILING_RATIO
+                ),
+                "entry_buy_price_to_ma10_ceiling_ratio": ENTRY_BUY_PRICE_TO_MA10_CEILING_RATIO,
+                "entry_buy_price_to_t1_close_ceiling_ratio": (
+                    ENTRY_BUY_PRICE_TO_T1_CLOSE_CEILING_RATIO
+                ),
+                "exit_rule": "next_trade_day_open",
             },
         )
     return results
@@ -226,6 +250,7 @@ def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float
     entry_open_floor = _signal_value(signal, "entry_open_floor")
     entry_open_ceiling = _signal_value(signal, "entry_open_ceiling")
     entry_trigger_price = _signal_value(signal, "entry_trigger_price")
+    entry_buy_price_ceiling = _signal_value(signal, "entry_buy_price_ceiling")
     if not all(
         isinstance(value, (int, float))
         for value in (entry_open_floor, entry_open_ceiling, entry_trigger_price)
@@ -234,13 +259,20 @@ def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float
     entry_open_floor = float(entry_open_floor)
     entry_open_ceiling = float(entry_open_ceiling)
     entry_trigger_price = float(entry_trigger_price)
+    entry_buy_price_ceiling = (
+        float(entry_buy_price_ceiling)
+        if isinstance(entry_buy_price_ceiling, (int, float))
+        else entry_open_ceiling
+    )
     if not (
         np.isfinite(entry_open_floor)
         and np.isfinite(entry_open_ceiling)
         and np.isfinite(entry_trigger_price)
+        and np.isfinite(entry_buy_price_ceiling)
         and entry_open_floor > 0
         and entry_open_ceiling >= entry_open_floor
         and entry_trigger_price > 0
+        and entry_buy_price_ceiling > 0
     ):
         return None
 
@@ -249,27 +281,11 @@ def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float
     if not (np.isfinite(open_price) and np.isfinite(high_price)):
         return None
     entry_trigger_price = max(entry_trigger_price, open_price * ENTRY_TRIGGER_TO_OPEN_RATIO)
-    if entry_trigger_price > entry_open_ceiling:
+    if entry_trigger_price > entry_buy_price_ceiling:
         return None
     if open_price < entry_open_floor or open_price > entry_open_ceiling or high_price < entry_trigger_price:
         return None
     return entry_trigger_price
-
-
-def golden_pillar_exit_strategy(
-    *,
-    bar: tuple[float, float, float, float, float, float],
-    holding: Any,
-    trade_index: int | None = None,
-) -> ImmediateSellAction | None:
-    close_price = float(bar[3])
-    if not (np.isfinite(close_price) and close_price > 0):
-        return None
-    return ImmediateSellAction(
-        reason="next_close_exit",
-        price=close_price,
-        quantity=int(holding.quantity),
-    )
 
 
 def _resolve_confirmed_pillar(
@@ -291,14 +307,15 @@ def _resolve_confirmed_pillar(
         pattern = _detect_pillar_pattern(frame, t1_index)
         if pattern is None or pattern.t4_index != t4_index:
             continue
-        confirm_threshold = pattern.t1_close * POST_PILLAR_CONFIRM_BREAKOUT_RATIO
-        if close_t < confirm_threshold:
+        signal_floor = pattern.t1_close * SIGNAL_CLOSE_TO_T1_CLOSE_FLOOR_RATIO
+        signal_ceiling = pattern.t1_close * SIGNAL_CLOSE_TO_T1_CLOSE_CEILING_RATIO
+        if close_t < signal_floor or close_t > signal_ceiling:
             continue
         if _has_prior_t1_close_confirmation(
             closes=closes,
             start_index=pattern.t4_index,
             end_index=index - 1,
-            threshold=confirm_threshold,
+            threshold=signal_floor,
         ):
             continue
         if _breaks_t1_open_after_pillar(
@@ -431,19 +448,11 @@ def _detect_pillar_pattern(
     confirm_position_min = min(item[0] for item in confirm_positions)
     confirm_position_max = max(item[1] for item in confirm_positions)
     confirm_position_avg = float(np.mean([item[2] for item in confirm_positions]))
-    if confirm_position_min >= GOLDEN_PILLAR_MIN_CONFIRM_POSITION:
-        pattern_type = PILLAR_TYPE_GOLDEN
-    elif (
-        confirm_position_min >= GENERAL_PILLAR_MIN_CONFIRM_POSITION
-        and confirm_position_max <= GENERAL_PILLAR_MAX_CONFIRM_POSITION
-        and confirm_position_avg >= GENERAL_PILLAR_MIN_AVG_POSITION
-    ):
-        pattern_type = PILLAR_TYPE_GENERAL
-    else:
+    if confirm_position_min < GOLDEN_PILLAR_MIN_CONFIRM_POSITION:
         return None
 
     return PillarPattern(
-        pattern_type=pattern_type,
+        pattern_type=PILLAR_TYPE_GOLDEN,
         t1_index=t1_index,
         t4_index=t4_index,
         t1_open=t1_open,
@@ -483,8 +492,7 @@ def _detect_consolidation_range(
     lows = columns["qfq_low"][start_index : end_index + 1]
     closes = columns["qfq_close"][start_index : end_index + 1]
     opens = columns["qfq_open"][start_index : end_index + 1]
-    er20_end = float(columns["er_20"][end_index])
-    values = [*highs, *lows, *closes, *opens, er20_end]
+    values = [*highs, *lows, *closes, *opens]
     if not all(np.isfinite(float(value)) for value in values):
         return None
     if np.any(closes <= 0):
@@ -508,9 +516,8 @@ def _detect_consolidation_range(
         return None
     close_range_ratio = (close_high - close_low) / close_low
     if not (
-        close_range_ratio <= MAX_CONSOLIDATION_CLOSE_RANGE_RATIO
+        MIN_CONSOLIDATION_CLOSE_RANGE_RATIO <= close_range_ratio <= MAX_CONSOLIDATION_CLOSE_RANGE_RATIO
         and avg_daily_body_ratio <= MAX_CONSOLIDATION_AVG_BODY_RATIO
-        and er20_end <= MAX_CONSOLIDATION_ER20
     ):
         return None
 
@@ -525,7 +532,6 @@ def _detect_consolidation_range(
         close_low=close_low,
         avg_daily_body_ratio=avg_daily_body_ratio,
         close_range_ratio=close_range_ratio,
-        er20_end=er20_end,
     )
 
 
