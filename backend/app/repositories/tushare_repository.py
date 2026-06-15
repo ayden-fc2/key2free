@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any, Callable
 
@@ -12,6 +13,7 @@ from app.repositories.duckdb_repository import DuckDBRepository
 STOCK_DAILY_TECHNICAL_START_DATE = date(2018, 1, 1)
 STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2017, 6, 1)
 STOCK_DAILY_TECHNICAL_LOG_ROW_STEP = 100000
+STOCK_DAILY_TECHNICAL_WORKERS = 10
 
 
 class TushareRepository:
@@ -618,10 +620,22 @@ class TushareRepository:
                     )
                 if base_frame.empty:
                     continue
-                enriched_frames = [
-                    self._calculate_stock_daily_technical(frame)
+                groups = [
+                    frame.copy()
                     for _ts_code, frame in base_frame.groupby("ts_code", sort=True, group_keys=False)
                 ]
+                enriched_frames: list[pd.DataFrame] = []
+                with ThreadPoolExecutor(max_workers=STOCK_DAILY_TECHNICAL_WORKERS) as executor:
+                    futures = [
+                        executor.submit(self._calculate_stock_daily_technical, frame)
+                        for frame in groups
+                    ]
+                    for future in as_completed(futures):
+                        frame = future.result()
+                        if not frame.empty:
+                            enriched_frames.append(frame)
+                if not enriched_frames:
+                    continue
                 enriched = pd.concat(enriched_frames, ignore_index=True)
                 enriched = enriched[enriched["trade_date"] >= pd.Timestamp(STOCK_DAILY_TECHNICAL_START_DATE)]
                 if enriched.empty:

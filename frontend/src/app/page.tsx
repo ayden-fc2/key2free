@@ -9,7 +9,13 @@ import { BacktestDetailModal } from "@/components/backtests/BacktestDetailModal"
 import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
 import { getHealth } from "@/lib/api/health";
-import { getDailySignals, getSignalStrategies, getStockDataContexts } from "@/lib/api/signals";
+import {
+  getDailySignalTask,
+  getDailySignalTaskResult,
+  getSignalStrategies,
+  getStockDataContexts,
+  startDailySignalTask,
+} from "@/lib/api/signals";
 import {
   getTushareRefreshTask,
   listTushareWatermarks,
@@ -17,7 +23,7 @@ import {
 } from "@/lib/api/tushareAssets";
 import type { BacktestTask } from "@/types/backtest";
 import type { HealthState } from "@/types/health";
-import type { DailySignalItem, DailySignalResult, StockDataContext } from "@/types/signal";
+import type { DailySignalItem, DailySignalResult, DailySignalTask, StockDataContext } from "@/types/signal";
 import type { TushareAssetWatermark, TushareRefreshTask } from "@/types/tushareAsset";
 import { formatDateTime } from "@/utils/format";
 
@@ -67,6 +73,29 @@ function formatSignalMetric(value: number | null | undefined) {
   return Number.isInteger(value) ? value.toString() : value.toFixed(3);
 }
 
+function formatSignalMetricList(values: number[] | null | undefined) {
+  if (!values || values.length === 0) {
+    return "-";
+  }
+  return values.map((value) => formatSignalMetric(value)).join(" / ");
+}
+
+function formatSignalExtra(value: unknown) {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  if (typeof value === "number") {
+    return formatSignalMetric(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
 function formatLocalDate(value: Date) {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -95,6 +124,8 @@ export default function Home() {
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
   const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
+  const [dailySignalTask, setDailySignalTask] = useState<DailySignalTask | null>(null);
+  const [dailySignalTaskModalOpen, setDailySignalTaskModalOpen] = useState(false);
   const [dailySignalResult, setDailySignalResult] = useState<DailySignalResult | null>(null);
   const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>({});
   const [stockContextsLoading, setStockContextsLoading] = useState(false);
@@ -122,6 +153,7 @@ export default function Home() {
   }, []);
   const [messageApi, contextHolder] = message.useMessage();
   const backtestRunning = backtestTask?.status === "running";
+  const dailySignalRunning = dailySignalTask?.status === "running";
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -203,6 +235,25 @@ export default function Home() {
     };
   }, []);
 
+  async function loadDailySignalResult(taskId: number) {
+    const data = await getDailySignalTaskResult(taskId);
+    setDailySignalResult(data);
+    const codes = data.signals.map((item) => item.code);
+    if (codes.length === 0) {
+      return;
+    }
+    setSelectedSignalCode((current) => current ?? codes[0]);
+    setStockContextsLoading(true);
+    try {
+      const contextResult = await getStockDataContexts({ codes });
+      setStockContexts(Object.fromEntries(contextResult.contexts.map((context) => [context.code, context])));
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "股票上下文加载失败");
+    } finally {
+      setStockContextsLoading(false);
+    }
+  }
+
   async function fetchDailySignals() {
     if (dailySignalDate === null) {
       messageApi.warning("请选择交易日期");
@@ -211,28 +262,21 @@ export default function Home() {
     setDailySignalLoading(true);
     setStockContexts({});
     setSelectedSignalCode(null);
+    setDailySignalResult(null);
     try {
-      const data = await getDailySignals({
+      const data = await startDailySignalTask({
         strategy_name: dailySignalStrategy,
         trade_date: dailySignalDate,
       });
-      setDailySignalResult(data);
-      messageApi.success(`当日信号计算完成，共 ${data.signal_count} 只`);
-      const codes = data.signals.map((item) => item.code);
-      if (codes.length > 0) {
-        setSelectedSignalCode(codes[0]);
-        setStockContextsLoading(true);
-        try {
-          const contextResult = await getStockDataContexts({ codes });
-          setStockContexts(Object.fromEntries(contextResult.contexts.map((context) => [context.code, context])));
-        } catch (error) {
-          messageApi.error(error instanceof Error ? error.message : "股票上下文加载失败");
-        } finally {
-          setStockContextsLoading(false);
-        }
+      setDailySignalTask(data.task);
+      setDailySignalTaskModalOpen(true);
+      messageApi.info(data.message);
+      if (data.task.status === "success" && data.task.id !== null) {
+        await loadDailySignalResult(data.task.id);
+        messageApi.success(`当日信号已加载，共 ${data.task.signal_count ?? 0} 只`);
       }
     } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "信号查询失败");
+      messageApi.error(error instanceof Error ? error.message : "信号任务创建失败");
     } finally {
       setDailySignalLoading(false);
     }
@@ -346,6 +390,39 @@ export default function Home() {
       window.clearInterval(timer);
     };
   }, [backtestModalOpen, backtestRunning, backtestTask?.id, messageApi]);
+
+  useEffect(() => {
+    if (dailySignalTask?.id == null || dailySignalTask.status !== "running") {
+      return undefined;
+    }
+    let cancelled = false;
+    const taskId = dailySignalTask.id;
+    async function pollDailySignalTask() {
+      try {
+        const task = await getDailySignalTask({ task_id: taskId });
+        if (cancelled) {
+          return;
+        }
+        setDailySignalTask(task);
+        if (task.status === "success") {
+          await loadDailySignalResult(taskId);
+          messageApi.success(`当日信号已加载，共 ${task.signal_count ?? 0} 只`);
+        } else if (task.status === "error") {
+          messageApi.error("当日信号任务失败");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          messageApi.error(error instanceof Error ? error.message : "当日信号任务查询失败");
+        }
+      }
+    }
+    const timer = window.setInterval(pollDailySignalTask, 2000);
+    pollDailySignalTask();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [dailySignalTask?.id, dailySignalTask?.status, messageApi]);
 
   const activeSubTabs = useMemo(() => subTabs[activeTab], [activeTab]);
 
@@ -490,29 +567,37 @@ export default function Home() {
     { dataIndex: "code_name", title: "名称", width: 120 },
     {
       render: (_value, record) => formatSignalMetric(record.signal?.signal_close),
-      title: "买入价(T收盘)",
+      title: "T日收盘",
       width: 120,
     },
     {
-      render: (_value, record) => formatSignalMetric(record.signal?.stop_losses?.[0]),
-      title: "第一止损位",
-      width: 120,
+      render: (_value, record) => formatSignalMetricList(record.signal?.stop_losses),
+      title: "止损",
+      width: 180,
+    },
+    {
+      render: (_value, record) => formatSignalMetricList(record.signal?.take_profits),
+      title: "止盈",
+      width: 180,
+    },
+    {
+      render: (_value, record) => formatSignalMetric(record.signal?.max_watch_days),
+      title: "最长持仓",
+      width: 100,
     },
   ];
 
   const selectedSignal = dailySignalResult?.signals.find((item) => item.code === selectedSignalCode) ?? null;
   const selectedStockContext = selectedSignalCode === null ? null : stockContexts[selectedSignalCode] ?? null;
-  const selectedSignalMetrics: [string, number | null | undefined][] =
+  const selectedSignalMetrics: [string, unknown][] =
     selectedSignal === null
       ? []
       : [
-          ["买入价(T收盘)", selectedSignal.signal?.signal_close],
-          ["第一止损位", selectedSignal.signal?.stop_losses?.[0]],
-          ["第二止损位", selectedSignal.signal?.stop_losses?.[1]],
-          ["第一止盈位", selectedSignal.signal?.take_profits?.[0]],
-          ["第二止盈位", selectedSignal.signal?.take_profits?.[1]],
-          ["信号 ATR30", selectedSignal.signal?.extras?.signal_atr30],
-          ["最长观察期", selectedSignal.signal?.max_watch_days],
+          ["T日收盘", selectedSignal.signal?.signal_close],
+          ["止损位", formatSignalMetricList(selectedSignal.signal?.stop_losses)],
+          ["止盈位", formatSignalMetricList(selectedSignal.signal?.take_profits)],
+          ["最长持仓", selectedSignal.signal?.max_watch_days],
+          ...Object.entries(selectedSignal.signal?.extras ?? {}),
         ];
 
   return (
@@ -539,6 +624,23 @@ export default function Home() {
           {statusTag(backtestTask?.status ?? "unknown")}
         </div>
         <pre className="task-log">{backtestTask?.logs || "等待任务日志..."}</pre>
+      </Modal>
+      <Modal
+        footer={[
+          <Button key="close" onClick={() => setDailySignalTaskModalOpen(false)} type="primary">
+            关闭
+          </Button>,
+        ]}
+        open={dailySignalTaskModalOpen}
+        title="当日信号任务"
+        width={760}
+        onCancel={() => setDailySignalTaskModalOpen(false)}
+      >
+        <div className="task-modal-header">
+          <span>任务 ID: {dailySignalTask?.id ?? "-"}</span>
+          {statusTag(dailySignalTask?.status ?? "unknown")}
+        </div>
+        <pre className="task-log">{dailySignalTask?.logs || "等待任务日志..."}</pre>
       </Modal>
       <Modal
         confirmLoading={backtestLoading}
@@ -668,15 +770,20 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">当日信号</div>
                   <div className="panel-subtitle">
-                    universe: {dailySignalResult?.universe_count ?? "-"} / signals: {dailySignalResult?.signal_count ?? "-"} / contexts:{" "}
-                    {Object.keys(stockContexts).length || "-"}
+                    task: {dailySignalTask?.id ?? "-"} / status: {dailySignalTask?.status ?? "-"} / processed:{" "}
+                    {dailySignalTask?.processed_count ?? "-"} / universe:{" "}
+                    {dailySignalTask?.universe_count ?? dailySignalResult?.universe_count ?? "-"} / signals:{" "}
+                    {dailySignalTask?.signal_count ?? dailySignalResult?.signal_count ?? "-"} / contexts: {Object.keys(stockContexts).length || "-"}
                   </div>
                 </div>
                 <Space>
                   <DatePicker onChange={(_, dateString) => setDailySignalDate(typeof dateString === "string" && dateString.length > 0 ? dateString : null)} placeholder="选择交易日" />
                   <Select options={strategyOptions} value={dailySignalStrategy} onChange={setDailySignalStrategy} style={{ width: 140 }} />
-                  <Button loading={dailySignalLoading || stockContextsLoading} onClick={fetchDailySignals} type="primary">
-                    获取当日信号
+                  <Button disabled={dailySignalTask === null} onClick={() => setDailySignalTaskModalOpen(true)}>
+                    查看任务
+                  </Button>
+                  <Button loading={dailySignalLoading || dailySignalRunning || stockContextsLoading} onClick={fetchDailySignals} type="primary">
+                    启动/加载信号
                   </Button>
                 </Space>
               </div>
@@ -685,12 +792,12 @@ export default function Home() {
                   <Table
                     columns={dailySignalColumns}
                     dataSource={dailySignalResult?.signals ?? []}
-                    loading={dailySignalLoading || stockContextsLoading}
+                    loading={dailySignalLoading || dailySignalRunning || stockContextsLoading}
                     onRow={(record) => ({ onClick: () => setSelectedSignalCode(record.code) })}
                     pagination={{ pageSize: 30, showSizeChanger: true }}
                     rowClassName={(record) => (record.code === selectedSignalCode ? "selected-row" : "")}
                     rowKey="code"
-                    scroll={{ x: 440, y: 560 }}
+                    scroll={{ x: 700, y: 560 }}
                     size="small"
                   />
                 </div>
@@ -704,7 +811,7 @@ export default function Home() {
                       {selectedSignalMetrics.map(([label, value]) => (
                         <div className="signal-metric" key={label}>
                           <span>{label}</span>
-                          <strong>{formatSignalMetric(value)}</strong>
+                          <strong>{formatSignalExtra(value)}</strong>
                         </div>
                       ))}
                     </div>

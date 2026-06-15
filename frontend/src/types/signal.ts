@@ -12,7 +12,7 @@ export type SignalDecision = {
   stop_losses: number[];
   take_profits: number[];
   max_watch_days: number | null;
-  extras: Record<string, number | null> | null;
+  extras: Record<string, unknown> | null;
 };
 
 export type Bar1dQfq = {
@@ -55,6 +55,32 @@ export type DailySignalResult = {
 export type DailySignalRequest = {
   trade_date: string;
   strategy_name: string;
+};
+
+export type DailySignalTask = {
+  id: number | null;
+  status: string;
+  trade_date: string;
+  strategy_name: string;
+  universe_count: number | null;
+  processed_count: number;
+  signal_count: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  logs: string;
+};
+
+export type DailySignalTaskStart = {
+  task: DailySignalTask;
+  message: string;
+};
+
+export type DailySignalTaskQuery = {
+  task_id?: number | null;
+  trade_date?: string | null;
+  strategy_name?: string | null;
 };
 
 export type StockDataContextRequest = {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any
@@ -7,6 +9,8 @@ from typing import Any
 from app.dtos.signal_dto import (
     DailySignalItemDTO,
     DailySignalResultDTO,
+    DailySignalTaskDTO,
+    DailySignalTaskStartDTO,
     StockDataContextDTO,
     StockDataContextResultDTO,
 )
@@ -23,9 +27,71 @@ class SignalServiceError(ValueError):
 class SignalService:
     SIGNAL_CODE_BATCH_SIZE = 400
     SIGNAL_WORKERS = 10
+    DAILY_SIGNAL_PROGRESS_INTERVAL = 500
 
     def __init__(self) -> None:
         self.repository = SignalRepository()
+
+    def request_daily_signal_task(
+        self,
+        *,
+        trade_date: date,
+        strategy_name: str,
+    ) -> DailySignalTaskStartDTO:
+        if get_strategy(strategy_name) is None:
+            raise SignalServiceError(f"unknown strategy: {strategy_name}")
+
+        latest_task = self.repository.get_latest_daily_signal_task(
+            trade_date=trade_date,
+            strategy_name=strategy_name,
+        )
+        if latest_task is not None and latest_task.status == "success":
+            return DailySignalTaskStartDTO(
+                task=latest_task,
+                message="daily signal task already completed",
+            )
+        if latest_task is not None and latest_task.status == "running":
+            return DailySignalTaskStartDTO(
+                task=latest_task,
+                message="daily signal task already running",
+            )
+
+        task = self.repository.create_daily_signal_task(
+            trade_date=trade_date,
+            strategy_name=strategy_name,
+            initial_log=(
+                f"创建当日信号任务: strategy={strategy_name}, trade_date={trade_date.isoformat()}, "
+                f"workers={self.SIGNAL_WORKERS}"
+            ),
+        )
+        thread = threading.Thread(
+            target=self._run_daily_signal_task,
+            kwargs={
+                "task_id": task.id,
+                "trade_date": trade_date,
+                "strategy_name": strategy_name,
+            },
+            daemon=True,
+        )
+        thread.start()
+        return DailySignalTaskStartDTO(task=task, message="daily signal task created")
+
+    def get_daily_signal_task(
+        self,
+        *,
+        task_id: int | None = None,
+        trade_date: date | None = None,
+        strategy_name: str | None = None,
+    ) -> DailySignalTaskDTO | None:
+        if task_id is not None:
+            return self.repository.get_daily_signal_task(task_id)
+        return self.repository.get_latest_daily_signal_task(
+            trade_date=trade_date,
+            strategy_name=strategy_name,
+        )
+
+    def get_daily_signal_task_result(self, task_id: int) -> DailySignalResultDTO | None:
+        return self.repository.get_daily_signal_result(task_id)
 
     def get_daily_signals(
         self,
@@ -201,6 +267,88 @@ class SignalService:
             "max_watch_days": decision.max_watch_days,
             "extras": decision.extras,
         }
+
+    def _run_daily_signal_task(
+        self,
+        *,
+        task_id: int | None,
+        trade_date: date,
+        strategy_name: str,
+    ) -> None:
+        if task_id is None:
+            return
+        try:
+            started_at = time.monotonic()
+            self.repository.ensure_tables()
+            self.repository.clear_daily_signal_results(task_id)
+            self.repository.append_daily_signal_task_log(
+                task_id,
+                "开始计算当日信号: 全市场逐股批量加载宽表窗口",
+            )
+
+            def report_progress(processed_codes: int, total_codes: int) -> None:
+                self.repository.update_daily_signal_task_progress(
+                    task_id=task_id,
+                    universe_count=total_codes,
+                    processed_count=processed_codes,
+                )
+                self.repository.append_daily_signal_task_log(
+                    task_id,
+                    f"信号扫描进度: processed={processed_codes}/{total_codes}",
+                )
+
+            result = self.get_signals_for_dates_by_stock(
+                trade_dates=[trade_date],
+                strategy_name=strategy_name,
+                progress_callback=report_progress,
+                progress_interval=self.DAILY_SIGNAL_PROGRESS_INTERVAL,
+            ).get(
+                trade_date,
+                DailySignalResultDTO(
+                    trade_date=trade_date.isoformat(),
+                    strategy_name=strategy_name,
+                    universe_count=0,
+                    signal_count=0,
+                    signals=[],
+                ),
+            )
+            rows = [
+                [
+                    task_id,
+                    date.fromisoformat(item.trade_date),
+                    strategy_name,
+                    item.code,
+                    item.code_name,
+                    self.repository.to_json(item.universe),
+                    self.repository.to_json(item.signal),
+                ]
+                for item in result.signals
+            ]
+            self.repository.insert_daily_signal_results(rows)
+            task = self.repository.get_daily_signal_task(task_id)
+            task_universe_count = (
+                task.universe_count
+                if task is not None and task.universe_count is not None
+                else result.universe_count
+            )
+            self.repository.update_daily_signal_task_progress(
+                task_id=task_id,
+                universe_count=task_universe_count,
+                processed_count=task_universe_count,
+                signal_count=result.signal_count,
+            )
+            elapsed = time.monotonic() - started_at
+            self.repository.finish_daily_signal_task(
+                task_id=task_id,
+                status="success",
+                message=f"当日信号计算完成: signals={result.signal_count}, elapsed={elapsed:.2f}s",
+            )
+        except Exception as exc:
+            self.repository.finish_daily_signal_task(
+                task_id=task_id,
+                status="error",
+                message=f"当日信号计算失败: {exc}",
+            )
 
     def _normalize_codes(self, codes: list[str]) -> list[str]:
         seen: set[str] = set()

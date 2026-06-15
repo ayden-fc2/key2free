@@ -37,5 +37,27 @@ class DailySignalResultDTO:
 
 
 @dataclass(frozen=True)
+class DailySignalTaskDTO:
+    id: int | None
+    status: str
+    trade_date: str
+    strategy_name: str
+    universe_count: int | None
+    processed_count: int
+    signal_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    created_at: str | None
+    updated_at: str | None
+    logs: str
+
+
+@dataclass(frozen=True)
+class DailySignalTaskStartDTO:
+    task: DailySignalTaskDTO
+    message: str
+
+
+@dataclass(frozen=True)
 class StockDataContextResultDTO:
     contexts: list[StockDataContextDTO]

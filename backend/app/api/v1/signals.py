@@ -18,6 +18,12 @@ class DailySignalRequest(BaseModel):
     strategy_name: str
 
 
+class DailySignalTaskQuery(BaseModel):
+    task_id: int | None = None
+    trade_date: date | None = None
+    strategy_name: str | None = None
+
+
 class StockDataContextRequest(BaseModel):
     codes: list[str]
 
@@ -36,6 +42,38 @@ def get_daily_signals(request: DailySignalRequest) -> dict:
         )
     except SignalServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return asdict(result)
+
+
+@router.post("/daily-task")
+def start_daily_signal_task(request: DailySignalRequest) -> dict:
+    try:
+        result = signal_service.request_daily_signal_task(
+            trade_date=request.trade_date,
+            strategy_name=request.strategy_name,
+        )
+    except SignalServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return asdict(result)
+
+
+@router.post("/daily-task/query")
+def get_daily_signal_task(request: DailySignalTaskQuery) -> dict:
+    task = signal_service.get_daily_signal_task(
+        task_id=request.task_id,
+        trade_date=request.trade_date,
+        strategy_name=request.strategy_name,
+    )
+    if task is None:
+        raise HTTPException(status_code=404, detail="daily signal task not found")
+    return asdict(task)
+
+
+@router.get("/daily-task/{task_id}/result")
+def get_daily_signal_task_result(task_id: int) -> dict:
+    result = signal_service.get_daily_signal_task_result(task_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="daily signal result not found")
     return asdict(result)
 
 
