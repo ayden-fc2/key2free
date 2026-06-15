@@ -535,8 +535,24 @@ class BacktestService:
             actions.append(SellAction("stop_loss", close, remaining, False))
             return actions
 
-        failed_start_days = self._positive_int(holding.signal.get("failed_start_days"))
-        failed_start_return_ratio = self._to_float(holding.signal.get("failed_start_return_ratio"))
+        failed_start_days = self._positive_int(self._signal_value(holding.signal, "failed_start_days"))
+        failed_start_close_return_ratio = self._to_float(
+            self._signal_value(holding.signal, "failed_start_close_return_ratio")
+        )
+        if (
+            failed_start_days is not None
+            and failed_start_close_return_ratio is not None
+            and failed_start_close_return_ratio > 0
+            and trade_index - holding.buy_trade_index >= failed_start_days - 1
+            and math.isfinite(close)
+            and close < holding.buy_price * failed_start_close_return_ratio
+        ):
+            actions.append(SellAction("failed_start_time_stop", close, remaining, False))
+            return actions
+
+        failed_start_return_ratio = self._to_float(
+            self._signal_value(holding.signal, "failed_start_return_ratio")
+        )
         if (
             failed_start_days is not None
             and failed_start_return_ratio is not None
@@ -811,6 +827,14 @@ class BacktestService:
     def _to_float(self, value: Any) -> float | None:
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
+        return None
+
+    def _signal_value(self, signal: dict[str, Any], key: str) -> Any:
+        if key in signal:
+            return signal[key]
+        extras = signal.get("extras")
+        if isinstance(extras, dict):
+            return extras.get(key)
         return None
 
     def _positive_int(self, value: Any) -> int | None:
