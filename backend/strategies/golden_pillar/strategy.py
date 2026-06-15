@@ -1,4 +1,4 @@
-﻿"""Golden/general pillar breakout strategy.
+"""Golden/general pillar intraday-trigger strategy.
 
 Spec: a-obsidian-docs/strategies/黄金柱战法.md.
 """
@@ -15,39 +15,45 @@ from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 
 T = TypeVar("T")
 
-MAX_WATCH_DAYS = 1
+MAX_WATCH_DAYS = 4
 GOLDEN_PILLAR_POSITION_FRACTION = 1.0 / 4.0
-GOLDEN_PILLAR_MAX_HOLDING_DAYS = 15
+GOLDEN_PILLAR_MAX_HOLDING_DAYS = 1
 
 LOOKBACK_BARS = 400
-RECENT_CONSOLIDATION_BARS = 10
-RECENT_PILLAR_BARS = 5
+RECENT_CONSOLIDATION_BARS = 5
+RECENT_PILLAR_BARS = 6
+CONSOLIDATION_BARS = 14
+MAX_CONSOLIDATION_AVG_DAILY_BODY_RATIO = 0.027
+MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.072
+MAX_CONSOLIDATION_ATR14_RATIO = 0.032
 
-CONSOLIDATION_BARS = 15
-MAX_CONSOLIDATION_AVG_DAILY_BODY_RATIO = 0.025
-MAX_CONSOLIDATION_CLOSE_RANGE_RATIO = 0.065
-
-MIN_SIGNAL_TO_CONSOLIDATION_CLOSE_HIGH_RATIO = 1.03
-MAX_SIGNAL_TO_CONSOLIDATION_CLOSE_HIGH_RATIO = 1.10
-STOP_LOSS_1_CONSOLIDATION_HIGH_RATIO = 0.98
-STOP_LOSS_2_RATIO = 1.02
-TAKE_PROFIT_1_RATIO = 1.06
-TAKE_PROFIT_2_RATIO = 1.10
-MA10_SLOPE_NOISE_THRESHOLD = 0.008
-MAX_N_RANGE_CLOSE_POSITION_RATIO = 0.40
-MAX_TAKE_PROFIT_2_N_HIGH_RATIO = 0.92
-T1_VOLUME_TO_AVG5_MULTIPLE = 1.2
-T1_BODY_OPEN_RATIO = 0.035
+T1_VOLUME_TO_AVG5_MULTIPLE = 1.4
+T1_BODY_OPEN_RATIO = 0.032
 T1_BODY_ATR5_MULTIPLE = 1.5
-MAX_T1_BODY_OPEN_RATIO = 0.072
-CONFIRM_BODY_TO_T1_BODY_RATIO = 0.5
+MAX_T1_BODY_OPEN_RATIO = 0.080
+CONFIRM_BODY_TO_T1_CLOSE_RATIO = 0.03
+MAX_T4_BODY_OPEN_RATIO = 0.08
+GOLDEN_PILLAR_MIN_CONFIRM_POSITION = 0.8
+GENERAL_PILLAR_MIN_CONFIRM_POSITION = 0.4
+GENERAL_PILLAR_MAX_CONFIRM_POSITION = 0.8
+GENERAL_PILLAR_MIN_AVG_POSITION = 0.6
+RECENT_CLOSE_BREAKOUT_DAYS = 3
+RECENT_CLOSE_BREAKOUT_MIN_COUNT = 2
+RECENT_CLOSE_BREAKOUT_RATIO = 1.02
+ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO = 0.96
+ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO = 1.1
+ENTRY_TRIGGER_TO_T1_CLOSE_RATIO = 1.01
+ENTRY_TRIGGER_TO_OPEN_RATIO = 1.01
+NEXT_DAY_OPEN_EXIT_PROFIT_RATIO = 1.02
+NEXT_DAY_OPEN_EXIT_LOSS_RATIO = 0.98
+
 PILLAR_TYPE_GOLDEN = "golden_pillar"
 PILLAR_TYPE_GENERAL = "general_pillar"
 
 GOLDEN_PILLAR_REQUIRED_COLUMNS: tuple[str, ...] = (
     "atr_5",
+    "atr_pct_14",
     "avg_volume_5",
-    "ma_slope_10",
 )
 
 
@@ -57,10 +63,13 @@ class ConsolidationRange:
     end_index: int
     high: float
     low: float
+    body_high: float
+    body_low: float
     close_high: float
     close_low: float
     avg_daily_body_ratio: float
     close_range_ratio: float
+    atr_pct_14_end: float
 
 
 @dataclass(frozen=True)
@@ -68,31 +77,20 @@ class PillarPattern:
     pattern_type: str
     t1_index: int
     t4_index: int
+    t1_open: float
     t1_close: float
-    avg_mid_body: float
+    t4_close: float
+    confirm_position_min: float
+    confirm_position_max: float
+    confirm_position_avg: float
 
 
 @dataclass(frozen=True)
-class SlopeExtreme:
-    kind: str
-    index: int
-    value: float
-
-
-@dataclass(frozen=True)
-class StructurePoint:
-    kind: str
-    index: int
+class ImmediateSellAction:
+    reason: str
     price: float
-    left_extreme: SlopeExtreme
-    right_extreme: SlopeExtreme
-
-
-@dataclass(frozen=True)
-class NRange:
-    low: StructurePoint
-    high: StructurePoint
-    trend_type: str
+    quantity: int
+    advance_level: bool = False
 
 
 def golden_pillar_code_filter(code: str) -> bool:
@@ -111,9 +109,6 @@ def golden_pillar_batch_signal_strategy(
         return {}
 
     columns = frame.columns
-    opens = columns["qfq_open"]
-    highs = columns["qfq_high"]
-    lows = columns["qfq_low"]
     closes = columns["qfq_close"]
 
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -143,9 +138,9 @@ def golden_pillar_batch_signal_strategy(
             recent_pillar_start,
             index,
         )
-        if not recent_pillars:
+        matched_pillar = recent_pillars[-1] if recent_pillars else None
+        if matched_pillar is None:
             continue
-        matched_pillar = recent_pillars[-1]
 
         recent_consolidations = _slice_by_index_range(
             all_consolidations,
@@ -157,91 +152,132 @@ def golden_pillar_batch_signal_strategy(
             continue
         consolidation = recent_consolidations[-1]
 
-        n_range = _resolve_recent_n_range(
-            frame=frame,
-            index=index,
-            window_start=window_start,
-        )
-        if n_range is None:
-            continue
-        n_low = n_range.low.price
-        n_high = n_range.high.price
-        n_range_size = n_high - n_low
         if not (
-            np.isfinite(n_low)
-            and np.isfinite(n_high)
-            and n_low > 0
-            and n_high > n_low
-            and close_t <= n_low + MAX_N_RANGE_CLOSE_POSITION_RATIO * n_range_size
+            np.isfinite(consolidation.body_high)
+            and consolidation.body_high > 0
+            and _recent_close_breakout_count(
+                closes=closes,
+                index=index,
+                threshold=RECENT_CLOSE_BREAKOUT_RATIO * consolidation.body_high,
+                days=RECENT_CLOSE_BREAKOUT_DAYS,
+            )
+            >= RECENT_CLOSE_BREAKOUT_MIN_COUNT
         ):
             continue
 
-        if not (
-            np.isfinite(consolidation.high)
-            and np.isfinite(consolidation.low)
-            and np.isfinite(consolidation.close_high)
-            and consolidation.high > 0
-            and consolidation.low > 0
-            and consolidation.close_high > 0
-            and MIN_SIGNAL_TO_CONSOLIDATION_CLOSE_HIGH_RATIO * consolidation.close_high
-            <= close_t
-            <= MAX_SIGNAL_TO_CONSOLIDATION_CLOSE_HIGH_RATIO * consolidation.close_high
-        ):
-            continue
-
-        stop_loss_1 = consolidation.high * STOP_LOSS_1_CONSOLIDATION_HIGH_RATIO
-        stop_loss_2 = close_t * STOP_LOSS_2_RATIO
-        take_profit_1 = close_t * TAKE_PROFIT_1_RATIO
-        take_profit_2 = close_t * TAKE_PROFIT_2_RATIO
-        if not (
-            np.isfinite(stop_loss_1)
-            and np.isfinite(stop_loss_2)
-            and np.isfinite(take_profit_1)
-            and np.isfinite(take_profit_2)
-            and stop_loss_1 > 0
-            and stop_loss_1 < close_t
-        ):
-            continue
-        n_take_profit_2_limit = n_high * MAX_TAKE_PROFIT_2_N_HIGH_RATIO
-        if take_profit_2 >= n_take_profit_2_limit:
-            continue
-
+        entry_open_floor = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO
+        entry_open_ceiling = matched_pillar.t1_close * ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO
+        entry_trigger_price = matched_pillar.t1_close * ENTRY_TRIGGER_TO_T1_CLOSE_RATIO
         results[index] = SignalDecision(
             triggered=True,
             signal_close=close_t,
-            stop_losses=(float(stop_loss_1), float(stop_loss_2)),
-            take_profits=(float(take_profit_1), float(take_profit_2)),
+            stop_losses=(),
+            take_profits=(),
             max_watch_days=MAX_WATCH_DAYS,
             extras={
-                "pattern": "golden_pillar_breakout",
+                "pattern": "golden_pillar_intraday_trigger",
                 "consolidation_start": frame.trade_dates[consolidation.start_index].isoformat(),
                 "consolidation_end": frame.trade_dates[consolidation.end_index].isoformat(),
                 "consolidation_high": consolidation.high,
                 "consolidation_low": consolidation.low,
+                "consolidation_body_high": consolidation.body_high,
+                "consolidation_body_low": consolidation.body_low,
                 "consolidation_close_high": consolidation.close_high,
                 "consolidation_close_low": consolidation.close_low,
                 "consolidation_avg_daily_body_ratio": consolidation.avg_daily_body_ratio,
                 "consolidation_close_range_ratio": consolidation.close_range_ratio,
+                "consolidation_atr_pct_14_end": consolidation.atr_pct_14_end,
                 "pillar_type": matched_pillar.pattern_type,
                 "pillar_t1_date": frame.trade_dates[matched_pillar.t1_index].isoformat(),
                 "pillar_t4_date": frame.trade_dates[matched_pillar.t4_index].isoformat(),
+                "pillar_t1_open": matched_pillar.t1_open,
                 "pillar_t1_close": matched_pillar.t1_close,
-                "pillar_avg_mid_body": matched_pillar.avg_mid_body,
-                "n_low": n_low,
-                "n_low_date": frame.trade_dates[n_range.low.index].isoformat(),
-                "n_high": n_high,
-                "n_high_date": frame.trade_dates[n_range.high.index].isoformat(),
-                "n_trend_type": n_range.trend_type,
-                "n_close_position_ratio": (close_t - n_low) / n_range_size,
-                "n_take_profit_2_limit": n_take_profit_2_limit,
-                "breakout_ratio_t": close_t / consolidation.close_high,
-                "stop_loss_1": float(stop_loss_1),
-                "stop_loss_2": float(stop_loss_2),
-                "take_profit_1": float(take_profit_1),
-                "take_profit_2": float(take_profit_2),
+                "pillar_t4_close": matched_pillar.t4_close,
+                "pillar_confirm_position_min": matched_pillar.confirm_position_min,
+                "pillar_confirm_position_max": matched_pillar.confirm_position_max,
+                "pillar_confirm_position_avg": matched_pillar.confirm_position_avg,
+                "pillar_t1_close_to_consolidation_body_high": (
+                    matched_pillar.t1_close / consolidation.body_high
+                ),
+                "signal_close_to_consolidation_body_high": close_t / consolidation.body_high,
+                "recent_close_breakout_ratio": RECENT_CLOSE_BREAKOUT_RATIO,
+                "recent_close_breakout_days": RECENT_CLOSE_BREAKOUT_DAYS,
+                "recent_close_breakout_min_count": RECENT_CLOSE_BREAKOUT_MIN_COUNT,
+                "entry_open_floor": float(entry_open_floor),
+                "entry_open_ceiling": float(entry_open_ceiling),
+                "entry_trigger_price": float(entry_trigger_price),
+                "entry_open_to_t1_close_floor_ratio": ENTRY_OPEN_TO_T1_CLOSE_FLOOR_RATIO,
+                "entry_open_to_t1_close_ceiling_ratio": ENTRY_OPEN_TO_T1_CLOSE_CEILING_RATIO,
+                "entry_trigger_to_t1_close_ratio": ENTRY_TRIGGER_TO_T1_CLOSE_RATIO,
+                "entry_trigger_to_open_ratio": ENTRY_TRIGGER_TO_OPEN_RATIO,
+                "next_day_open_exit_profit_ratio": NEXT_DAY_OPEN_EXIT_PROFIT_RATIO,
+                "next_day_open_exit_loss_ratio": NEXT_DAY_OPEN_EXIT_LOSS_RATIO,
+                "exit_rule": "next_open_if_abs_return_ge_2pct_else_next_close",
             },
         )
     return results
+
+
+def golden_pillar_entry_strategy(*, bar: tuple[float, float, float, float, float, float], watch: Any) -> float | None:
+    signal = watch.signal or {}
+    entry_open_floor = _signal_value(signal, "entry_open_floor")
+    entry_open_ceiling = _signal_value(signal, "entry_open_ceiling")
+    entry_trigger_price = _signal_value(signal, "entry_trigger_price")
+    if not all(
+        isinstance(value, (int, float))
+        for value in (entry_open_floor, entry_open_ceiling, entry_trigger_price)
+    ):
+        return None
+    entry_open_floor = float(entry_open_floor)
+    entry_open_ceiling = float(entry_open_ceiling)
+    entry_trigger_price = float(entry_trigger_price)
+    if not (
+        np.isfinite(entry_open_floor)
+        and np.isfinite(entry_open_ceiling)
+        and np.isfinite(entry_trigger_price)
+        and entry_open_floor > 0
+        and entry_open_ceiling >= entry_open_floor
+        and entry_trigger_price > 0
+    ):
+        return None
+
+    open_price = float(bar[0])
+    high_price = float(bar[1])
+    if not (np.isfinite(open_price) and np.isfinite(high_price)):
+        return None
+    entry_trigger_price = max(entry_trigger_price, open_price * ENTRY_TRIGGER_TO_OPEN_RATIO)
+    if open_price < entry_open_floor or open_price > entry_open_ceiling or high_price < entry_trigger_price:
+        return None
+    return entry_trigger_price
+
+
+def golden_pillar_exit_strategy(*, bar: tuple[float, float, float, float, float, float], holding: Any) -> ImmediateSellAction | None:
+    open_price = float(bar[0])
+    close_price = float(bar[3])
+    buy_price = float(holding.buy_price)
+    if not (
+        np.isfinite(open_price)
+        and np.isfinite(close_price)
+        and np.isfinite(buy_price)
+        and open_price > 0
+        and close_price > 0
+        and buy_price > 0
+    ):
+        return None
+    if (
+        open_price >= buy_price * NEXT_DAY_OPEN_EXIT_PROFIT_RATIO
+        or open_price <= buy_price * NEXT_DAY_OPEN_EXIT_LOSS_RATIO
+    ):
+        return ImmediateSellAction(
+            reason="next_open_exit_abs_return_ge_2pct",
+            price=open_price,
+            quantity=int(holding.quantity),
+        )
+    return ImmediateSellAction(
+        reason="next_close_exit_abs_return_lt_2pct",
+        price=close_price,
+        quantity=int(holding.quantity),
+    )
 
 
 def _scan_pillar_patterns(
@@ -279,10 +315,11 @@ def _detect_pillar_pattern(
 
     t1_open = float(opens[t1_index])
     t1_close = float(closes[t1_index])
+    t4_close = float(closes[t4_index])
     t1_volume = float(volumes[t1_index])
     avg_volume_5_t0 = float(avg_volumes[t0_index])
     atr_5_t0 = float(atrs[t0_index])
-    values = [t1_open, t1_close, t1_volume, avg_volume_5_t0, atr_5_t0]
+    values = [t1_open, t1_close, t4_close, t1_volume, avg_volume_5_t0, atr_5_t0]
     if not all(np.isfinite(value) for value in values):
         return None
     if t1_open <= 0 or t1_close <= t1_open or avg_volume_5_t0 <= 0 or atr_5_t0 <= 0:
@@ -296,22 +333,43 @@ def _detect_pillar_pattern(
     if not (min_t1_body <= t1_body <= max_t1_body):
         return None
 
-    confirm_indices = range(t1_index + 1, t4_index + 1)
-    confirm_mid_bodies = []
-    for position in confirm_indices:
+    max_confirm_body = CONFIRM_BODY_TO_T1_CLOSE_RATIO * t1_close
+    confirm_positions: list[tuple[float, float, float]] = []
+    for position in range(t1_index + 1, t4_index + 1):
         open_value = float(opens[position])
         close_value = float(closes[position])
         if not (np.isfinite(open_value) and np.isfinite(close_value)):
             return None
         body = abs(close_value - open_value)
-        if body > CONFIRM_BODY_TO_T1_BODY_RATIO * t1_body:
+        if position < t4_index:
+            if body > max_confirm_body:
+                return None
+        elif body > max_confirm_body:
+            if close_value <= open_value or body > MAX_T4_BODY_OPEN_RATIO * open_value:
+                return None
+        body_low = min(open_value, close_value)
+        body_high = max(open_value, close_value)
+        position_low = (body_low - t1_open) / t1_body
+        position_high = (body_high - t1_open) / t1_body
+        position_mid = (((open_value + close_value) / 2.0) - t1_open) / t1_body
+        if not (
+            np.isfinite(position_low)
+            and np.isfinite(position_high)
+            and np.isfinite(position_mid)
+        ):
             return None
-        confirm_mid_bodies.append((open_value + close_value) / 2.0)
+        confirm_positions.append((position_low, position_high, position_mid))
 
-    avg_mid_body = float(np.mean(confirm_mid_bodies))
-    if avg_mid_body > t1_close:
+    confirm_position_min = min(item[0] for item in confirm_positions)
+    confirm_position_max = max(item[1] for item in confirm_positions)
+    confirm_position_avg = float(np.mean([item[2] for item in confirm_positions]))
+    if confirm_position_min >= GOLDEN_PILLAR_MIN_CONFIRM_POSITION:
         pattern_type = PILLAR_TYPE_GOLDEN
-    elif t1_open + (2.0 / 3.0) * t1_body >= avg_mid_body >= t1_open:
+    elif (
+        confirm_position_min >= GENERAL_PILLAR_MIN_CONFIRM_POSITION
+        and confirm_position_max <= GENERAL_PILLAR_MAX_CONFIRM_POSITION
+        and confirm_position_avg >= GENERAL_PILLAR_MIN_AVG_POSITION
+    ):
         pattern_type = PILLAR_TYPE_GENERAL
     else:
         return None
@@ -320,8 +378,12 @@ def _detect_pillar_pattern(
         pattern_type=pattern_type,
         t1_index=t1_index,
         t4_index=t4_index,
+        t1_open=t1_open,
         t1_close=t1_close,
-        avg_mid_body=avg_mid_body,
+        t4_close=t4_close,
+        confirm_position_min=float(confirm_position_min),
+        confirm_position_max=float(confirm_position_max),
+        confirm_position_avg=float(confirm_position_avg),
     )
 
 
@@ -348,11 +410,13 @@ def _detect_consolidation_range(
     if end_index >= len(frame):
         return None
 
-    highs = frame.columns["qfq_high"][start_index : end_index + 1]
-    lows = frame.columns["qfq_low"][start_index : end_index + 1]
-    closes = frame.columns["qfq_close"][start_index : end_index + 1]
-    opens = frame.columns["qfq_open"][start_index : end_index + 1]
-    values = [*highs, *lows, *closes, *opens]
+    columns = frame.columns
+    highs = columns["qfq_high"][start_index : end_index + 1]
+    lows = columns["qfq_low"][start_index : end_index + 1]
+    closes = columns["qfq_close"][start_index : end_index + 1]
+    opens = columns["qfq_open"][start_index : end_index + 1]
+    atr_pct_14_end = float(columns["atr_pct_14"][end_index])
+    values = [*highs, *lows, *closes, *opens, atr_pct_14_end]
     if not all(np.isfinite(float(value)) for value in values):
         return None
     if np.any(closes <= 0):
@@ -366,14 +430,19 @@ def _detect_consolidation_range(
     avg_daily_body_ratio = float(np.mean(daily_body_ratios))
     high = float(np.max(highs))
     low = float(np.min(lows))
+    body_highs = np.maximum(opens, closes)
+    body_lows = np.minimum(opens, closes)
+    body_high = float(np.max(body_highs))
+    body_low = float(np.min(body_lows))
     close_high = float(np.max(closes))
     close_low = float(np.min(closes))
-    if low <= 0 or close_low <= 0:
+    if low <= 0 or body_low <= 0 or close_low <= 0:
         return None
     close_range_ratio = (close_high - close_low) / close_low
     if not (
         avg_daily_body_ratio <= MAX_CONSOLIDATION_AVG_DAILY_BODY_RATIO
         and close_range_ratio <= MAX_CONSOLIDATION_CLOSE_RANGE_RATIO
+        and atr_pct_14_end <= MAX_CONSOLIDATION_ATR14_RATIO
     ):
         return None
 
@@ -382,150 +451,30 @@ def _detect_consolidation_range(
         end_index=end_index,
         high=high,
         low=low,
+        body_high=body_high,
+        body_low=body_low,
         close_high=close_high,
         close_low=close_low,
         avg_daily_body_ratio=avg_daily_body_ratio,
         close_range_ratio=close_range_ratio,
+        atr_pct_14_end=atr_pct_14_end,
     )
 
 
-def _resolve_recent_n_range(
+def _recent_close_breakout_count(
     *,
-    frame: StockDailyFrame,
+    closes: np.ndarray,
     index: int,
-    window_start: int,
-) -> NRange | None:
-    slope = frame.columns["ma_slope_10"]
-    extremes = _ma10_slope_extremes(
-        slope=slope,
-        start_index=window_start,
-        end_index=index,
-        threshold=MA10_SLOPE_NOISE_THRESHOLD,
-    )
-    points = _structure_points_from_slope_extremes(
-        frame=frame,
-        extremes=extremes,
-    )
-    low = _latest_structure_point(points, "low")
-    high = _latest_structure_point(points, "high")
-    if low is None or high is None:
-        return None
-
-    current_slope = float(slope[index])
-    if current_slope > MA10_SLOPE_NOISE_THRESHOLD:
-        trend_type = "up"
-    elif current_slope < -MA10_SLOPE_NOISE_THRESHOLD:
-        trend_type = "down"
-    else:
-        trend_type = "straight"
-
-    return NRange(low=low, high=high, trend_type=trend_type)
-
-
-def _ma10_slope_extremes(
-    *,
-    slope: np.ndarray,
-    start_index: int,
-    end_index: int,
     threshold: float,
-) -> list[SlopeExtreme]:
-    pending_kind: str | None = None
-    pending_index: int | None = None
-    pending_value: float | None = None
-    reversed_extremes: list[SlopeExtreme] = []
-
-    for position in range(end_index, start_index - 1, -1):
-        value = float(slope[position])
-        if not np.isfinite(value):
-            continue
-        kind = _slope_kind(value, threshold)
-        if kind is None:
-            continue
-        if pending_kind is None:
-            pending_kind = kind
-            pending_index = position
-            pending_value = value
-            continue
-        if kind == pending_kind:
-            if pending_value is None or _is_stronger_slope(kind, value, pending_value):
-                pending_index = position
-                pending_value = value
-            continue
-        reversed_extremes.append(SlopeExtreme(pending_kind, int(pending_index), float(pending_value)))
-        pending_kind = kind
-        pending_index = position
-        pending_value = value
-
-    if pending_kind is not None and pending_index is not None and pending_value is not None:
-        reversed_extremes.append(SlopeExtreme(pending_kind, pending_index, pending_value))
-    return list(reversed(reversed_extremes))
-
-
-def _structure_points_from_slope_extremes(
-    *,
-    frame: StockDailyFrame,
-    extremes: list[SlopeExtreme],
-) -> list[StructurePoint]:
-    closes = frame.columns["qfq_close"]
-    points: list[StructurePoint] = []
-    for left, right in zip(extremes, extremes[1:]):
-        start = min(left.index, right.index)
-        end = max(left.index, right.index)
-        if start > end:
-            continue
-        if left.kind == "up" and right.kind == "down":
-            high_index, high_price = _highest_value(closes, start, end)
-            if high_index is not None:
-                points.append(StructurePoint("high", high_index, high_price, left, right))
-        elif left.kind == "down" and right.kind == "up":
-            low_index, low_price = _lowest_value(closes, start, end)
-            if low_index is not None:
-                points.append(StructurePoint("low", low_index, low_price, left, right))
-
-    points.sort(key=lambda item: item.index)
-    return points
-
-
-def _latest_structure_point(
-    points: list[StructurePoint],
-    kind: str,
-) -> StructurePoint | None:
-    for point in reversed(points):
-        if point.kind == kind:
-            return point
-    return None
-
-
-def _slope_kind(value: float, threshold: float) -> str | None:
-    if value > threshold:
-        return "up"
-    if value < -threshold:
-        return "down"
-    return None
-
-
-def _is_stronger_slope(kind: str, value: float, current: float) -> bool:
-    if kind == "up":
-        return value > current
-    return value < current
-
-
-def _highest_value(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
-    window = values[start_index : end_index + 1]
-    if len(window) == 0 or np.isnan(window).all():
-        return None, float("nan")
-    offset = int(np.nanargmax(window))
-    index = start_index + offset
-    return index, float(values[index])
-
-
-def _lowest_value(values: np.ndarray, start_index: int, end_index: int) -> tuple[int | None, float]:
-    window = values[start_index : end_index + 1]
-    if len(window) == 0 or np.isnan(window).all():
-        return None, float("nan")
-    offset = int(np.nanargmin(window))
-    index = start_index + offset
-    return index, float(values[index])
+    days: int,
+) -> int:
+    start_index = max(0, index - days + 1)
+    count = 0
+    for position in range(start_index, index + 1):
+        close_value = float(closes[position])
+        if np.isfinite(close_value) and close_value >= threshold:
+            count += 1
+    return count
 
 
 def _slice_by_index_range(
@@ -537,6 +486,15 @@ def _slice_by_index_range(
     left = bisect_left(indices, start_index)
     right = bisect_right(indices, end_index)
     return values[left:right]
+
+
+def _signal_value(signal: dict[str, Any], key: str) -> Any:
+    if key in signal:
+        return signal[key]
+    extras = signal.get("extras")
+    if isinstance(extras, dict):
+        return extras.get(key)
+    return None
 
 
 def _st_blocked_series(columns: dict[str, Any]) -> np.ndarray:

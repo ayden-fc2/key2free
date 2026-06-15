@@ -16,6 +16,8 @@ from strategies.golden_pillar import (
     GOLDEN_PILLAR_REQUIRED_COLUMNS,
     golden_pillar_batch_signal_strategy,
     golden_pillar_code_filter,
+    golden_pillar_entry_strategy,
+    golden_pillar_exit_strategy,
 )
 from strategies.jiangshen import (
     JIANGSHEN_MAX_HOLDING_DAYS,
@@ -103,6 +105,8 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         position_sizing="fraction",
         position_fraction=GOLDEN_PILLAR_POSITION_FRACTION,
         max_holding_days=GOLDEN_PILLAR_MAX_HOLDING_DAYS,
+        entry_strategy=golden_pillar_entry_strategy,
+        exit_strategy=golden_pillar_exit_strategy,
     ),
     "jiangshen": StrategyRegistration(
         name="jiangshen",
