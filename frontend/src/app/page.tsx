@@ -132,7 +132,7 @@ export default function Home() {
   const [selectedSignalCode, setSelectedSignalCode] = useState<string | null>(null);
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
-  const [backtestInitialCash, setBacktestInitialCash] = useState(100000);
+  const [backtestInitialCash, setBacktestInitialCash] = useState(10000000);
   const [backtestStrategy, setBacktestStrategy] = useState("demo");
   const [backtestTask, setBacktestTask] = useState<BacktestTask | null>(null);
   const [backtestTasks, setBacktestTasks] = useState<BacktestTask[]>([]);
@@ -677,7 +677,7 @@ export default function Home() {
             <InputNumber
               disabled={backtestLoading}
               min={1}
-              onChange={(value) => setBacktestInitialCash(typeof value === "number" ? value : 100000)}
+              onChange={(value) => setBacktestInitialCash(typeof value === "number" ? value : 10000000)}
               precision={2}
               style={{ width: "100%" }}
               value={backtestInitialCash}

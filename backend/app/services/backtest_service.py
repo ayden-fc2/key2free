@@ -668,6 +668,12 @@ class BacktestService:
                     buy_price=buy_price,
                     fraction=strategy.position_fraction,
                 )
+            elif strategy.position_sizing == "fixed_amount":
+                quantity = self._resolve_fixed_amount_quantity(
+                    cash=cash,
+                    buy_price=buy_price,
+                    amount=strategy.position_amount,
+                )
             else:
                 risk_price = (
                     item.signal_close
@@ -804,6 +810,21 @@ class BacktestService:
         lots_by_budget = int(budget // (buy_price * 100))
         lots_by_cash = int(cash // cost_per_lot)
         return max(min(lots_by_budget, lots_by_cash), 0) * 100
+
+    def _resolve_fixed_amount_quantity(
+        self,
+        *,
+        cash: float,
+        buy_price: float,
+        amount: float | None,
+    ) -> int:
+        """固定金额定仓：单笔市值 <= amount，按 100 股一手尽可能多买。"""
+        if buy_price <= 0 or amount is None or amount <= 0:
+            return 0
+        cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
+        lots_by_amount = int(amount // (buy_price * 100))
+        lots_by_cash = int(cash // cost_per_lot)
+        return max(min(lots_by_amount, lots_by_cash), 0) * 100
 
     def _initial_max_high_since_buy(self, *, bar: Bar, buy_price: float) -> float:
         high = bar[1]

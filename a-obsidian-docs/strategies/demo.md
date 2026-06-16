@@ -56,5 +56,6 @@ backend/strategies/algorithms/
 
 - `trend_channel.py`：趋势通道长震荡识别，支持上升、平稳、下降通道。
 - `n_bottom.py`：基于 MA 斜率极值的 N 字折线识别。
+- `golden_bowl.py`：趋势通道后黄金碗结构识别，支持碗宽、碗深、右侧回收比例等配置。
 
 Demo 只把这些算法的预览结果写入 `extras.algorithm_modules`，不使用它们决定是否爆信号。

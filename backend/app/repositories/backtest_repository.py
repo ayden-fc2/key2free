@@ -442,15 +442,20 @@ class BacktestRepository:
         with self.duckdb.connect(read_only=True) as connection:
             frame = connection.execute(
                 """
-                select code, trade_date,
-                       qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg,
-                       lag(ma_10) over(partition by code order by trade_date) as prev_ma_10
-                from tushare.stock_daily_technical
+                with priced as (
+                    select code, trade_date,
+                           qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg,
+                           lag(ma_10) over(partition by code order by trade_date) as prev_ma_10
+                    from tushare.stock_daily_technical
+                    where trade_date <= ?
+                      and code in (select unnest(?))
+                )
+                select *
+                from priced
                 where trade_date between ? and ?
-                  and code in (select unnest(?))
                 order by code, trade_date
                 """,
-                [start_date, end_date, codes],
+                [end_date, codes, start_date, end_date],
             ).fetchdf()
         if frame.empty:
             return {}

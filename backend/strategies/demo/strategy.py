@@ -7,8 +7,10 @@ import numpy as np
 
 from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 from strategies.algorithms import (
+    GoldenBowlConfig,
     find_latest_trend_channel_consolidation,
     resolve_n_bottom_by_ma_slope,
+    resolve_golden_bowl,
 )
 
 
@@ -59,6 +61,7 @@ def demo_batch_signal_strategy(
                 "algorithm_modules": {
                     "trend_channel": _trend_channel_preview(frame=frame, index=index),
                     "n_bottom": _n_bottom_preview(frame=frame, index=index),
+                    "golden_bowl": _golden_bowl_preview(frame=frame, index=index),
                 },
             },
         )
@@ -118,4 +121,49 @@ def _n_bottom_preview(*, frame: StockDailyFrame, index: int) -> dict[str, Any] |
         "h1_price": h1.price,
         "l2_date": frame.trade_dates[l2.index].isoformat(),
         "l2_price": l2.price,
+    }
+
+
+def _golden_bowl_preview(*, frame: StockDailyFrame, index: int) -> dict[str, Any] | None:
+    item = resolve_golden_bowl(
+        opens=frame.columns["qfq_open"],
+        highs=frame.columns["qfq_high"],
+        lows=frame.columns["qfq_low"],
+        closes=frame.columns["qfq_close"],
+        target_index=index,
+        config=GoldenBowlConfig(
+            channel_length=20,
+            channel_trim_extreme_count=2,
+            max_channel_width_ratio=0.06,
+            max_channel_close_return_ratio=0.08,
+            min_breakout_body_return_ratio=0.06,
+            min_breakout_to_channel_upper_ratio=1.03,
+            max_channel_end_to_breakout_gap=10,
+            max_left_high_to_channel_end_close_ratio=1.12,
+            max_bowl_width=12,
+            min_bowl_width=3,
+            min_bowl_depth_ratio=0.03,
+            max_bowl_depth_ratio=0.20,
+            right_close_to_left_high_ratio=0.98,
+            require_right_bullish=True,
+        ),
+        atr_pct_14=frame.columns.get("atr_pct_14"),
+        volume_ratio_20=frame.columns.get("volume_ratio_20"),
+    )
+    if item is None:
+        return None
+    return {
+        "breakout_date": frame.trade_dates[item.breakout_index].isoformat(),
+        "channel_start": frame.trade_dates[item.channel.start_index].isoformat(),
+        "channel_end": frame.trade_dates[item.channel.end_index].isoformat(),
+        "channel_end_to_breakout_gap": item.channel_end_to_breakout_gap,
+        "left_high_date": frame.trade_dates[item.left_close_high_index].isoformat(),
+        "left_close_high": item.left_close_high,
+        "trough_date": frame.trade_dates[item.trough_index].isoformat(),
+        "trough_close": item.trough_close,
+        "bowl_width": item.bowl_width,
+        "bowl_depth_ratio": item.bowl_depth_ratio,
+        "right_close_ratio": item.right_close_ratio,
+        "channel_width_ratio": item.channel.channel_width_ratio,
+        "breakout_ratio": item.breakout_ratio,
     }

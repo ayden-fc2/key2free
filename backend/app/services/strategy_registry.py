@@ -6,7 +6,7 @@ from typing import Any, Callable, Protocol
 from app.entities.stock_data_context import SignalDecision, StockDailyFrame
 from strategies.channel_breakout import (
     CHANNEL_BREAKOUT_MAX_HOLDING_DAYS,
-    CHANNEL_BREAKOUT_POSITION_FRACTION,
+    CHANNEL_BREAKOUT_POSITION_AMOUNT,
     CHANNEL_BREAKOUT_REQUIRED_COLUMNS,
     channel_breakout_batch_signal_strategy,
     channel_breakout_code_filter,
@@ -85,6 +85,7 @@ class StrategyRegistration:
     risk_price_basis: str = "buy_price"
     position_cap_fraction: float | None = None
     position_fraction: float = 1.0 / 3.0
+    position_amount: float | None = None
     exit_plan_builder: (
         Callable[[float, dict], tuple[list[float], list[float]] | None] | None
     ) = None
@@ -101,8 +102,8 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         required_columns=CHANNEL_BREAKOUT_REQUIRED_COLUMNS,
         code_filter=channel_breakout_code_filter,
         entry_mode="next_open",
-        position_sizing="fraction",
-        position_fraction=CHANNEL_BREAKOUT_POSITION_FRACTION,
+        position_sizing="fixed_amount",
+        position_amount=CHANNEL_BREAKOUT_POSITION_AMOUNT,
         max_holding_days=CHANNEL_BREAKOUT_MAX_HOLDING_DAYS,
         time_exit_price="open",
         entry_strategy=channel_breakout_entry_strategy,
