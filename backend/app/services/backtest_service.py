@@ -588,6 +588,8 @@ class BacktestService:
             bar = prices.get(code, {}).get(trade_date)
             if not self._is_tradeable(bar):
                 continue
+            if self._is_open_limit_up(bar):
+                continue
             sell_price = bar[0]
             if sell_price <= 0 or not math.isfinite(sell_price):
                 continue
@@ -619,6 +621,8 @@ class BacktestService:
                 continue
             bar = prices.get(code, {}).get(trade_date)
             if not self._is_tradeable(bar):
+                continue
+            if self._is_open_limit_up(bar):
                 continue
             open_price = bar[0]
             if open_price <= 0 or not math.isfinite(open_price):
@@ -1304,6 +1308,19 @@ class BacktestService:
         ):
             return False
         return abs(open_price / pre_close - 1.0) >= 0.098
+
+    def _is_open_limit_up(self, bar: Bar | None) -> bool:
+        if bar is None or len(bar) < 8:
+            return False
+        open_price = bar[0]
+        pre_close = bar[7]
+        if not (
+            math.isfinite(open_price)
+            and math.isfinite(pre_close)
+            and pre_close > 0
+        ):
+            return False
+        return open_price / pre_close - 1.0 >= 0.098
 
     def _previous_bar(
         self,
