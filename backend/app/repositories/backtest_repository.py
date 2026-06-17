@@ -433,8 +433,9 @@ class BacktestRepository:
         start_date: date,
         end_date: date,
     ) -> dict[str, dict[date, tuple[float, ...]]]:
-        """一次性装载撮合所需行情：code -> {trade_date: (open, high, low, close, vol, pct_chg)}。
+        """一次性装载撮合所需行情。
 
+        tuple = (qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg, prev_ma_10, qfq_pre_close)。
         价格为前复权口径；缺失值为 nan。撮合主循环禁止再查询数据库。
         """
         if not codes:
@@ -445,7 +446,8 @@ class BacktestRepository:
                 with priced as (
                     select code, trade_date,
                            qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg,
-                           lag(ma_10) over(partition by code order by trade_date) as prev_ma_10
+                           lag(ma_10) over(partition by code order by trade_date) as prev_ma_10,
+                           qfq_pre_close
                     from tushare.stock_daily_technical
                     where trade_date <= ?
                       and code in (select unnest(?))
@@ -470,6 +472,7 @@ class BacktestRepository:
         vols = frame["vol"].tolist()
         pct_chgs = frame["pct_chg"].tolist()
         prev_ma10s = frame["prev_ma_10"].tolist()
+        qfq_pre_closes = frame["qfq_pre_close"].tolist()
         for index in range(len(code_values)):
             day = date_values[index]
             if isinstance(day, datetime):
@@ -482,6 +485,7 @@ class BacktestRepository:
                 float(vols[index]) if vols[index] is not None else nan,
                 float(pct_chgs[index]) if pct_chgs[index] is not None else nan,
                 float(prev_ma10s[index]) if prev_ma10s[index] is not None else nan,
+                float(qfq_pre_closes[index]) if qfq_pre_closes[index] is not None else nan,
             )
         return prices
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable, Protocol
 
 from app.entities.stock_data_context import SignalDecision, StockDailyFrame
@@ -34,6 +35,12 @@ from strategies.jiangshen import (
     jiangshen_code_filter,
     jiangshen_exit_plan,
 )
+from strategies.small_float_value import (
+    SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
+    SMALL_FLOAT_VALUE_TARGET_HOLDINGS,
+    small_float_value_code_filter,
+    small_float_value_portfolio_signal_builder,
+)
 
 
 class BatchSignalFn(Protocol):
@@ -49,6 +56,16 @@ class BatchSignalFn(Protocol):
         frame: StockDailyFrame,
         target_indices: list[int],
     ) -> dict[int, SignalDecision]:
+        ...
+
+
+class PortfolioSignalBuilderFn(Protocol):
+    def __call__(
+        self,
+        *,
+        trade_dates: list[date],
+        rows: Any,
+    ) -> dict[date, list[dict[str, Any]]]:
         ...
 
 
@@ -93,6 +110,11 @@ class StrategyRegistration:
     time_exit_price: str = "close"
     entry_strategy: Callable[..., Any] | None = None
     exit_strategy: Callable[..., Any] | None = None
+    portfolio_signal_builder: PortfolioSignalBuilderFn | None = None
+    portfolio_target_size: int | None = None
+    rebalance_mode: str | None = None
+    rebalance_weekday: int | None = None
+    limit_break_exit: bool = False
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -141,6 +163,19 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         position_fraction=JIANGSHEN_POSITION_FRACTION,
         exit_plan_builder=jiangshen_exit_plan,
         max_holding_days=JIANGSHEN_MAX_HOLDING_DAYS,
+    ),
+    "small_float_value": StrategyRegistration(
+        name="small_float_value",
+        batch_signal_strategy=lambda _frame, _target_indices: {},
+        required_columns=SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
+        code_filter=small_float_value_code_filter,
+        entry_mode="next_open",
+        position_sizing="equal_weight_target",
+        portfolio_signal_builder=small_float_value_portfolio_signal_builder,
+        portfolio_target_size=SMALL_FLOAT_VALUE_TARGET_HOLDINGS,
+        rebalance_mode="daily_target_open",
+        rebalance_weekday=0,
+        limit_break_exit=True,
     ),
 }
 

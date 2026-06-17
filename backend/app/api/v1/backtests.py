@@ -16,6 +16,7 @@ class BacktestRequest(BaseModel):
     end_date: date
     initial_cash: float
     strategy_name: str
+    simulation_runs: int | None = None
 
 
 @router.post("/run")
@@ -27,6 +28,7 @@ def run_backtest(request: BacktestRequest) -> dict:
                 end_date=request.end_date,
                 initial_cash=request.initial_cash,
                 strategy_name=request.strategy_name,
+                simulation_runs=request.simulation_runs,
             )
         )
     except ValueError as exc:

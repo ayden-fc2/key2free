@@ -133,6 +133,40 @@ class SignalService:
 
         start_date = normalized_dates[0]
         end_date = normalized_dates[-1]
+        if strategy.portfolio_signal_builder is not None:
+            universe_counts = self.repository.get_universe_counts_by_date(
+                start_date=start_date,
+                end_date=end_date,
+            )
+            rows = self.repository.load_portfolio_selection_rows(
+                start_date=start_date,
+                end_date=end_date,
+                code_filter=strategy.code_filter,
+            )
+            signal_items_by_date = strategy.portfolio_signal_builder(
+                trade_dates=normalized_dates,
+                rows=rows,
+            )
+            return {
+                day: DailySignalResultDTO(
+                    trade_date=day.isoformat(),
+                    strategy_name=strategy.name,
+                    universe_count=universe_counts.get(day, 0),
+                    signal_count=len(signal_items_by_date.get(day, [])),
+                    signals=[
+                        DailySignalItemDTO(
+                            code=str(item["code"]),
+                            code_name=item.get("code_name"),
+                            trade_date=str(item.get("trade_date") or day.isoformat()),
+                            universe=item.get("universe") or {},
+                            signal=item.get("signal"),
+                        )
+                        for item in signal_items_by_date.get(day, [])
+                    ],
+                )
+                for day in normalized_dates
+            }
+
         target_date_set = set(normalized_dates)
         result_items_by_date: dict[date, list[DailySignalItemDTO]] = {
             day: [] for day in normalized_dates

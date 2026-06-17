@@ -313,6 +313,51 @@ class SignalRepository:
             ).fetchall()
         return {row[0]: int(row[1]) for row in rows if isinstance(row[0], date)}
 
+    def load_portfolio_selection_rows(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        code_filter: Any | None = None,
+    ) -> Any:
+        from app.repositories.tushare_repository import TushareRepository
+
+        TushareRepository().ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                select
+                    trade_date,
+                    code,
+                    name,
+                    close,
+                    qfq_open,
+                    qfq_close,
+                    vol,
+                    pct_chg,
+                    is_st,
+                    list_date,
+                    eps,
+                    total_mv,
+                    circ_mv
+                from tushare.stock_daily_technical
+                where trade_date between ? and ?
+                  and code is not null
+                order by trade_date, code
+                """,
+                [start_date, end_date],
+            ).fetchdf()
+        if not frame.empty:
+            frame["trade_date"] = frame["trade_date"].apply(
+                lambda value: value.date() if isinstance(value, datetime) else value
+            )
+            frame["list_date"] = frame["list_date"].apply(
+                lambda value: value.date() if isinstance(value, datetime) else value
+            )
+        if frame.empty or code_filter is None:
+            return frame
+        return frame[frame["code"].apply(lambda value: code_filter(str(value)))].copy()
+
     def load_stock_frames(
         self,
         *,

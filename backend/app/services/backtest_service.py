@@ -71,7 +71,10 @@ class SellAction:
 class BacktestService:
     BUY_FEE_BPS = 5
     SELL_FEE_BPS = 10
-    SIMULATION_RUNS = 50
+    DEFAULT_SIMULATION_RUNS = 50
+    STRATEGY_DEFAULT_SIMULATION_RUNS = {
+        "small_float_value": 1,
+    }
     SIMULATION_WORKERS = 10
 
     def __init__(self) -> None:
@@ -84,6 +87,7 @@ class BacktestService:
         end_date: date,
         initial_cash: float,
         strategy_name: str,
+        simulation_runs: int | None = None,
     ) -> BacktestStartDTO:
         if start_date > end_date:
             raise ValueError("start_date must be <= end_date")
@@ -91,17 +95,24 @@ class BacktestService:
             raise ValueError("initial_cash must be positive")
         if get_strategy(strategy_name) is None:
             raise ValueError(f"unknown strategy: {strategy_name}")
+        requested_simulation_runs = simulation_runs
+        resolved_simulation_runs = self._resolve_simulation_runs(
+            strategy_name=strategy_name,
+            simulation_runs=simulation_runs,
+        )
 
         task = self.repository.create_task(
             strategy_name=strategy_name,
             start_date=start_date,
             end_date=end_date,
             initial_cash=float(initial_cash),
-            simulation_runs=self.SIMULATION_RUNS,
+            simulation_runs=resolved_simulation_runs,
             initial_log=(
                 f"创建回测任务: strategy={strategy_name}, "
                 f"range={start_date.isoformat()}->{end_date.isoformat()}, "
-                f"initial_cash={initial_cash:.2f}, simulation_runs={self.SIMULATION_RUNS}"
+                f"initial_cash={initial_cash:.2f}, "
+                f"request_simulation_runs={requested_simulation_runs}, "
+                f"simulation_runs={resolved_simulation_runs}"
             ),
         )
         thread = threading.Thread(
@@ -112,11 +123,34 @@ class BacktestService:
                 "end_date": end_date,
                 "initial_cash": float(initial_cash),
                 "strategy_name": strategy_name,
+                "simulation_runs": resolved_simulation_runs,
             },
             daemon=True,
         )
         thread.start()
         return BacktestStartDTO(task=task, message="backtest task created")
+
+    def _resolve_simulation_runs(
+        self,
+        *,
+        strategy_name: str,
+        simulation_runs: int | None,
+    ) -> int:
+        if simulation_runs is None:
+            return self.STRATEGY_DEFAULT_SIMULATION_RUNS.get(
+                strategy_name,
+                self.DEFAULT_SIMULATION_RUNS,
+            )
+        if (
+            strategy_name in self.STRATEGY_DEFAULT_SIMULATION_RUNS
+            and simulation_runs == self.DEFAULT_SIMULATION_RUNS
+        ):
+            return self.STRATEGY_DEFAULT_SIMULATION_RUNS[strategy_name]
+        if simulation_runs < 1:
+            raise ValueError("simulation_runs must be >= 1")
+        if simulation_runs > 500:
+            raise ValueError("simulation_runs must be <= 500")
+        return int(simulation_runs)
 
     def get_backtest_task(self, task_id: int | None = None) -> BacktestTaskDTO | None:
         if task_id is None:
@@ -143,6 +177,7 @@ class BacktestService:
         end_date: date,
         initial_cash: float,
         strategy_name: str,
+        simulation_runs: int,
     ) -> None:
         try:
             started_at = time.monotonic()
@@ -190,13 +225,13 @@ class BacktestService:
             self.repository.append_task_log(
                 task_id,
                 (
-                    f"开始 {self.SIMULATION_RUNS} 轮随机撮合: "
+                    f"开始 {simulation_runs} 轮随机撮合: "
                     f"seed={random_seed}, workers={self.SIMULATION_WORKERS}"
                 ),
             )
             final_assets_by_run: dict[int, float] = {}
             run_stats_by_run: dict[int, dict[str, int]] = {}
-            max_workers = min(self.SIMULATION_WORKERS, self.SIMULATION_RUNS)
+            max_workers = min(self.SIMULATION_WORKERS, simulation_runs)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
                     executor.submit(
@@ -210,7 +245,7 @@ class BacktestService:
                         signals_by_date=signals_by_date,
                         prices=prices,
                     ): run_no
-                    for run_no in range(1, self.SIMULATION_RUNS + 1)
+                    for run_no in range(1, simulation_runs + 1)
                 }
                 completed_runs = 0
                 for future in as_completed(futures):
@@ -222,7 +257,7 @@ class BacktestService:
                     if (
                         completed_runs == 1
                         or completed_runs % 10 == 0
-                        or completed_runs == self.SIMULATION_RUNS
+                        or completed_runs == simulation_runs
                     ):
                         self.repository.update_task_progress(
                             task_id=task_id,
@@ -231,17 +266,17 @@ class BacktestService:
                         self.repository.append_task_log(
                             task_id,
                             (
-                                f"随机撮合完成 {completed_runs}/{self.SIMULATION_RUNS}: "
+                                f"随机撮合完成 {completed_runs}/{simulation_runs}: "
                                 f"run_no={run_no}, final_asset={final_asset:.2f}"
                             ),
                         )
             final_assets = [
                 final_assets_by_run[run_no]
-                for run_no in range(1, self.SIMULATION_RUNS + 1)
+                for run_no in range(1, simulation_runs + 1)
             ]
             run_stats_list = [
                 run_stats_by_run[run_no]
-                for run_no in range(1, self.SIMULATION_RUNS + 1)
+                for run_no in range(1, simulation_runs + 1)
             ]
             summary = self._summarize_runs(
                 start_date=start_date,
@@ -349,6 +384,98 @@ class BacktestService:
         run_stats = {"buys": 0, "closed": 0, "wins": 0}
 
         for trade_index, trade_date in enumerate(trading_dates):
+            if strategy.rebalance_mode == "daily_target_open":
+                if (
+                    strategy.rebalance_weekday is not None
+                    and trade_date.weekday() != strategy.rebalance_weekday
+                ):
+                    cash = self._process_limit_break_exits(
+                        task_id=task_id,
+                        run_no=run_no,
+                        trade_date=trade_date,
+                        trade_index=trade_index,
+                        cash=cash,
+                        holdings=holdings,
+                        prices=prices,
+                        strategy=strategy,
+                        sell_rows=sell_rows,
+                        run_stats=run_stats,
+                    )
+                    market_value = 0.0
+                    for holding in holdings.values():
+                        close_price = self._bar_close(prices.get(holding.code, {}).get(trade_date))
+                        price = close_price if close_price is not None else holding.buy_price
+                        market_value += price * holding.quantity
+                    total_asset = cash + market_value
+                    snapshot_rows.append(
+                        [
+                            task_id,
+                            run_no,
+                            trade_date,
+                            total_asset,
+                            cash,
+                            market_value,
+                            len(holdings),
+                            0,
+                            self.repository.to_json([item.to_snapshot() for item in holdings.values()]),
+                            self.repository.to_json([]),
+                        ]
+                    )
+                    continue
+                rebalance_signals = (
+                    []
+                    if trade_index == 0
+                    else signals_by_date.get(trading_dates[trade_index - 1], [])
+                )
+                cash = self._process_daily_target_rebalance(
+                    task_id=task_id,
+                    run_no=run_no,
+                    random_seed=random_seed,
+                    trade_date=trade_date,
+                    trade_index=trade_index,
+                    cash=cash,
+                    holdings=holdings,
+                    signals=rebalance_signals,
+                    prices=prices,
+                    strategy=strategy,
+                    buy_rows=buy_rows,
+                    sell_rows=sell_rows,
+                    run_stats=run_stats,
+                )
+                cash = self._process_limit_break_exits(
+                    task_id=task_id,
+                    run_no=run_no,
+                    trade_date=trade_date,
+                    trade_index=trade_index,
+                    cash=cash,
+                    holdings=holdings,
+                    prices=prices,
+                    strategy=strategy,
+                    sell_rows=sell_rows,
+                    run_stats=run_stats,
+                )
+                market_value = 0.0
+                for holding in holdings.values():
+                    close_price = self._bar_close(prices.get(holding.code, {}).get(trade_date))
+                    price = close_price if close_price is not None else holding.buy_price
+                    market_value += price * holding.quantity
+                total_asset = cash + market_value
+                snapshot_rows.append(
+                    [
+                        task_id,
+                        run_no,
+                        trade_date,
+                        total_asset,
+                        cash,
+                        market_value,
+                        len(holdings),
+                        0,
+                        self.repository.to_json([item.to_snapshot() for item in holdings.values()]),
+                        self.repository.to_json([]),
+                    ]
+                )
+                continue
+
             # 1. 处理持仓池（跳过当日刚买入的，先止损后止盈的阶梯引擎）
             cash = self._process_sells(
                 task_id=task_id,
@@ -430,6 +557,237 @@ class BacktestService:
         run_stats["buys"] = len(buy_rows)
         return total_asset, run_stats
 
+    def _process_daily_target_rebalance(
+        self,
+        *,
+        task_id: int,
+        run_no: int,
+        random_seed: int,
+        trade_date: date,
+        trade_index: int,
+        cash: float,
+        holdings: dict[str, HoldingItem],
+        signals: list[dict[str, Any]],
+        prices: dict[str, dict[date, Bar]],
+        strategy: StrategyRegistration,
+        buy_rows: list[list[Any]],
+        sell_rows: list[list[Any]],
+        run_stats: dict[str, int],
+    ) -> float:
+        target_size = strategy.portfolio_target_size or len(signals)
+        target_by_code = {
+            str(item["code"]): item
+            for item in signals[:target_size]
+            if item.get("code") is not None
+        }
+        target_codes = set(target_by_code)
+
+        for code, holding in list(holdings.items()):
+            if code in target_codes:
+                continue
+            bar = prices.get(code, {}).get(trade_date)
+            if not self._is_tradeable(bar):
+                continue
+            sell_price = bar[0]
+            if sell_price <= 0 or not math.isfinite(sell_price):
+                continue
+            cash = self._sell_holding(
+                task_id=task_id,
+                run_no=run_no,
+                trade_date=trade_date,
+                cash=cash,
+                holdings=holdings,
+                code=code,
+                holding=holding,
+                price=sell_price,
+                quantity=holding.quantity,
+                reason="rebalance_open",
+                sell_rows=sell_rows,
+                run_stats=run_stats,
+            )
+
+        market_value = 0.0
+        for holding in holdings.values():
+            open_price = self._bar_open(prices.get(holding.code, {}).get(trade_date))
+            price = open_price if open_price is not None else holding.buy_price
+            market_value += price * holding.quantity
+        total_asset = cash + market_value
+
+        target_amount = total_asset / max(target_size, 1)
+        for code, holding in list(holdings.items()):
+            if code not in target_codes:
+                continue
+            bar = prices.get(code, {}).get(trade_date)
+            if not self._is_tradeable(bar):
+                continue
+            open_price = bar[0]
+            if open_price <= 0 or not math.isfinite(open_price):
+                continue
+            current_amount = open_price * holding.quantity
+            excess_amount = current_amount - target_amount
+            if excess_amount < open_price * 100:
+                continue
+            sell_quantity = int(excess_amount // (open_price * 100)) * 100
+            if sell_quantity <= 0:
+                continue
+            cash = self._sell_holding(
+                task_id=task_id,
+                run_no=run_no,
+                trade_date=trade_date,
+                cash=cash,
+                holdings=holdings,
+                code=code,
+                holding=holding,
+                price=open_price,
+                quantity=sell_quantity,
+                reason="rebalance_trim_open",
+                sell_rows=sell_rows,
+                run_stats=run_stats,
+            )
+
+        candidates = list(target_by_code.values())
+        candidates.sort(
+            key=lambda item: (
+                self._positive_int(self._signal_value(item.get("signal") or {}, "target_rank")) or 999999,
+                str(item["code"]),
+            )
+        )
+        for item in candidates:
+            code = item["code"]
+            bar = prices.get(code, {}).get(trade_date)
+            if not self._is_tradeable(bar):
+                continue
+            existing_holding = holdings.get(code)
+            if existing_holding is None and len(holdings) >= target_size:
+                continue
+            if self._is_open_limit_move(bar):
+                continue
+            previous_bar = self._previous_bar(prices.get(code, {}), trade_date)
+            if self._is_limit_move(previous_bar):
+                continue
+            buy_price = bar[0]
+            if buy_price <= 0 or not math.isfinite(buy_price):
+                continue
+            current_quantity = existing_holding.quantity if existing_holding is not None else 0
+            current_amount = current_quantity * buy_price
+            missing_amount = target_amount - current_amount
+            if missing_amount < buy_price * 100:
+                continue
+            quantity = self._resolve_fixed_amount_quantity(
+                cash=cash,
+                buy_price=buy_price,
+                amount=missing_amount,
+            )
+            if quantity <= 0:
+                continue
+            amount = buy_price * quantity
+            fee = amount * self.BUY_FEE_BPS / 10000
+            if amount + fee > cash:
+                continue
+            cash -= amount + fee
+            signal = item.get("signal") or {}
+            signal_for_order = self._with_buy_research_fields(
+                signal=signal,
+                buy_price=buy_price,
+            )
+            if existing_holding is None:
+                holdings[code] = HoldingItem(
+                    code=code,
+                    code_name=item.get("code_name"),
+                    buy_date=trade_date,
+                    buy_trade_index=trade_index,
+                    buy_price=buy_price,
+                    quantity=quantity,
+                    buy_fee=fee,
+                    level=0,
+                    stop_losses=[],
+                    take_profits=[],
+                    max_high_since_buy=self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
+                    signal=signal_for_order,
+                )
+            else:
+                total_cost = existing_holding.buy_price * existing_holding.quantity + amount
+                existing_holding.quantity += quantity
+                existing_holding.buy_price = total_cost / existing_holding.quantity
+                existing_holding.buy_fee += fee
+                existing_holding.signal = signal_for_order
+                existing_holding.max_high_since_buy = max(
+                    existing_holding.max_high_since_buy,
+                    self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
+                )
+            buy_rows.append(
+                [
+                    task_id,
+                    run_no,
+                    trade_date,
+                    code,
+                    item.get("code_name"),
+                    buy_price,
+                    quantity,
+                    amount,
+                    fee,
+                    cash,
+                    self.repository.to_json(signal_for_order),
+                ]
+            )
+        return cash
+
+    def _process_limit_break_exits(
+        self,
+        *,
+        task_id: int,
+        run_no: int,
+        trade_date: date,
+        trade_index: int,
+        cash: float,
+        holdings: dict[str, HoldingItem],
+        prices: dict[str, dict[date, Bar]],
+        strategy: StrategyRegistration,
+        sell_rows: list[list[Any]],
+        run_stats: dict[str, int],
+    ) -> float:
+        if not strategy.limit_break_exit or trade_index <= 0:
+            return cash
+        for code, holding in list(holdings.items()):
+            if holding.buy_trade_index >= trade_index:
+                continue
+            code_prices = prices.get(code, {})
+            previous_bar = None
+            previous_trade_date = None
+            for candidate_date, candidate_bar in code_prices.items():
+                if candidate_date < trade_date and (
+                    previous_trade_date is None or candidate_date > previous_trade_date
+                ):
+                    previous_trade_date = candidate_date
+                    previous_bar = candidate_bar
+            current_bar = code_prices.get(trade_date)
+            if previous_bar is None or current_bar is None:
+                continue
+            if not self._is_tradeable(current_bar):
+                continue
+            if not self._is_limit_up(previous_bar):
+                continue
+            if self._is_limit_up(current_bar):
+                continue
+            sell_price = self._bar_close(current_bar)
+            if sell_price is None or sell_price <= 0:
+                continue
+            cash = self._sell_holding(
+                task_id=task_id,
+                run_no=run_no,
+                trade_date=trade_date,
+                cash=cash,
+                holdings=holdings,
+                code=code,
+                holding=holding,
+                price=sell_price,
+                quantity=holding.quantity,
+                reason="limit_break_close",
+                sell_rows=sell_rows,
+                run_stats=run_stats,
+            )
+        return cash
+
     def _process_sells(
         self,
         *,
@@ -473,42 +831,79 @@ class BacktestService:
                 sell_quantity = min(action.quantity, holding.quantity)
                 if sell_quantity <= 0:
                     continue
-                amount = action.price * sell_quantity
-                fee = amount * self.SELL_FEE_BPS / 10000
-                cash += amount - fee
-                portion = sell_quantity / holding.quantity
-                buy_fee_part = holding.buy_fee * portion
-                pnl = (action.price - holding.buy_price) * sell_quantity - buy_fee_part - fee
-                sell_rows.append(
-                    [
-                        task_id,
-                        run_no,
-                        trade_date,
-                        code,
-                        holding.code_name,
-                        action.price,
-                        sell_quantity,
-                        amount,
-                        fee,
-                        cash,
-                        holding.buy_date,
-                        holding.buy_price,
-                        pnl,
-                        action.reason,
-                        holding.level,
-                    ]
+                cash = self._sell_holding(
+                    task_id=task_id,
+                    run_no=run_no,
+                    trade_date=trade_date,
+                    cash=cash,
+                    holdings=holdings,
+                    code=code,
+                    holding=holding,
+                    price=action.price,
+                    quantity=sell_quantity,
+                    reason=action.reason,
+                    sell_rows=sell_rows,
+                    run_stats=run_stats,
+                    advance_level=action.advance_level,
                 )
-                holding.realized_pnl += pnl
-                if sell_quantity >= holding.quantity:
-                    run_stats["closed"] += 1
-                    if holding.realized_pnl > 0:
-                        run_stats["wins"] += 1
-                    del holdings[code]
-                else:
-                    holding.quantity -= sell_quantity
-                    holding.buy_fee -= buy_fee_part
-                    if action.advance_level:
-                        holding.level += 1
+        return cash
+
+    def _sell_holding(
+        self,
+        *,
+        task_id: int,
+        run_no: int,
+        trade_date: date,
+        cash: float,
+        holdings: dict[str, HoldingItem],
+        code: str,
+        holding: HoldingItem,
+        price: float,
+        quantity: int,
+        reason: str,
+        sell_rows: list[list[Any]],
+        run_stats: dict[str, int],
+        advance_level: bool = False,
+    ) -> float:
+        sell_quantity = min(quantity, holding.quantity)
+        if sell_quantity <= 0:
+            return cash
+        amount = price * sell_quantity
+        fee = amount * self.SELL_FEE_BPS / 10000
+        cash += amount - fee
+        portion = sell_quantity / holding.quantity
+        buy_fee_part = holding.buy_fee * portion
+        pnl = (price - holding.buy_price) * sell_quantity - buy_fee_part - fee
+        sell_rows.append(
+            [
+                task_id,
+                run_no,
+                trade_date,
+                code,
+                holding.code_name,
+                price,
+                sell_quantity,
+                amount,
+                fee,
+                cash,
+                holding.buy_date,
+                holding.buy_price,
+                pnl,
+                reason,
+                holding.level,
+            ]
+        )
+        holding.realized_pnl += pnl
+        if sell_quantity >= holding.quantity:
+            run_stats["closed"] += 1
+            if holding.realized_pnl > 0:
+                run_stats["wins"] += 1
+            del holdings[code]
+        else:
+            holding.quantity -= sell_quantity
+            holding.buy_fee -= buy_fee_part
+            if advance_level:
+                holding.level += 1
         return cash
 
     def _call_exit_strategy(
@@ -696,6 +1091,10 @@ class BacktestService:
             if amount + fee > cash:
                 continue
             cash -= amount + fee
+            signal_for_order = self._with_buy_research_fields(
+                signal=item.signal,
+                buy_price=buy_price,
+            )
             holdings[item.code] = HoldingItem(
                 code=item.code,
                 code_name=item.code_name,
@@ -708,7 +1107,7 @@ class BacktestService:
                 stop_losses=[float(value) for value in stop_losses],
                 take_profits=[float(value) for value in take_profits],
                 max_high_since_buy=self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
-                signal=item.signal,
+                signal=signal_for_order,
             )
             watch_pool.pop(item.code, None)
             buy_rows.append(
@@ -723,10 +1122,25 @@ class BacktestService:
                     amount,
                     fee,
                     cash,
-                    self.repository.to_json(item.signal),
+                    self.repository.to_json(signal_for_order),
                 ]
             )
         return cash
+
+    def _with_buy_research_fields(
+        self,
+        *,
+        signal: dict[str, Any],
+        buy_price: float,
+    ) -> dict[str, Any]:
+        """Attach post-fill research fields without affecting signal generation."""
+        copied = dict(signal)
+        extras = dict(copied.get("extras") or {})
+        signal_close = self._to_float(copied.get("signal_close"))
+        if signal_close is not None and signal_close > 0 and math.isfinite(buy_price):
+            extras["open_t1_to_close_t"] = buy_price / signal_close - 1.0
+        copied["extras"] = extras
+        return copied
 
     def _summarize_runs(
         self,
@@ -865,6 +1279,46 @@ class BacktestService:
         if open_price == high == low == close:
             return False
         return True
+
+    def _is_limit_up(self, bar: Bar | None) -> bool:
+        if bar is None or len(bar) < 6:
+            return False
+        pct_chg = bar[5]
+        return math.isfinite(pct_chg) and pct_chg >= 9.8
+
+    def _is_limit_move(self, bar: Bar | None) -> bool:
+        if bar is None or len(bar) < 6:
+            return False
+        pct_chg = bar[5]
+        return math.isfinite(pct_chg) and abs(pct_chg) >= 9.8
+
+    def _is_open_limit_move(self, bar: Bar | None) -> bool:
+        if bar is None or len(bar) < 8:
+            return False
+        open_price = bar[0]
+        pre_close = bar[7]
+        if not (
+            math.isfinite(open_price)
+            and math.isfinite(pre_close)
+            and pre_close > 0
+        ):
+            return False
+        return abs(open_price / pre_close - 1.0) >= 0.098
+
+    def _previous_bar(
+        self,
+        code_prices: dict[date, Bar],
+        trade_date: date,
+    ) -> Bar | None:
+        previous_bar = None
+        previous_trade_date = None
+        for candidate_date, candidate_bar in code_prices.items():
+            if candidate_date < trade_date and (
+                previous_trade_date is None or candidate_date > previous_trade_date
+            ):
+                previous_trade_date = candidate_date
+                previous_bar = candidate_bar
+        return previous_bar
 
     def _bar_open(self, bar: Bar | None) -> float | None:
         if bar is None or not math.isfinite(bar[0]):
