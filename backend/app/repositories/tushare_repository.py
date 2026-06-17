@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime, timedelta
+import os
 from typing import Any, Callable
 
 import numpy as np
@@ -10,10 +11,20 @@ import pandas as pd
 from app.repositories.duckdb_repository import DuckDBRepository
 
 
-STOCK_DAILY_TECHNICAL_START_DATE = date(2018, 1, 1)
-STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2017, 6, 1)
+STOCK_DAILY_TECHNICAL_START_DATE = date(2017, 6, 1)
+STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2016, 12, 6)
 STOCK_DAILY_TECHNICAL_LOG_ROW_STEP = 100000
-STOCK_DAILY_TECHNICAL_WORKERS = 10
+STOCK_DAILY_TECHNICAL_WORKERS = int(os.getenv("STOCK_DAILY_TECHNICAL_WORKERS", "4"))
+STOCK_DAILY_TECHNICAL_BATCH_SIZE = int(os.getenv("STOCK_DAILY_TECHNICAL_BATCH_SIZE", "40"))
+TUSHARE_ASSET_TABLE_NAMES = [
+    "tushare.trade_cal",
+    "tushare.bak_basic",
+    "tushare.adj_factor",
+    "tushare.daily",
+    "tushare.daily_basic",
+    "tushare.stk_mins_5min",
+    "tushare.stock_daily_technical",
+]
 
 
 class TushareRepository:
@@ -58,8 +69,25 @@ class TushareRepository:
                     when 'tushare.trade_cal' then coalesce(earliest_trusted_watermark, date '2014-01-02')
                     when 'tushare.adj_factor' then coalesce(earliest_trusted_watermark, date '2014-01-02')
                     when 'tushare.daily' then coalesce(earliest_trusted_watermark, date '2014-01-02')
+                    when 'tushare.daily_basic' then
+                        case
+                            when earliest_trusted_watermark is null or earliest_trusted_watermark < date '2016-12-06'
+                            then date '2016-12-06'
+                            else earliest_trusted_watermark
+                        end
+                    when 'tushare.stk_mins_5min' then
+                        case
+                            when earliest_trusted_watermark is null or earliest_trusted_watermark < date '2016-12-06'
+                            then date '2016-12-06'
+                            else earliest_trusted_watermark
+                        end
                     when 'tushare.bak_basic' then coalesce(earliest_trusted_watermark, date '2016-12-06')
-                    when 'tushare.stock_daily_technical' then coalesce(earliest_trusted_watermark, date '2018-01-01')
+                    when 'tushare.stock_daily_technical' then
+                        case
+                            when earliest_trusted_watermark is null or earliest_trusted_watermark > date '2017-06-01'
+                            then date '2017-06-01'
+                            else earliest_trusted_watermark
+                        end
                     else earliest_trusted_watermark
                 end
                 """
@@ -146,6 +174,45 @@ class TushareRepository:
             )
             connection.execute(
                 """
+                create table if not exists tushare.daily_basic (
+                    ts_code varchar,
+                    trade_date date,
+                    close double,
+                    turnover_rate double,
+                    turnover_rate_f double,
+                    volume_ratio double,
+                    pe double,
+                    pe_ttm double,
+                    pb double,
+                    ps double,
+                    ps_ttm double,
+                    dv_ratio double,
+                    dv_ttm double,
+                    total_share double,
+                    float_share double,
+                    free_share double,
+                    total_mv double,
+                    circ_mv double
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists tushare.stk_mins_5min (
+                    ts_code varchar,
+                    trade_time timestamp,
+                    trade_date date,
+                    open double,
+                    close double,
+                    high double,
+                    low double,
+                    vol double,
+                    amount double
+                )
+                """
+            )
+            connection.execute(
+                """
                 create table if not exists tushare.stock_daily_technical (
                     ts_code varchar,
                     code varchar,
@@ -166,12 +233,27 @@ class TushareRepository:
                     qfq_low double,
                     qfq_close double,
                     qfq_pre_close double,
+                    min5_close double,
                     name varchar,
                     industry varchar,
                     area varchar,
                     pe double,
+                    pe_ttm double,
+                    ps double,
+                    ps_ttm double,
+                    pb double,
+                    dv_ratio double,
+                    dv_ttm double,
                     float_share double,
                     total_share double,
+                    daily_basic_float_share double,
+                    daily_basic_total_share double,
+                    free_share double,
+                    total_mv double,
+                    circ_mv double,
+                    turnover_rate double,
+                    turnover_rate_f double,
+                    daily_basic_volume_ratio double,
                     total_assets double,
                     liquid_assets double,
                     fixed_assets double,
@@ -179,7 +261,6 @@ class TushareRepository:
                     reserved_pershare double,
                     eps double,
                     bvps double,
-                    pb double,
                     list_date date,
                     undp double,
                     per_undp double,
@@ -265,17 +346,65 @@ class TushareRepository:
                 )
                 """
             )
+            for column_name in (
+                "pe_ttm",
+                "ps",
+                "ps_ttm",
+                "dv_ratio",
+                "dv_ttm",
+                "daily_basic_float_share",
+                "daily_basic_total_share",
+                "free_share",
+                "total_mv",
+                "circ_mv",
+                "turnover_rate",
+                "turnover_rate_f",
+                "daily_basic_volume_ratio",
+                "min5_close",
+            ):
+                connection.execute(
+                    f"alter table tushare.stock_daily_technical add column if not exists {column_name} double"
+                )
 
     def get_watermarks(self) -> list[dict[str, Any]]:
         self.ensure_tables()
         with self.duckdb.connect(read_only=True) as connection:
             rows = connection.execute(
                 """
-                select asset_table_name, earliest_trusted_watermark, trusted_watermark, issue_count,
-                       last_issue_at, last_issue_scope, last_issue_message, issue_log
-                from meta.tushare_asset_watermark
-                order by asset_table_name
+                with expected(asset_table_name) as (
+                    select unnest(?)
+                )
+                select
+                    expected.asset_table_name,
+                    coalesce(
+                        watermark.earliest_trusted_watermark,
+                        case expected.asset_table_name
+                            when 'tushare.trade_cal' then date '2014-01-02'
+                            when 'tushare.adj_factor' then date '2014-01-02'
+                            when 'tushare.daily' then date '2014-01-02'
+                            when 'tushare.bak_basic' then date '2016-12-06'
+                            when 'tushare.daily_basic' then date '2016-12-06'
+                            when 'tushare.stk_mins_5min' then date '2016-12-06'
+                            when 'tushare.stock_daily_technical' then date '2017-06-01'
+                            else null
+                        end
+                    ) as earliest_trusted_watermark,
+                    watermark.trusted_watermark,
+                    coalesce(watermark.issue_count, 0) as issue_count,
+                    watermark.last_issue_at,
+                    watermark.last_issue_scope,
+                    watermark.last_issue_message,
+                    coalesce(watermark.issue_log, '') as issue_log
+                from expected
+                left join meta.tushare_asset_watermark watermark
+                  on watermark.asset_table_name = expected.asset_table_name
+                order by list_position(?, expected.asset_table_name)
                 """
+                ,
+                [
+                    TUSHARE_ASSET_TABLE_NAMES,
+                    TUSHARE_ASSET_TABLE_NAMES,
+                ],
             ).fetchall()
         return [
             {
@@ -555,6 +684,100 @@ class TushareRepository:
             )
         return len(rows)
 
+    def upsert_daily_basic(self, frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        fields = [
+            "ts_code",
+            "trade_date",
+            "close",
+            "turnover_rate",
+            "turnover_rate_f",
+            "volume_ratio",
+            "pe",
+            "pe_ttm",
+            "pb",
+            "ps",
+            "ps_ttm",
+            "dv_ratio",
+            "dv_ttm",
+            "total_share",
+            "float_share",
+            "free_share",
+            "total_mv",
+            "circ_mv",
+        ]
+        rows = []
+        trade_dates: set[date] = set()
+        for item in frame.to_dict("records"):
+            row = [self._none_if_blank(item.get(field)) for field in fields]
+            row[1] = self._parse_yyyymmdd(row[1])
+            for index in range(2, len(row)):
+                row[index] = self._none_or_float(row[index])
+            if row[1] is not None:
+                trade_dates.add(row[1])
+            rows.append(row)
+        with self.duckdb.connect(read_only=False) as connection:
+            if trade_dates:
+                connection.executemany(
+                    "delete from tushare.daily_basic where trade_date = ?",
+                    [[day] for day in sorted(trade_dates)],
+                )
+            connection.executemany(
+                """
+                insert into tushare.daily_basic(
+                    ts_code, trade_date, close, turnover_rate, turnover_rate_f,
+                    volume_ratio, pe, pe_ttm, pb, ps, ps_ttm, dv_ratio,
+                    dv_ttm, total_share, float_share, free_share, total_mv, circ_mv
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def upsert_stk_mins_5min(self, frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        fields = [
+            "ts_code",
+            "trade_time",
+            "open",
+            "close",
+            "high",
+            "low",
+            "vol",
+            "amount",
+        ]
+        rows = []
+        delete_keys: set[tuple[str, date]] = set()
+        for item in frame.to_dict("records"):
+            row = [self._none_if_blank(item.get(field)) for field in fields]
+            trade_time = self._parse_datetime(row[1])
+            trade_date = None if trade_time is None else trade_time.date()
+            row[1] = trade_time
+            for index in range(2, len(row)):
+                row[index] = self._none_or_float(row[index])
+            if row[0] is not None and trade_date is not None:
+                delete_keys.add((str(row[0]), trade_date))
+            rows.append([row[0], row[1], trade_date, *row[2:]])
+        with self.duckdb.connect(read_only=False) as connection:
+            if delete_keys:
+                connection.executemany(
+                    "delete from tushare.stk_mins_5min where ts_code = ? and trade_date = ?",
+                    [[ts_code, trade_day] for ts_code, trade_day in sorted(delete_keys)],
+                )
+            connection.executemany(
+                """
+                insert into tushare.stk_mins_5min(
+                    ts_code, trade_time, trade_date, open, close, high, low, vol, amount
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
     def get_min_watermark(self, asset_table_names: list[str]) -> date | None:
         self.ensure_tables()
         if not asset_table_names:
@@ -562,18 +785,27 @@ class TushareRepository:
         with self.duckdb.connect(read_only=True) as connection:
             row = connection.execute(
                 """
-                select min(trusted_watermark)
+                select
+                    min(trusted_watermark) as min_watermark,
+                    count(*) as asset_count,
+                    count(trusted_watermark) as ready_count
                 from meta.tushare_asset_watermark
                 where asset_table_name in (select unnest(?))
                 """,
                 [asset_table_names],
             ).fetchone()
-        return None if row is None else row[0]
+        if row is None:
+            return None
+        min_watermark, asset_count, ready_count = row
+        if asset_count != len(asset_table_names) or ready_count != len(asset_table_names):
+            return None
+        return min_watermark
 
     def rebuild_stock_daily_technical(
         self,
         *,
         target_watermark: date,
+        include_min5_close: bool = True,
         progress: Callable[[str], None] | None = None,
     ) -> int:
         self.ensure_tables()
@@ -607,7 +839,7 @@ class TushareRepository:
                 where 1 = 0
                 """
             )
-        batch_size = 100
+        batch_size = STOCK_DAILY_TECHNICAL_BATCH_SIZE
         next_log_rows = STOCK_DAILY_TECHNICAL_LOG_ROW_STEP
         try:
             for start in range(0, len(codes), batch_size):
@@ -617,6 +849,7 @@ class TushareRepository:
                         connection=connection,
                         target_watermark=target_watermark,
                         ts_codes=batch_codes,
+                        include_min5_close=include_min5_close,
                     )
                 if base_frame.empty:
                     continue
@@ -695,15 +928,99 @@ class TushareRepository:
             ).fetchall()
         return [row[0] for row in rows if row[0] is not None]
 
+    def get_daily_ts_codes(self, trade_day: date) -> list[str]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select distinct ts_code
+                from tushare.daily
+                where trade_date = ?
+                  and ts_code is not null
+                order by ts_code
+                """,
+                [trade_day],
+            ).fetchall()
+        return [str(row[0]) for row in rows if row[0] is not None]
+
+    def get_stk_mins_5min_day_coverage(self, trade_day: date) -> dict[str, int]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                """
+                with daily_codes as (
+                    select distinct ts_code
+                    from tushare.daily
+                    where trade_date = ?
+                      and ts_code is not null
+                )
+                select
+                    (select count(*) from daily_codes) as expected_code_count,
+                    count(distinct minutes.ts_code) as existing_code_count,
+                    count(*) as existing_row_count
+                from tushare.stk_mins_5min minutes
+                join daily_codes daily
+                  on daily.ts_code = minutes.ts_code
+                where minutes.trade_date = ?
+                """,
+                [trade_day, trade_day],
+            ).fetchone()
+        if row is None:
+            return {
+                "expected_code_count": 0,
+                "existing_code_count": 0,
+                "existing_row_count": 0,
+            }
+        return {
+            "expected_code_count": int(row[0] or 0),
+            "existing_code_count": int(row[1] or 0),
+            "existing_row_count": int(row[2] or 0),
+        }
+
     def _load_stock_daily_technical_base(
         self,
         *,
         connection: Any,
         target_watermark: date,
         ts_codes: list[str],
+        include_min5_close: bool,
     ) -> pd.DataFrame:
-        result = connection.execute(
+        min5_daily_close_cte = ""
+        min5_close_select = "cast(null as double) as min5_close"
+        min5_daily_close_join = ""
+        parameters: list[Any] = [target_watermark]
+        if include_min5_close:
+            min5_daily_close_cte = """
+            ,
+            min5_daily_close as (
+                select ts_code, trade_date, close as min5_close
+                from (
+                    select
+                        ts_code,
+                        trade_date,
+                        close,
+                        row_number() over (
+                            partition by ts_code, trade_date
+                            order by trade_time desc
+                        ) as rn
+                    from tushare.stk_mins_5min
+                    where trade_date >= ?
+                      and trade_date <= ?
+                      and ts_code in (select unnest(?))
+                ) ranked_min5
+                where rn = 1
+            )
             """
+            min5_close_select = "min5_daily_close.min5_close"
+            min5_daily_close_join = """
+            left join min5_daily_close
+              on min5_daily_close.ts_code = daily.ts_code
+             and min5_daily_close.trade_date = daily.trade_date
+            """
+            parameters.extend([STOCK_DAILY_TECHNICAL_WARMUP_START_DATE, target_watermark, ts_codes])
+        parameters.extend([STOCK_DAILY_TECHNICAL_WARMUP_START_DATE, target_watermark, ts_codes])
+        result = connection.execute(
+            f"""
             with latest_factor as (
                 select ts_code, adj_factor as latest_adj_factor
                 from (
@@ -721,6 +1038,7 @@ class TushareRepository:
                 ) ranked
                 where rn = 1
             )
+            {min5_daily_close_cte}
             select
                 daily.ts_code,
                 lower(split_part(daily.ts_code, '.', 2)) || '.' || split_part(daily.ts_code, '.', 1) as code,
@@ -741,12 +1059,27 @@ class TushareRepository:
                 daily.low * factor.adj_factor / latest_factor.latest_adj_factor as qfq_low,
                 daily.close * factor.adj_factor / latest_factor.latest_adj_factor as qfq_close,
                 daily.pre_close * factor.adj_factor / latest_factor.latest_adj_factor as qfq_pre_close,
+                {min5_close_select},
                 basic.name,
                 basic.industry,
                 basic.area,
-                basic.pe,
+                coalesce(daily_basic.pe, basic.pe) as pe,
+                daily_basic.pe_ttm,
+                daily_basic.ps,
+                daily_basic.ps_ttm,
+                coalesce(daily_basic.pb, basic.pb) as pb,
+                daily_basic.dv_ratio,
+                daily_basic.dv_ttm,
                 basic.float_share,
                 basic.total_share,
+                daily_basic.float_share as daily_basic_float_share,
+                daily_basic.total_share as daily_basic_total_share,
+                daily_basic.free_share,
+                daily_basic.total_mv,
+                daily_basic.circ_mv,
+                daily_basic.turnover_rate,
+                daily_basic.turnover_rate_f,
+                daily_basic.volume_ratio as daily_basic_volume_ratio,
                 basic.total_assets,
                 basic.liquid_assets,
                 basic.fixed_assets,
@@ -754,7 +1087,6 @@ class TushareRepository:
                 basic.reserved_pershare,
                 basic.eps,
                 basic.bvps,
-                basic.pb,
                 basic.list_date,
                 basic.undp,
                 basic.per_undp,
@@ -778,6 +1110,10 @@ class TushareRepository:
             left join tushare.bak_basic basic
               on basic.ts_code = daily.ts_code
              and basic.trade_date = daily.trade_date
+            left join tushare.daily_basic daily_basic
+              on daily_basic.ts_code = daily.ts_code
+             and daily_basic.trade_date = daily.trade_date
+            {min5_daily_close_join}
             where daily.trade_date >= ?
               and daily.trade_date <= ?
               and daily.ts_code in (select unnest(?))
@@ -785,7 +1121,7 @@ class TushareRepository:
               and latest_factor.latest_adj_factor > 0
             order by daily.ts_code, daily.trade_date
             """,
-            [target_watermark, STOCK_DAILY_TECHNICAL_WARMUP_START_DATE, target_watermark, ts_codes],
+            parameters,
         )
         return result.fetchdf()
 
@@ -1028,6 +1364,18 @@ class TushareRepository:
             return None
         return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
 
+    def _parse_datetime(self, value: Any) -> datetime | None:
+        if value is None or pd.isna(value):
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, pd.Timestamp):
+            return value.to_pydatetime()
+        text = str(value).strip()
+        if not text:
+            return None
+        return datetime.fromisoformat(text)
+
     def _none_or_int(self, value: Any) -> int | None:
         if value is None or pd.isna(value):
             return None
@@ -1091,12 +1439,27 @@ class TushareRepository:
             "qfq_low",
             "qfq_close",
             "qfq_pre_close",
+            "min5_close",
             "name",
             "industry",
             "area",
             "pe",
+            "pe_ttm",
+            "ps",
+            "ps_ttm",
+            "pb",
+            "dv_ratio",
+            "dv_ttm",
             "float_share",
             "total_share",
+            "daily_basic_float_share",
+            "daily_basic_total_share",
+            "free_share",
+            "total_mv",
+            "circ_mv",
+            "turnover_rate",
+            "turnover_rate_f",
+            "daily_basic_volume_ratio",
             "total_assets",
             "liquid_assets",
             "fixed_assets",
@@ -1104,7 +1467,6 @@ class TushareRepository:
             "reserved_pershare",
             "eps",
             "bvps",
-            "pb",
             "list_date",
             "undp",
             "per_undp",
@@ -1210,8 +1572,15 @@ class TushareRepository:
     def _default_earliest_trusted_watermark(self, asset_table_name: str) -> date | None:
         if asset_table_name in {"tushare.trade_cal", "tushare.adj_factor", "tushare.daily"}:
             return date(2014, 1, 2)
-        if asset_table_name == "tushare.bak_basic":
+        if asset_table_name in {"tushare.bak_basic", "tushare.daily_basic", "tushare.stk_mins_5min"}:
             return date(2016, 12, 6)
         if asset_table_name == "tushare.stock_daily_technical":
-            return date(2018, 1, 1)
+            return date(2017, 6, 1)
         return None
+
+    def get_refresh_start_watermark(self, asset_table_name: str) -> date:
+        trusted = self.get_watermark(asset_table_name)
+        if trusted is not None:
+            return trusted
+        earliest = self._default_earliest_trusted_watermark(asset_table_name) or date(2014, 1, 2)
+        return earliest - timedelta(days=1)

@@ -73,6 +73,7 @@ class BacktestService:
     SELL_FEE_BPS = 10
     DEFAULT_SIMULATION_RUNS = 50
     STRATEGY_DEFAULT_SIMULATION_RUNS = {
+        "ma_bull_golden_bowl": 1,
         "small_float_value": 1,
     }
     SIMULATION_WORKERS = 10

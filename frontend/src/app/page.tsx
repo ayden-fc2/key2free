@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Button, DatePicker, InputNumber, Modal, Select, Space, Table, Tabs, Tag, message } from "antd";
+import { Button, Checkbox, DatePicker, InputNumber, Modal, Select, Space, Table, Tabs, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined } from "@ant-design/icons";
 
@@ -31,17 +31,63 @@ const tabs = [
   { key: "data-assets", label: "数据资产维护" },
   { key: "daily-signals", label: "当日信号" },
   { key: "backtest-stats", label: "回测统计" },
-  { key: "strategies", label: "策略列表" },
 ] as const;
 
 const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string }[]> = {
   "data-assets": [{ key: "tushare", label: "Tushare 资产" }],
   "daily-signals": [{ key: "daily", label: "当日信号" }],
   "backtest-stats": [{ key: "run", label: "回测任务" }],
-  strategies: [{ key: "placeholder", label: "占位" }],
 };
 
 const DEFAULT_STRATEGY_OPTIONS = [{ label: "demo", value: "demo" }];
+
+const TUSHARE_ASSET_META: Record<
+  string,
+  { api: string; purpose: string; refresh: string; note?: string }
+> = {
+  "tushare.trade_cal": {
+    api: "trade_cal",
+    purpose: "交易日历",
+    refresh: "按年份窗口刷新",
+  },
+  "tushare.bak_basic": {
+    api: "bak_basic",
+    purpose: "历史股票列表/基础信息",
+    refresh: "按交易日全市场刷新",
+  },
+  "tushare.adj_factor": {
+    api: "adj_factor",
+    purpose: "复权因子",
+    refresh: "按交易日全市场刷新",
+  },
+  "tushare.daily": {
+    api: "daily",
+    purpose: "未复权日线行情",
+    refresh: "按交易日全市场刷新",
+  },
+  "tushare.daily_basic": {
+    api: "daily_basic",
+    purpose: "估值/市值/股本/换手率",
+    refresh: "按交易日全市场刷新",
+    note: "最早可信 2016-12-06",
+  },
+  "tushare.stk_mins_5min": {
+    api: "stk_mins 5min",
+    purpose: "5分钟线原始行情",
+    refresh: "按交易日逐股刷新",
+    note: "需单独分钟权限",
+  },
+  "tushare.stock_daily_technical": {
+    api: "派生表",
+    purpose: "前复权日线/基础信息/技术指标宽表",
+    refresh: "依赖基础资产最小水位覆盖重建",
+    note: "正式落表自 2017-06-01",
+  },
+};
+
+function defaultSimulationRunsForStrategy(strategyName: string) {
+  return strategyName === "ma_bull_golden_bowl" ? 1 : 50;
+}
 
 function formatNumber(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) {
@@ -121,6 +167,7 @@ export default function Home() {
   const [tushareRefreshTask, setTushareRefreshTask] = useState<TushareRefreshTask | null>(null);
   const [tushareRefreshStarting, setTushareRefreshStarting] = useState(false);
   const [tushareRefreshEndDate, setTushareRefreshEndDate] = useState(resolveDefaultTushareEndDate);
+  const [skipStkMins5min, setSkipStkMins5min] = useState(true);
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
   const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
@@ -134,6 +181,9 @@ export default function Home() {
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
   const [backtestInitialCash, setBacktestInitialCash] = useState(10000000);
   const [backtestStrategy, setBacktestStrategy] = useState("demo");
+  const [backtestSimulationRuns, setBacktestSimulationRuns] = useState(
+    defaultSimulationRunsForStrategy("demo"),
+  );
   const [backtestTask, setBacktestTask] = useState<BacktestTask | null>(null);
   const [backtestTasks, setBacktestTasks] = useState<BacktestTask[]>([]);
   const [backtestTasksLoading, setBacktestTasksLoading] = useState(false);
@@ -198,7 +248,10 @@ export default function Home() {
     }
     setTushareRefreshStarting(true);
     try {
-      const result = await startTushareRefresh({ end_date: tushareRefreshEndDate });
+      const result = await startTushareRefresh({
+        end_date: tushareRefreshEndDate,
+        skip_stk_mins_5min: skipStkMins5min,
+      });
       messageApi.info(result.message);
       if (result.task_id !== null) {
         setTushareRefreshTask(await getTushareRefreshTask(result.task_id));
@@ -307,6 +360,10 @@ export default function Home() {
       messageApi.warning("初始资金必须大于 0");
       return;
     }
+    if (backtestSimulationRuns < 1) {
+      messageApi.warning("撮合次数必须大于等于 1");
+      return;
+    }
     setBacktestLoading(true);
     try {
       const data = await runBacktest({
@@ -314,6 +371,7 @@ export default function Home() {
         end_date: backtestEndDate,
         initial_cash: backtestInitialCash,
         strategy_name: backtestStrategy,
+        simulation_runs: backtestSimulationRuns,
       });
       setBacktestTask(data.task);
       setBacktestCreateModalOpen(false);
@@ -433,6 +491,21 @@ export default function Home() {
       width: 220,
     },
     {
+      render: (_value, record) => TUSHARE_ASSET_META[record.asset_table_name]?.api ?? "-",
+      title: "接口",
+      width: 130,
+    },
+    {
+      render: (_value, record) => TUSHARE_ASSET_META[record.asset_table_name]?.purpose ?? "-",
+      title: "用途",
+      width: 220,
+    },
+    {
+      render: (_value, record) => TUSHARE_ASSET_META[record.asset_table_name]?.refresh ?? "-",
+      title: "刷新方式",
+      width: 210,
+    },
+    {
       dataIndex: "earliest_trusted_watermark",
       title: "Earliest Trusted",
       width: 170,
@@ -442,6 +515,7 @@ export default function Home() {
       dataIndex: "trusted_watermark",
       title: "最新可信水位",
       width: 180,
+      render: (value: string | null) => value ?? <Tag>未初始化</Tag>,
     },
     {
       dataIndex: "issue_count",
@@ -458,7 +532,7 @@ export default function Home() {
       dataIndex: "last_issue_message",
       title: "Last Issue",
       width: 280,
-      render: (value: string | null) => value ?? "-",
+      render: (value: string | null, record) => value ?? TUSHARE_ASSET_META[record.asset_table_name]?.note ?? "-",
     },
   ];
 
@@ -684,8 +758,28 @@ export default function Home() {
             />
           </label>
           <label className="form-field">
+            <span>撮合次数</span>
+            <InputNumber
+              disabled={backtestLoading}
+              min={1}
+              max={500}
+              onChange={(value) => setBacktestSimulationRuns(typeof value === "number" ? value : 1)}
+              precision={0}
+              style={{ width: "100%" }}
+              value={backtestSimulationRuns}
+            />
+          </label>
+          <label className="form-field">
             <span>策略</span>
-            <Select disabled={backtestLoading} options={strategyOptions} value={backtestStrategy} onChange={setBacktestStrategy} />
+            <Select
+              disabled={backtestLoading}
+              options={strategyOptions}
+              value={backtestStrategy}
+              onChange={(value) => {
+                setBacktestStrategy(value);
+                setBacktestSimulationRuns(defaultSimulationRunsForStrategy(value));
+              }}
+            />
           </label>
         </div>
       </Modal>
@@ -734,6 +828,13 @@ export default function Home() {
                     type="date"
                     value={tushareRefreshEndDate}
                   />
+                  <Checkbox
+                    checked={skipStkMins5min}
+                    disabled={tushareRefreshStarting || tushareRefreshTask?.status === "running"}
+                    onChange={(event) => setSkipStkMins5min(event.target.checked)}
+                  >
+                    跳过5分钟线
+                  </Checkbox>
                   <Button icon={<ReloadOutlined />} loading={tushareWatermarksLoading} onClick={fetchTushareWatermarks}>
                     刷新水位
                   </Button>
@@ -752,6 +853,7 @@ export default function Home() {
                 loading={tushareWatermarksLoading}
                 pagination={false}
                 rowKey="asset_table_name"
+                scroll={{ x: 1490 }}
                 size="middle"
               />
               <div className="backtest-summary">
@@ -850,12 +952,10 @@ export default function Home() {
             </div>
           </section>
         ) : (
-          <section className="placeholder">
-            <div className="placeholder-title">占位</div>
-            <p>该模块后续接入真实功能。</p>
-          </section>
+          <section className="placeholder" />
         )}
       </section>
     </main>
   );
 }
+

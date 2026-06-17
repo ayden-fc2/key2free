@@ -118,8 +118,8 @@ class StrategyRegistration:
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "channel_breakout": StrategyRegistration(
-        name="channel_breakout",
+    "ma_bull_golden_bowl": StrategyRegistration(
+        name="ma_bull_golden_bowl",
         batch_signal_strategy=channel_breakout_batch_signal_strategy,
         required_columns=CHANNEL_BREAKOUT_REQUIRED_COLUMNS,
         code_filter=channel_breakout_code_filter,

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 from typing import Any
+import os
 
 import duckdb
 
@@ -26,6 +27,13 @@ class DuckDBRepository:
             connection = self._connections.get(self.db_path)
             if connection is None:
                 connection = duckdb.connect(str(self.db_path), read_only=False)
+                connection.execute(
+                    f"set threads={int(os.getenv('DUCKDB_THREADS', '2'))}"
+                )
+                connection.execute("set preserve_insertion_order=false")
+                memory_limit = os.getenv("DUCKDB_MEMORY_LIMIT")
+                if memory_limit:
+                    connection.execute(f"set memory_limit='{memory_limit}'")
                 self._connections[self.db_path] = connection
             yield connection
 

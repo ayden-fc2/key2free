@@ -17,6 +17,7 @@ export type TushareRefreshStart = {
 
 export type TushareRefreshRequest = {
   end_date: string;
+  skip_stk_mins_5min?: boolean;
 };
 
 export type TushareRefreshTask = {

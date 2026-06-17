@@ -13,6 +13,7 @@ router = APIRouter(prefix="/tushare-assets", tags=["tushare-assets"])
 
 class TushareRefreshRequest(BaseModel):
     end_date: date
+    skip_stk_mins_5min: bool = False
 
 
 @router.get("/watermarks")
@@ -22,7 +23,12 @@ def list_watermarks() -> list[dict]:
 
 @router.post("/refresh")
 def start_refresh(request: TushareRefreshRequest) -> dict:
-    return asdict(TushareAssetService().start_refresh(end_date=request.end_date))
+    return asdict(
+        TushareAssetService().start_refresh(
+            end_date=request.end_date,
+            skip_stk_mins_5min=request.skip_stk_mins_5min,
+        )
+    )
 
 
 @router.get("/refresh-task")

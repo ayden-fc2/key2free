@@ -3,6 +3,7 @@ export type BacktestRequest = {
   end_date: string;
   initial_cash: number;
   strategy_name: string;
+  simulation_runs?: number;
 };
 
 export type BacktestTask = {

@@ -134,17 +134,20 @@ def _golden_bowl_preview(*, frame: StockDailyFrame, index: int) -> dict[str, Any
         config=GoldenBowlConfig(
             channel_length=20,
             channel_trim_extreme_count=2,
-            max_channel_width_ratio=0.06,
-            max_channel_close_return_ratio=0.08,
+            max_channel_width_ratio=None,
+            max_channel_close_return_ratio=None,
             min_breakout_body_return_ratio=0.06,
             min_breakout_to_channel_upper_ratio=1.03,
             max_channel_end_to_breakout_gap=10,
-            max_left_high_to_channel_end_close_ratio=1.12,
+            max_left_high_to_channel_end_close_ratio=None,
+            max_bowl_order=2,
+            min_next_bowl_left_high_ratio=None,
             max_bowl_width=12,
             min_bowl_width=3,
             min_bowl_depth_ratio=0.03,
             max_bowl_depth_ratio=0.20,
             right_close_to_left_high_ratio=0.98,
+            max_right_close_to_left_high_ratio=None,
             require_right_bullish=True,
         ),
         atr_pct_14=frame.columns.get("atr_pct_14"),
@@ -157,6 +160,7 @@ def _golden_bowl_preview(*, frame: StockDailyFrame, index: int) -> dict[str, Any
         "channel_start": frame.trade_dates[item.channel.start_index].isoformat(),
         "channel_end": frame.trade_dates[item.channel.end_index].isoformat(),
         "channel_end_to_breakout_gap": item.channel_end_to_breakout_gap,
+        "bowl_order": item.bowl_order,
         "left_high_date": frame.trade_dates[item.left_close_high_index].isoformat(),
         "left_close_high": item.left_close_high,
         "trough_date": frame.trade_dates[item.trough_index].isoformat(),
@@ -164,6 +168,12 @@ def _golden_bowl_preview(*, frame: StockDailyFrame, index: int) -> dict[str, Any
         "bowl_width": item.bowl_width,
         "bowl_depth_ratio": item.bowl_depth_ratio,
         "right_close_ratio": item.right_close_ratio,
+        "previous_bowl_signal_date": (
+            None
+            if item.previous_signal_index is None
+            else frame.trade_dates[item.previous_signal_index].isoformat()
+        ),
+        "previous_bowl_left_close_high": item.previous_left_close_high,
         "channel_width_ratio": item.channel.channel_width_ratio,
         "breakout_ratio": item.breakout_ratio,
     }

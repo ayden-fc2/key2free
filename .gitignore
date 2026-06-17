@@ -26,7 +26,6 @@ pnpm-debug.log*
 
 # Temporary generated files
 tmp/*
-!tmp/.gitkeep
 
 # Local data artifacts
 data/*.duckdb

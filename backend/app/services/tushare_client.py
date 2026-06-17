@@ -9,9 +9,13 @@ import tushare as ts
 
 TUSHARE_TOKEN = os.getenv(
     "TUSHARE_TOKEN",
-    "yHKDrJkUIrQkXgMOWWToyuUesKYbtCRKprrYXRXDCOdfhjrMEnpyybZNFmmtQpaf",
+    "5607915ec5b89d0366856311822399cfb4af896842e2296b697dbff2",
 )
-TUSHARE_HTTP_URL = os.getenv("TUSHARE_HTTP_URL", "https://dailyfetch.top/")
+TUSHARE_HTTP_URL = os.getenv("TUSHARE_HTTP_URL", "https://minitick.top/").rstrip("/")
+TUSHARE_MCP_URL = os.getenv(
+    "TUSHARE_MCP_URL",
+    f"https://minitick.top/mcp?token={TUSHARE_TOKEN}",
+)
 TUSHARE_TIMEOUT_SECONDS = int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "30"))
 
 
