@@ -6,13 +6,14 @@ from typing import Any, Protocol
 
 
 Bar = tuple[float, ...]
+"""(qfq_open, qfq_high, qfq_low, qfq_close, vol, pct_chg, prev_ma_10, qfq_pre_close)."""
 
 
 @dataclass(frozen=True)
 class MarketViews:
     """Strategy data view for one trading day.
 
-    `history_by_code` is reserved for T-1 full wide-table windows.
+    `history_by_code` is reserved for the T-1 10-bar wide-table window.
     `today_bars` only carries T-day observable market fields used by order rules.
     """
 
@@ -60,16 +61,18 @@ class StrategyWatchDecision:
 class StrategyLifecycle(Protocol):
     """Backtest lifecycle implemented by a strategy.
 
-    select_signals runs after T close and may use the full T wide table.
-    decide_sells and decide_buys run during T and must only use today's
-    observable OHLC/minute fields plus T-1 history.
+    select_signals runs after T close. Its view may expose each stock's visible
+    daily wide-table window, including T, and default to daily fields only.
+    Minute-derived fields are opt-in via strategy registration or strategy-owned
+    queries. decide_sells and decide_buys run during T and must only use today's
+    observable market fields plus T-1 history.
     """
 
     def select_signals(
         self,
         *,
         trade_date: date,
-        rows: Any,
+        view: Any,
     ) -> list[dict[str, Any]]:
         ...
 

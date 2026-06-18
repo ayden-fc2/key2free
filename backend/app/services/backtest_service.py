@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
@@ -13,7 +14,7 @@ from app.dtos.backtest_dto import BacktestStartDTO, BacktestTaskDTO
 from app.repositories.backtest_repository import BacktestRepository
 from app.repositories.signal_repository import SignalRepository
 from app.services.signal_service import SignalService
-from app.services.signal_window import SIGNAL_WINDOW_BARS
+from app.services.signal_window import SIGNAL_WINDOW_BARS, TRADE_HISTORY_WINDOW_BARS
 from app.services.strategy_registry import StrategyRegistration, get_strategy
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
 
@@ -216,7 +217,7 @@ class BacktestService:
                     codes=signal_codes,
                     start_date=trading_dates[0],
                     end_date=trading_dates[-1],
-                    window=SIGNAL_WINDOW_BARS,
+                    window=TRADE_HISTORY_WINDOW_BARS,
                     extra_columns=strategy.required_columns,
                 )
                 if strategy.lifecycle is not None
@@ -424,6 +425,7 @@ class BacktestService:
             market = self._build_market_views(
                 prices=prices,
                 trade_date=trade_date,
+                previous_trade_date=trading_dates[trade_index - 1] if trade_index > 0 else None,
                 history_frames=history_frames or {},
             )
             total_asset = self._mark_total_asset(
@@ -697,6 +699,7 @@ class BacktestService:
         *,
         prices: dict[str, dict[date, Bar]],
         trade_date: date,
+        previous_trade_date: date | None = None,
         history_frames: dict[str, StockDailyFrame] | None = None,
     ) -> MarketViews:
         today_bars: dict[str, Bar] = {}
@@ -705,7 +708,11 @@ class BacktestService:
             bar = code_prices.get(trade_date)
             if bar is not None:
                 today_bars[code] = bar
-            previous_bar = self._previous_bar(code_prices, trade_date)
+            previous_bar = (
+                code_prices.get(previous_trade_date)
+                if previous_trade_date is not None
+                else None
+            )
             if previous_bar is not None:
                 previous_bars[code] = previous_bar
         return MarketViews(
@@ -725,14 +732,10 @@ class BacktestService:
     ) -> dict[str, StockDailyFrame]:
         result: dict[str, StockDailyFrame] = {}
         for code, frame in history_frames.items():
-            end = 0
-            for index, day in enumerate(frame.trade_dates):
-                if day >= trade_date:
-                    break
-                end = index + 1
+            end = bisect_left(frame.trade_dates, trade_date)
             if end <= 0:
                 continue
-            start = max(0, end - SIGNAL_WINDOW_BARS)
+            start = max(0, end - TRADE_HISTORY_WINDOW_BARS)
             result[code] = StockDailyFrame(
                 code=frame.code,
                 trade_dates=frame.trade_dates[start:end],

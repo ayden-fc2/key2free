@@ -14,6 +14,7 @@ from app.dtos.signal_dto import (
     StockDataContextResultDTO,
 )
 from app.repositories.signal_repository import SignalRepository
+from app.services.strategy_data_view import SignalDataView
 from app.services.signal_window import SIGNAL_WINDOW_BARS
 from app.services.strategy_registry import get_strategy
 
@@ -24,6 +25,9 @@ class SignalServiceError(ValueError):
 
 class SignalService:
     DAILY_SIGNAL_PROGRESS_INTERVAL = 20
+    SIGNAL_BATCH_DAYS_WITH_HISTORY = 10
+    SIGNAL_BATCH_DAYS_WITH_NARROW_HISTORY = 40
+    SIGNAL_BATCH_DAYS_NO_HISTORY = 120
 
     def __init__(self) -> None:
         self.repository = SignalRepository()
@@ -133,43 +137,53 @@ class SignalService:
             start_date=start_date,
             end_date=end_date,
         )
-        rows = self.repository.load_signal_selection_rows(
-            start_date=start_date,
-            end_date=end_date,
-            window=SIGNAL_WINDOW_BARS,
-            code_filter=strategy.code_filter,
-        )
+
         if progress_callback is not None:
             progress_callback(0, len(normalized_dates))
 
+        window = min(strategy.signal_history_window, SIGNAL_WINDOW_BARS)
+        batch_size = self._signal_batch_size(
+            window=window,
+            required_columns=strategy.signal_required_columns,
+        )
+
         signal_items_by_date: dict[date, list[DailySignalItemDTO]] = {}
-        for processed_days, day in enumerate(normalized_dates, start=1):
-            day_rows = self.repository.slice_signal_rows_for_trade_date(
-                rows=rows,
-                trade_date=day,
-                window=SIGNAL_WINDOW_BARS,
-                include_trade_date=True,
+        processed_days = 0
+        for batch_dates in self._date_batches(normalized_dates, batch_size):
+            batch_rows = self.repository.load_signal_selection_rows(
+                start_date=batch_dates[0],
+                end_date=batch_dates[-1],
+                window=window,
+                code_filter=strategy.code_filter,
+                columns=strategy.signal_required_columns,
             )
-            raw_items = strategy.lifecycle.select_signals(
-                trade_date=day,
-                rows=day_rows,
-            )
-            signal_items_by_date[day] = [
-                DailySignalItemDTO(
-                    code=str(item["code"]),
-                    code_name=item.get("code_name"),
-                    trade_date=str(item.get("trade_date") or day.isoformat()),
-                    universe=item.get("universe") or {},
-                    signal=item.get("signal"),
+            for day in batch_dates:
+                view = SignalDataView(
+                    trade_date=day,
+                    source=batch_rows,
+                    max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
                 )
-                for item in raw_items
-            ]
-            self._report_progress(
-                progress_callback=progress_callback,
-                processed_codes=processed_days,
-                total_codes=len(normalized_dates),
-                progress_interval=max(progress_interval, 1),
-            )
+                raw_items = strategy.lifecycle.select_signals(
+                    trade_date=day,
+                    view=view,
+                )
+                signal_items_by_date[day] = [
+                    DailySignalItemDTO(
+                        code=str(item["code"]),
+                        code_name=item.get("code_name"),
+                        trade_date=str(item.get("trade_date") or day.isoformat()),
+                        universe=item.get("universe") or {},
+                        signal=item.get("signal"),
+                    )
+                    for item in raw_items
+                ]
+                processed_days += 1
+                self._report_progress(
+                    progress_callback=progress_callback,
+                    processed_codes=processed_days,
+                    total_codes=len(normalized_dates),
+                    progress_interval=max(progress_interval, 1),
+                )
         return {
             day: DailySignalResultDTO(
                 trade_date=day.isoformat(),
@@ -310,6 +324,24 @@ class SignalService:
             values[index : index + size]
             for index in range(0, len(values), size)
         ]
+
+    def _date_batches(self, values: list[date], size: int) -> list[list[date]]:
+        return [
+            values[index : index + size]
+            for index in range(0, len(values), max(size, 1))
+        ]
+
+    def _signal_batch_size(
+        self,
+        *,
+        window: int,
+        required_columns: tuple[str, ...] | None,
+    ) -> int:
+        if window <= 0:
+            return self.SIGNAL_BATCH_DAYS_NO_HISTORY
+        if required_columns is not None and len(required_columns) <= 16:
+            return self.SIGNAL_BATCH_DAYS_WITH_NARROW_HISTORY
+        return self.SIGNAL_BATCH_DAYS_WITH_HISTORY
 
     def _report_progress(
         self,

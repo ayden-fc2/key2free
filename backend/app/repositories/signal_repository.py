@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from app.dtos.signal_dto import DailySignalItemDTO, DailySignalResultDTO, DailySignalTaskDTO
 from app.entities.stock_data_context import StockDailyFrame
@@ -24,6 +25,138 @@ SIGNAL_BASE_FLOAT_COLUMNS: tuple[str, ...] = (
     "is_st",
 )
 SIGNAL_BASE_TEXT_COLUMNS: tuple[str, ...] = ("name",)
+DEFAULT_SIGNAL_COLUMNS: tuple[str, ...] = (
+    "ts_code",
+    "code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount",
+    "adj_factor",
+    "latest_adj_factor",
+    "qfq_open",
+    "qfq_high",
+    "qfq_low",
+    "qfq_close",
+    "qfq_pre_close",
+    "name",
+    "industry",
+    "area",
+    "pe",
+    "pe_ttm",
+    "ps",
+    "ps_ttm",
+    "pb",
+    "dv_ratio",
+    "dv_ttm",
+    "float_share",
+    "total_share",
+    "daily_basic_float_share",
+    "daily_basic_total_share",
+    "free_share",
+    "total_mv",
+    "circ_mv",
+    "turnover_rate",
+    "turnover_rate_f",
+    "daily_basic_volume_ratio",
+    "total_assets",
+    "liquid_assets",
+    "fixed_assets",
+    "reserved",
+    "reserved_pershare",
+    "eps",
+    "bvps",
+    "list_date",
+    "undp",
+    "per_undp",
+    "rev_yoy",
+    "profit_yoy",
+    "gpr",
+    "npr",
+    "holder_num",
+    "is_st",
+    "atr_5",
+    "atr_14",
+    "atr_30",
+    "atr_pct_5",
+    "atr_pct_14",
+    "atr_pct_30",
+    "avg_volume_5",
+    "avg_volume_10",
+    "avg_volume_20",
+    "volume_ratio_5",
+    "volume_ratio_10",
+    "volume_ratio_20",
+    "vwap_5",
+    "vwap_14",
+    "vwap_20",
+    "vwap_30",
+    "ma_5",
+    "ma_10",
+    "ma_20",
+    "ma_30",
+    "ma_60",
+    "ma_120",
+    "bias_5",
+    "bias_10",
+    "bias_20",
+    "bias_30",
+    "bias_60",
+    "bias_120",
+    "ma_slope_5",
+    "ma_slope_10",
+    "ma_slope_20",
+    "ma_slope_30",
+    "ma_slope_60",
+    "ma_slope_120",
+    "er_10",
+    "er_20",
+    "er_60",
+    "boll_upper_10_2",
+    "boll_middle_10_2",
+    "boll_lower_10_2",
+    "boll_bandwidth_10_2",
+    "boll_percent_b_10_2",
+    "boll_upper_20_2",
+    "boll_middle_20_2",
+    "boll_lower_20_2",
+    "boll_bandwidth_20_2",
+    "boll_percent_b_20_2",
+    "boll_upper_60_2",
+    "boll_middle_60_2",
+    "boll_lower_60_2",
+    "boll_bandwidth_60_2",
+    "boll_percent_b_60_2",
+    "macd_dif_12_26_9",
+    "macd_dea_12_26_9",
+    "macd_hist_12_26_9",
+    "rsi_5",
+    "rsi_14",
+    "rsi_20",
+    "roc_5",
+    "roc_10",
+    "roc_20",
+    "roc_60",
+    "roc_120",
+    "kdj_k_9_3_3",
+    "kdj_d_9_3_3",
+    "kdj_j_9_3_3",
+    "body_atr14_ratio",
+    "range_atr14_ratio",
+    "body_range_ratio",
+    "upper_shadow_range_ratio",
+    "lower_shadow_range_ratio",
+    "overnight_return",
+    "rebuilt_at",
+)
+MINUTE_DERIVED_SIGNAL_COLUMNS: frozenset[str] = frozenset({"min5_close"})
+
 
 class SignalRepository:
     MAX_LOG_LINES = 2000
@@ -320,96 +453,110 @@ class SignalRepository:
         end_date: date,
         window: int = 200,
         code_filter: Any | None = None,
+        columns: tuple[str, ...] | None = None,
     ) -> Any:
         from app.repositories.tushare_repository import TushareRepository
 
         TushareRepository().ensure_tables()
+        if columns is None:
+            columns = self.get_default_signal_columns()
+        select_columns = self._signal_selection_columns(columns)
+        column_sql = "*" if select_columns is None else ", ".join(select_columns)
         with self.duckdb.connect(read_only=True) as connection:
-            frame = connection.execute(
-                """
-                with src as (
-                    select *
+            if window <= 0:
+                frame = connection.execute(
+                    f"""
+                    select {column_sql}
                     from tushare.stock_daily_technical
                     where code is not null
-                ),
-                codes as (
-                    select distinct code
-                    from src
-                    where trade_date between ? and ?
-                ),
-                ranked_before as (
-                    select src.*,
-                           row_number() over (
-                               partition by src.code
-                               order by trade_date desc
-                           ) as rn
-                    from src
-                    join codes using (code)
-                    where trade_date < ?
-                ),
-                before_window as (
-                    select * exclude (rn)
-                    from ranked_before
-                    where rn <= ?
-                ),
-                in_range as (
-                    select src.*
-                    from src
-                    join codes using (code)
-                    where trade_date between ? and ?
-                )
-                select *
-                from before_window
-                union all
-                select *
-                from in_range
-                order by trade_date, code
-                """,
-                [start_date, end_date, start_date, window, start_date, end_date],
-            ).fetchdf()
-        if not frame.empty:
-            frame["trade_date"] = frame["trade_date"].apply(
-                lambda value: value.date() if isinstance(value, datetime) else value
-            )
-            frame["list_date"] = frame["list_date"].apply(
-                lambda value: value.date() if isinstance(value, datetime) else value
-            )
+                      and trade_date between ? and ?
+                    order by code, trade_date
+                    """,
+                    [start_date, end_date],
+                ).fetchdf()
+            else:
+                frame = connection.execute(
+                    f"""
+                    with src as (
+                        select {column_sql}
+                        from tushare.stock_daily_technical
+                        where code is not null
+                    ),
+                    codes as (
+                        select distinct code
+                        from src
+                        where trade_date between ? and ?
+                    ),
+                    ranked_before_keys as (
+                        select code,
+                               trade_date,
+                               row_number() over (
+                                   partition by code
+                                   order by trade_date desc
+                               ) as rn
+                        from tushare.stock_daily_technical
+                        where code in (select code from codes)
+                          and code is not null
+                          and trade_date < ?
+                    ),
+                    before_keys as (
+                        select code, trade_date
+                        from ranked_before_keys
+                        where rn <= ?
+                    ),
+                    before_window as (
+                        select src.*
+                        from src
+                        join before_keys using (code, trade_date)
+                    ),
+                    in_range as (
+                        select src.*
+                        from src
+                        join codes using (code)
+                        where trade_date between ? and ?
+                    )
+                    select *
+                    from before_window
+                    union all
+                    select *
+                    from in_range
+                    order by code, trade_date
+                    """,
+                    [start_date, end_date, start_date, window, start_date, end_date],
+                ).fetchdf()
+        frame = self._normalize_signal_frame(frame)
         if frame.empty or code_filter is None:
             return frame
         return frame[frame["code"].apply(lambda value: code_filter(str(value)))].copy()
 
-    def slice_signal_rows_for_trade_date(
-        self,
-        *,
-        rows: Any,
-        trade_date: date,
-        window: int = 200,
-        include_trade_date: bool = True,
-    ) -> Any:
-        """Return the strategy-visible wide-table rows for one T date.
+    def _normalize_signal_frame(self, frame: Any) -> Any:
+        if frame.empty:
+            return frame
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
+        if "list_date" in frame.columns:
+            frame["list_date"] = pd.to_datetime(frame["list_date"], errors="coerce").dt.date
+        return frame
 
-        Signal selection runs after T close, so include_trade_date=True exposes
-        the full T wide row plus prior rows. Buy/sell stages should pass
-        include_trade_date=False and use market views for T-day observable bars.
-        """
-        if rows.empty:
-            return rows
-        if include_trade_date:
-            visible = rows[rows["trade_date"] <= trade_date]
-        else:
-            visible = rows[rows["trade_date"] < trade_date]
-        if visible.empty:
-            return visible.copy()
+    def get_default_signal_columns(self) -> tuple[str, ...]:
+        with self.duckdb.connect(read_only=True) as connection:
+            available = {
+                str(row[0])
+                for row in connection.execute("describe tushare.stock_daily_technical").fetchall()
+                if row
+            }
+        missing = [column for column in DEFAULT_SIGNAL_COLUMNS if column not in available]
+        if missing:
+            raise RuntimeError(f"missing default signal columns: {missing}")
+        return DEFAULT_SIGNAL_COLUMNS
 
-        def tail_window(group: Any) -> Any:
-            return group.sort_values("trade_date").tail(window)
-
-        return (
-            visible.groupby("code", group_keys=False, sort=False)
-            .apply(tail_window)
-            .sort_values(["trade_date", "code"])
-            .copy()
-        )
+    def _signal_selection_columns(self, columns: tuple[str, ...] | None) -> list[str] | None:
+        if columns is None:
+            return None
+        selected = ["trade_date", "code"]
+        for column in columns or ():
+            if column not in selected:
+                selected.append(column)
+        return selected
 
     def load_stock_frames(
         self,
@@ -429,29 +576,33 @@ class SignalRepository:
                 float_columns.append(column)
         select_columns = ["trade_date", "code", *float_columns, *SIGNAL_BASE_TEXT_COLUMNS]
         column_sql = ", ".join(select_columns)
-        source_sql = "select * from tushare.stock_daily_technical"
         with self.duckdb.connect(read_only=True) as connection:
             frame = connection.execute(
                 f"""
-                with src as ({source_sql}),
-                ranked_before as (
-                    select {column_sql},
+                with ranked_before_keys as (
+                    select code,
+                           trade_date,
                            row_number() over (
                                partition by code
                                order by trade_date desc
                            ) as rn
-                    from src
+                    from tushare.stock_daily_technical
                     where trade_date < ?
                       and code in (select unnest(?))
                 ),
+                before_keys as (
+                    select code, trade_date
+                    from ranked_before_keys
+                    where rn <= ?
+                ),
                 before_window as (
                     select {column_sql}
-                    from ranked_before
-                    where rn <= ?
+                    from tushare.stock_daily_technical
+                    join before_keys using (code, trade_date)
                 ),
                 in_range as (
                     select {column_sql}
-                    from src
+                    from tushare.stock_daily_technical
                     where trade_date between ? and ?
                       and code in (select unnest(?))
                 )

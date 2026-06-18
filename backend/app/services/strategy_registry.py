@@ -16,6 +16,8 @@ class StrategyRegistration:
     lifecycle: object
     required_columns: tuple[str, ...] = ()
     code_filter: Callable[[str], bool] | None = None
+    signal_required_columns: tuple[str, ...] | None = None
+    signal_history_window: int = 200
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -24,6 +26,17 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         lifecycle=small_float_value_lifecycle,
         required_columns=SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
         code_filter=small_float_value_code_filter,
+        signal_required_columns=(
+            "name",
+            "list_date",
+            "close",
+            "qfq_close",
+            "is_st",
+            "eps",
+            "total_mv",
+            "circ_mv",
+        ),
+        signal_history_window=200,
     ),
 }
 

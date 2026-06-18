@@ -16,10 +16,10 @@ from app.services.strategy_lifecycle import (
 )
 
 
-SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 5
+SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 10
 SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE = 0.10
 SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
-SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 5
+SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
@@ -33,26 +33,6 @@ def small_float_value_code_filter(code: str) -> bool:
     if value.startswith(("sh.688", "sz.300", "sz.301", "bj.")):
         return False
     return value.startswith("sh.6") or value.startswith("sz.0")
-
-
-def small_float_value_select_signals(
-    *,
-    trade_dates: list[date],
-    rows: pd.DataFrame,
-) -> dict[date, list[dict[str, Any]]]:
-    """Select T-close raw target signals from full-market wide-table rows."""
-    if rows.empty:
-        return {day: [] for day in trade_dates}
-
-    target_days = set(trade_dates)
-    result: dict[date, list[dict[str, Any]]] = {}
-    for day, group in rows.groupby("trade_date", sort=True):
-        if day not in target_days:
-            continue
-        result[day] = _select_day(group)
-    for day in trade_dates:
-        result.setdefault(day, [])
-    return result
 
 
 def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
@@ -159,14 +139,48 @@ class SmallFloatValueLifecycle:
         self,
         *,
         trade_date: date,
-        rows: pd.DataFrame,
+        view: Any,
     ) -> list[dict[str, Any]]:
-        if rows.empty:
-            return []
-        today_rows = rows[rows["trade_date"] == trade_date]
-        if today_rows.empty:
-            return []
-        return _select_day(today_rows)
+        today_rows = view.cross_section(
+            columns=(
+                "name",
+                "list_date",
+                "close",
+                "qfq_close",
+                "is_st",
+                "eps",
+                "total_mv",
+                "circ_mv",
+            )
+        )
+        selected = _select_day(today_rows)
+        self._probe_signal_history(
+            trade_date=trade_date,
+            view=view,
+            codes=[item["code"] for item in selected],
+        )
+        return selected
+
+    def _probe_signal_history(
+        self,
+        *,
+        trade_date: date,
+        view: Any,
+        codes: list[str],
+    ) -> None:
+        for _code, frame in view.iter_stock_history(
+            columns=("qfq_close",),
+            window=200,
+            codes=codes,
+        ):
+            if len(frame) == 0:
+                continue
+            if len(frame) > 200:
+                raise ValueError(f"signal history has {len(frame)} rows, expected <= 200")
+            if frame.trade_dates[-1] > trade_date:
+                raise ValueError(
+                    f"signal history includes {frame.trade_dates[-1]} after {trade_date}"
+                )
 
     def decide_sells(
         self,
@@ -179,6 +193,7 @@ class SmallFloatValueLifecycle:
         for code, holding in context.holdings.items():
             if getattr(holding, "buy_trade_index", context.trade_index) >= context.trade_index:
                 continue
+            _history_snapshot(market.history_by_code.get(code), context.trade_date)
             bar = market.today_bars.get(code)
             previous_bar = market.previous_bars.get(code)
             if not _is_tradeable_bar(bar):
@@ -262,6 +277,10 @@ class SmallFloatValueLifecycle:
 
         for item in target_items:
             code = item.code
+            history_snapshot = _history_snapshot(
+                market.history_by_code.get(code),
+                context.trade_date,
+            )
             bar = market.today_bars.get(code)
             if not _is_tradeable_bar(bar):
                 continue
@@ -296,7 +315,7 @@ class SmallFloatValueLifecycle:
                     code_name=item.code_name,
                     price=buy_price,
                     quantity=quantity,
-                    signal=dict(item.signal),
+                    signal=_with_history_snapshot(item.signal, history_snapshot),
                 )
             )
 
@@ -333,9 +352,9 @@ def _decision_to_payload(decision: SignalDecision) -> dict[str, Any]:
 def _listed_days(pool: pd.DataFrame) -> pd.Series:
     if "list_date" not in pool.columns:
         return pd.Series(float("nan"), index=pool.index)
-    return (pool["trade_date"] - pool["list_date"]).apply(
-        lambda value: value.days if hasattr(value, "days") else float("nan")
-    )
+    trade_dates = pd.to_datetime(pool["trade_date"], errors="coerce")
+    list_dates = pd.to_datetime(pool["list_date"], errors="coerce")
+    return (trade_dates - list_dates).dt.days
 
 
 def _numeric_column(pool: pd.DataFrame, column: str) -> pd.Series:
@@ -354,6 +373,52 @@ def _positive(value: Any) -> bool:
 
 def _optional_float(value: Any) -> float | None:
     return None if not _finite(value) else float(value)
+
+
+def _history_snapshot(frame: Any, trade_date: date) -> dict[str, Any]:
+    if frame is None or len(frame) == 0:
+        return {"history_bars": 0}
+    if frame.trade_dates[-1] >= trade_date:
+        raise ValueError(
+            f"history frame for {frame.code} includes {frame.trade_dates[-1]} at {trade_date}"
+        )
+
+    snapshot: dict[str, Any] = {
+        "history_bars": int(len(frame)),
+        "history_last_date": frame.trade_dates[-1].isoformat(),
+    }
+    qfq_close = frame.columns.get("qfq_close")
+    if qfq_close is None or len(qfq_close) == 0:
+        return snapshot
+
+    last_close = _history_float(qfq_close[-1])
+    snapshot["history_last_qfq_close"] = last_close
+    if last_close is None or last_close <= 0:
+        return snapshot
+
+    for window in (5, 10):
+        if len(qfq_close) < window:
+            continue
+        base_close = _history_float(qfq_close[-window])
+        if base_close is not None and base_close > 0:
+            snapshot[f"history_return_{window}"] = last_close / base_close - 1.0
+    return snapshot
+
+
+def _with_history_snapshot(signal: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(signal)
+    extras = dict(copied.get("extras") or {})
+    extras["buy_history_probe"] = snapshot
+    copied["extras"] = extras
+    return copied
+
+
+def _history_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _signal_value(signal: dict[str, Any], key: str) -> Any:

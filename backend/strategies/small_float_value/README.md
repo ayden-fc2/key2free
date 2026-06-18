@@ -15,10 +15,10 @@
 当前参数：
 
 ```text
-target_holdings = 5
+target_holdings = 10
 low_price_quantile = 10%
 circ_mv_rank_start = 1
-circ_mv_rank_end = 5
+circ_mv_rank_end = 10
 ```
 
 ## 2. 卖出决策
