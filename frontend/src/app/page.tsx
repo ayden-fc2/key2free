@@ -580,6 +580,30 @@ export default function Home() {
       width: 140,
     },
     {
+      dataIndex: "sharpe_ratio_avg",
+      render: (value: number | null) => formatNumber(value, 2),
+      title: "夏普比率",
+      width: 110,
+    },
+    {
+      dataIndex: "profit_loss_ratio_avg",
+      render: (value: number | null) => formatNumber(value, 2),
+      title: "盈亏比",
+      width: 100,
+    },
+    {
+      dataIndex: "excess_return_avg",
+      render: (value: number | null) => formatReturn(value),
+      title: "超额收益",
+      width: 110,
+    },
+    {
+      dataIndex: "max_drawdown_avg",
+      render: (value: number | null) => formatReturn(value),
+      title: "最大回撤",
+      width: 110,
+    },
+    {
       dataIndex: "trades_per_year_avg",
       render: (value: number | null) => (value === null ? "-" : value.toFixed(1)),
       title: "平均年交易次数",

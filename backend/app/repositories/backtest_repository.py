@@ -45,7 +45,11 @@ class BacktestRepository:
                     logs varchar not null default '',
                     annualized_return_avg double,
                     trades_per_year_avg double,
-                    win_rate_avg double
+                    win_rate_avg double,
+                    sharpe_ratio_avg double,
+                    profit_loss_ratio_avg double,
+                    excess_return_avg double,
+                    max_drawdown_avg double
                 )
                 """
             )
@@ -65,6 +69,10 @@ class BacktestRepository:
                 "alter table meta.backtest_task add column if not exists annualized_return_avg double",
                 "alter table meta.backtest_task add column if not exists trades_per_year_avg double",
                 "alter table meta.backtest_task add column if not exists win_rate_avg double",
+                "alter table meta.backtest_task add column if not exists sharpe_ratio_avg double",
+                "alter table meta.backtest_task add column if not exists profit_loss_ratio_avg double",
+                "alter table meta.backtest_task add column if not exists excess_return_avg double",
+                "alter table meta.backtest_task add column if not exists max_drawdown_avg double",
             ):
                 connection.execute(statement)
             connection.execute(
@@ -251,6 +259,10 @@ class BacktestRepository:
         annualized_return_avg: float | None = None,
         trades_per_year_avg: float | None = None,
         win_rate_avg: float | None = None,
+        sharpe_ratio_avg: float | None = None,
+        profit_loss_ratio_avg: float | None = None,
+        excess_return_avg: float | None = None,
+        max_drawdown_avg: float | None = None,
     ) -> None:
         if status not in {"success", "error"}:
             raise ValueError(f"invalid backtest task status: {status}")
@@ -286,6 +298,10 @@ class BacktestRepository:
                     annualized_return_avg = coalesce(?, annualized_return_avg),
                     trades_per_year_avg = coalesce(?, trades_per_year_avg),
                     win_rate_avg = coalesce(?, win_rate_avg),
+                    sharpe_ratio_avg = coalesce(?, sharpe_ratio_avg),
+                    profit_loss_ratio_avg = coalesce(?, profit_loss_ratio_avg),
+                    excess_return_avg = coalesce(?, excess_return_avg),
+                    max_drawdown_avg = coalesce(?, max_drawdown_avg),
                     logs = ?,
                     finished_at = current_timestamp,
                     updated_at = current_timestamp
@@ -303,6 +319,10 @@ class BacktestRepository:
                     annualized_return_avg,
                     trades_per_year_avg,
                     win_rate_avg,
+                    sharpe_ratio_avg,
+                    profit_loss_ratio_avg,
+                    excess_return_avg,
+                    max_drawdown_avg,
                     self._trim_logs(logs + self._format_log(message)),
                     task_id,
                 ],
@@ -727,6 +747,10 @@ class BacktestRepository:
             annualized_return_avg,
             trades_per_year_avg,
             win_rate_avg,
+            sharpe_ratio_avg,
+            profit_loss_ratio_avg,
+            excess_return_avg,
+            max_drawdown_avg,
         ) = row
         return BacktestTaskDTO(
             id=None if task_id is None else int(task_id),
@@ -748,6 +772,10 @@ class BacktestRepository:
             annualized_return_avg=None if annualized_return_avg is None else float(annualized_return_avg),
             trades_per_year_avg=None if trades_per_year_avg is None else float(trades_per_year_avg),
             win_rate_avg=None if win_rate_avg is None else float(win_rate_avg),
+            sharpe_ratio_avg=None if sharpe_ratio_avg is None else float(sharpe_ratio_avg),
+            profit_loss_ratio_avg=None if profit_loss_ratio_avg is None else float(profit_loss_ratio_avg),
+            excess_return_avg=None if excess_return_avg is None else float(excess_return_avg),
+            max_drawdown_avg=None if max_drawdown_avg is None else float(max_drawdown_avg),
             started_at=None if started_at is None else str(started_at),
             finished_at=None if finished_at is None else str(finished_at),
             created_at=None if created_at is None else str(created_at),

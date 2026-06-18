@@ -301,6 +301,10 @@ class BacktestService:
                 annualized_return_avg=summary["annualized_return_avg"],
                 trades_per_year_avg=summary["trades_per_year_avg"],
                 win_rate_avg=summary["win_rate_avg"],
+                sharpe_ratio_avg=summary["sharpe_ratio_avg"],
+                profit_loss_ratio_avg=summary["profit_loss_ratio_avg"],
+                excess_return_avg=summary["excess_return_avg"],
+                max_drawdown_avg=summary["max_drawdown_avg"],
             )
         except Exception as exc:
             self.repository.finish_task(
@@ -621,6 +625,14 @@ class BacktestService:
         self.repository.insert_sell_orders(sell_rows)
         self.repository.insert_daily_snapshots(snapshot_rows)
         run_stats["buys"] = len(buy_rows)
+        run_stats["sharpe_ratio"] = self._sharpe_ratio_from_assets(
+            [float(row[3]) for row in snapshot_rows],
+            initial_cash=initial_cash,
+        )
+        run_stats["max_drawdown"] = self._max_drawdown_from_assets(
+            [float(row[3]) for row in snapshot_rows],
+        )
+        run_stats["profit_loss_ratio"] = self._profit_loss_ratio_from_sells(sell_rows)
         return total_asset, run_stats
 
     def _sell_holding(
@@ -774,7 +786,7 @@ class BacktestService:
         final_assets: list[float],
         run_stats_list: list[dict[str, int]],
     ) -> dict[str, float | None]:
-        """跨轮平均的年化收益率、年均交易次数、胜率（按已平仓持仓计）。"""
+        """Aggregate portfolio and trade metrics across simulation runs."""
         years = max((end_date - start_date).days, 1) / 365.25
         annualized_values = [
             (final / initial_cash) ** (1.0 / years) - 1.0
@@ -787,6 +799,24 @@ class BacktestService:
             if stats["closed"] > 0
         ]
         trades_per_year = [stats["buys"] / years for stats in run_stats_list]
+        sharpe_ratios = [
+            value
+            for stats in run_stats_list
+            for value in [self._to_float(stats.get("sharpe_ratio"))]
+            if value is not None
+        ]
+        profit_loss_ratios = [
+            value
+            for stats in run_stats_list
+            for value in [self._to_float(stats.get("profit_loss_ratio"))]
+            if value is not None
+        ]
+        max_drawdowns = [
+            value
+            for stats in run_stats_list
+            for value in [self._to_float(stats.get("max_drawdown"))]
+            if value is not None
+        ]
         return {
             "annualized_return_avg": (
                 sum(annualized_values) / len(annualized_values) if annualized_values else None
@@ -795,7 +825,69 @@ class BacktestService:
                 sum(trades_per_year) / len(trades_per_year) if trades_per_year else None
             ),
             "win_rate_avg": sum(win_rates) / len(win_rates) if win_rates else None,
+            "sharpe_ratio_avg": (
+                sum(sharpe_ratios) / len(sharpe_ratios) if sharpe_ratios else None
+            ),
+            "profit_loss_ratio_avg": (
+                sum(profit_loss_ratios) / len(profit_loss_ratios)
+                if profit_loss_ratios
+                else None
+            ),
+            "excess_return_avg": None,
+            "max_drawdown_avg": (
+                sum(max_drawdowns) / len(max_drawdowns) if max_drawdowns else None
+            ),
         }
+
+    def _sharpe_ratio_from_assets(
+        self,
+        assets: list[float],
+        *,
+        initial_cash: float,
+    ) -> float | None:
+        if initial_cash <= 0 or not assets:
+            return None
+        values = [initial_cash, *assets]
+        returns = [
+            values[index] / values[index - 1] - 1.0
+            for index in range(1, len(values))
+            if values[index - 1] > 0 and values[index] > 0
+        ]
+        if len(returns) < 2:
+            return None
+        mean_return = sum(returns) / len(returns)
+        variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
+        std_dev = math.sqrt(variance)
+        if std_dev <= 0:
+            return None
+        return mean_return / std_dev * math.sqrt(252)
+
+    def _max_drawdown_from_assets(self, assets: list[float]) -> float | None:
+        peak: float | None = None
+        max_drawdown = 0.0
+        for asset in assets:
+            if asset <= 0 or not math.isfinite(asset):
+                continue
+            if peak is None or asset > peak:
+                peak = asset
+            if peak and peak > 0:
+                max_drawdown = max(max_drawdown, 1.0 - asset / peak)
+        return max_drawdown if peak is not None else None
+
+    def _profit_loss_ratio_from_sells(self, sell_rows: list[list[Any]]) -> float | None:
+        profits: list[float] = []
+        losses: list[float] = []
+        for row in sell_rows:
+            pnl = self._to_float(row[12] if len(row) > 12 else None)
+            if pnl is None:
+                continue
+            if pnl > 0:
+                profits.append(pnl)
+            elif pnl < 0:
+                losses.append(abs(pnl))
+        if not profits or not losses:
+            return None
+        return (sum(profits) / len(profits)) / (sum(losses) / len(losses))
 
     def _initial_max_high_since_buy(self, *, bar: Bar, buy_price: float) -> float:
         high = bar[1]

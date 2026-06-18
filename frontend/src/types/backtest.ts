@@ -26,6 +26,10 @@ export type BacktestTask = {
   annualized_return_avg: number | null;
   trades_per_year_avg: number | null;
   win_rate_avg: number | null;
+  sharpe_ratio_avg: number | null;
+  profit_loss_ratio_avg: number | null;
+  excess_return_avg: number | null;
+  max_drawdown_avg: number | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string | null;

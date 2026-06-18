@@ -24,6 +24,10 @@ class BacktestTaskDTO:
     annualized_return_avg: float | None
     trades_per_year_avg: float | None
     win_rate_avg: float | None
+    sharpe_ratio_avg: float | None
+    profit_loss_ratio_avg: float | None
+    excess_return_avg: float | None
+    max_drawdown_avg: float | None
     started_at: str | None
     finished_at: str | None
     created_at: str | None

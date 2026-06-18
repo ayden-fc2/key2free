@@ -1,2 +1,0 @@
-"""Volume and turnover indicators."""
-
