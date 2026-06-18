@@ -39,7 +39,7 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
   "backtest-stats": [{ key: "run", label: "回测任务" }],
 };
 
-const DEFAULT_STRATEGY_OPTIONS = [{ label: "demo", value: "demo" }];
+const DEFAULT_STRATEGY_OPTIONS = [{ label: "small_float_value", value: "small_float_value" }];
 
 const TUSHARE_ASSET_META: Record<
   string,
@@ -86,7 +86,7 @@ const TUSHARE_ASSET_META: Record<
 };
 
 function defaultSimulationRunsForStrategy(strategyName: string) {
-  return strategyName === "ma_bull_golden_bowl" ? 1 : 50;
+  return strategyName === "small_float_value" ? 1 : 50;
 }
 
 function formatNumber(value: number | null | undefined, digits = 2) {
@@ -169,7 +169,7 @@ export default function Home() {
   const [tushareRefreshEndDate, setTushareRefreshEndDate] = useState(resolveDefaultTushareEndDate);
   const [skipStkMins5min, setSkipStkMins5min] = useState(true);
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
-  const [dailySignalStrategy, setDailySignalStrategy] = useState("demo");
+  const [dailySignalStrategy, setDailySignalStrategy] = useState("small_float_value");
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
   const [dailySignalTask, setDailySignalTask] = useState<DailySignalTask | null>(null);
   const [dailySignalTaskModalOpen, setDailySignalTaskModalOpen] = useState(false);
@@ -180,9 +180,9 @@ export default function Home() {
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
   const [backtestInitialCash, setBacktestInitialCash] = useState(10000000);
-  const [backtestStrategy, setBacktestStrategy] = useState("demo");
+  const [backtestStrategy, setBacktestStrategy] = useState("small_float_value");
   const [backtestSimulationRuns, setBacktestSimulationRuns] = useState(
-    defaultSimulationRunsForStrategy("demo"),
+    defaultSimulationRunsForStrategy("small_float_value"),
   );
   const [backtestTask, setBacktestTask] = useState<BacktestTask | null>(null);
   const [backtestTasks, setBacktestTasks] = useState<BacktestTask[]>([]);

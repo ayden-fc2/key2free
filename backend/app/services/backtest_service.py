@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,10 +8,14 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from app.entities.stock_data_context import StockDailyFrame
 from app.dtos.backtest_dto import BacktestStartDTO, BacktestTaskDTO
 from app.repositories.backtest_repository import BacktestRepository
+from app.repositories.signal_repository import SignalRepository
 from app.services.signal_service import SignalService
+from app.services.signal_window import SIGNAL_WINDOW_BARS
 from app.services.strategy_registry import StrategyRegistration, get_strategy
+from app.services.strategy_lifecycle import MarketViews, StrategyContext
 
 
 Bar = tuple[float, ...]
@@ -60,20 +63,11 @@ class HoldingItem:
         }
 
 
-@dataclass(frozen=True)
-class SellAction:
-    reason: str  # stop_loss / take_profit_partial / take_profit_final
-    price: float
-    quantity: int
-    advance_level: bool
-
-
 class BacktestService:
     BUY_FEE_BPS = 5
     SELL_FEE_BPS = 10
     DEFAULT_SIMULATION_RUNS = 50
     STRATEGY_DEFAULT_SIMULATION_RUNS = {
-        "ma_bull_golden_bowl": 1,
         "small_float_value": 1,
     }
     SIMULATION_WORKERS = 10
@@ -217,17 +211,27 @@ class BacktestService:
                 start_date=trading_dates[0],
                 end_date=trading_dates[-1],
             )
+            history_frames = (
+                SignalRepository().load_stock_frames(
+                    codes=signal_codes,
+                    start_date=trading_dates[0],
+                    end_date=trading_dates[-1],
+                    window=SIGNAL_WINDOW_BARS,
+                    extra_columns=strategy.required_columns,
+                )
+                if strategy.lifecycle is not None
+                else None
+            )
             self.repository.append_task_log(
                 task_id,
                 f"行情装载完成: codes={len(signal_codes)}, 撮合主循环零 SQL",
             )
 
-            random_seed = time.time_ns()
             self.repository.append_task_log(
                 task_id,
                 (
-                    f"开始 {simulation_runs} 轮随机撮合: "
-                    f"seed={random_seed}, workers={self.SIMULATION_WORKERS}"
+                    f"开始 {simulation_runs} 轮生命周期回测: "
+                    f"workers={self.SIMULATION_WORKERS}"
                 ),
             )
             final_assets_by_run: dict[int, float] = {}
@@ -239,12 +243,12 @@ class BacktestService:
                         self._simulate,
                         task_id=task_id,
                         run_no=run_no,
-                        random_seed=random_seed,
                         trading_dates=trading_dates,
                         initial_cash=initial_cash,
                         strategy=strategy,
                         signals_by_date=signals_by_date,
                         prices=prices,
+                        history_frames=history_frames,
                     ): run_no
                     for run_no in range(1, simulation_runs + 1)
                 }
@@ -267,7 +271,7 @@ class BacktestService:
                         self.repository.append_task_log(
                             task_id,
                             (
-                                f"随机撮合完成 {completed_runs}/{simulation_runs}: "
+                                f"生命周期回测完成 {completed_runs}/{simulation_runs}: "
                                 f"run_no={run_no}, final_asset={final_asset:.2f}"
                             ),
                         )
@@ -312,13 +316,13 @@ class BacktestService:
         trading_dates: list[date],
         strategy_name: str,
     ) -> dict[date, list[dict[str, Any]]]:
-        self.repository.append_task_log(task_id, f"开始按股票维度预计算信号: {strategy_name}")
+        self.repository.append_task_log(task_id, f"开始按交易日预计算信号: {strategy_name}")
         daily_results = SignalService().get_signals_for_dates_by_stock(
             trade_dates=trading_dates,
             strategy_name=strategy_name,
             progress_callback=lambda done, total: self.repository.append_task_log(
                 task_id,
-                f"股票维度信号预计算进度: {done}/{total}",
+                f"交易日信号预计算进度: {done}/{total}",
             ),
             progress_interval=100,
         )
@@ -368,147 +372,207 @@ class BacktestService:
         *,
         task_id: int,
         run_no: int,
-        random_seed: int,
         trading_dates: list[date],
         initial_cash: float,
         strategy: StrategyRegistration,
         signals_by_date: dict[date, list[dict[str, Any]]],
         prices: dict[str, dict[date, Bar]],
+        history_frames: dict[str, StockDailyFrame] | None = None,
     ) -> tuple[float, dict[str, int]]:
+        return self._simulate_lifecycle(
+            task_id=task_id,
+            run_no=run_no,
+            trading_dates=trading_dates,
+            initial_cash=initial_cash,
+            strategy=strategy,
+            signals_by_date=signals_by_date,
+            prices=prices,
+            history_frames=history_frames or {},
+        )
+
+    def _simulate_lifecycle(
+        self,
+        *,
+        task_id: int,
+        run_no: int,
+        trading_dates: list[date],
+        initial_cash: float,
+        strategy: StrategyRegistration,
+        signals_by_date: dict[date, list[dict[str, Any]]],
+        prices: dict[str, dict[date, Bar]],
+        history_frames: dict[str, StockDailyFrame] | None = None,
+    ) -> tuple[float, dict[str, int]]:
+        lifecycle = strategy.lifecycle
+        if lifecycle is None:
+            raise RuntimeError("strategy lifecycle is required")
+
         cash = initial_cash
         holdings: dict[str, HoldingItem] = {}
         watch_pool: dict[str, WatchItem] = {}
         buy_rows: list[list[Any]] = []
         sell_rows: list[list[Any]] = []
         snapshot_rows: list[list[Any]] = []
-        total_asset = initial_cash
         run_stats = {"buys": 0, "closed": 0, "wins": 0}
+        trade_records: dict[str, Any] = {"buys": buy_rows, "sells": sell_rows}
+        total_asset = initial_cash
 
         for trade_index, trade_date in enumerate(trading_dates):
-            if strategy.rebalance_mode == "daily_target_open":
-                if (
-                    strategy.rebalance_weekday is not None
-                    and trade_date.weekday() != strategy.rebalance_weekday
-                ):
-                    cash = self._process_limit_break_exits(
-                        task_id=task_id,
-                        run_no=run_no,
-                        trade_date=trade_date,
-                        trade_index=trade_index,
-                        cash=cash,
-                        holdings=holdings,
-                        prices=prices,
-                        strategy=strategy,
-                        sell_rows=sell_rows,
-                        run_stats=run_stats,
-                    )
-                    market_value = 0.0
-                    for holding in holdings.values():
-                        close_price = self._bar_close(prices.get(holding.code, {}).get(trade_date))
-                        price = close_price if close_price is not None else holding.buy_price
-                        market_value += price * holding.quantity
-                    total_asset = cash + market_value
-                    snapshot_rows.append(
-                        [
-                            task_id,
-                            run_no,
-                            trade_date,
-                            total_asset,
-                            cash,
-                            market_value,
-                            len(holdings),
-                            0,
-                            self.repository.to_json([item.to_snapshot() for item in holdings.values()]),
-                            self.repository.to_json([]),
-                        ]
-                    )
+            market = self._build_market_views(
+                prices=prices,
+                trade_date=trade_date,
+                history_frames=history_frames or {},
+            )
+            total_asset = self._mark_total_asset(
+                cash=cash,
+                holdings=holdings,
+                prices=prices,
+                trade_date=trade_date,
+                prefer_open=True,
+            )
+            context = StrategyContext(
+                trade_date=trade_date,
+                trade_index=trade_index,
+                cash=cash,
+                total_asset=total_asset,
+                holdings=holdings,
+                watch_pool=watch_pool,
+                trade_records=trade_records,
+            )
+
+            for decision in lifecycle.decide_sells(context=context, market=market):
+                holding = holdings.get(decision.code)
+                if holding is None:
                     continue
-                rebalance_signals = (
-                    []
-                    if trade_index == 0
-                    else signals_by_date.get(trading_dates[trade_index - 1], [])
-                )
-                cash = self._process_daily_target_rebalance(
-                    task_id=task_id,
-                    run_no=run_no,
-                    random_seed=random_seed,
-                    trade_date=trade_date,
-                    trade_index=trade_index,
-                    cash=cash,
-                    holdings=holdings,
-                    signals=rebalance_signals,
-                    prices=prices,
-                    strategy=strategy,
-                    buy_rows=buy_rows,
-                    sell_rows=sell_rows,
-                    run_stats=run_stats,
-                )
-                cash = self._process_limit_break_exits(
+                if decision.price <= 0 or not math.isfinite(decision.price):
+                    continue
+                cash = self._sell_holding(
                     task_id=task_id,
                     run_no=run_no,
                     trade_date=trade_date,
-                    trade_index=trade_index,
                     cash=cash,
                     holdings=holdings,
-                    prices=prices,
-                    strategy=strategy,
+                    code=decision.code,
+                    holding=holding,
+                    price=decision.price,
+                    quantity=decision.quantity,
+                    reason=decision.reason,
                     sell_rows=sell_rows,
                     run_stats=run_stats,
                 )
-                market_value = 0.0
-                for holding in holdings.values():
-                    close_price = self._bar_close(prices.get(holding.code, {}).get(trade_date))
-                    price = close_price if close_price is not None else holding.buy_price
-                    market_value += price * holding.quantity
-                total_asset = cash + market_value
-                snapshot_rows.append(
+
+            total_asset = self._mark_total_asset(
+                cash=cash,
+                holdings=holdings,
+                prices=prices,
+                trade_date=trade_date,
+                prefer_open=True,
+            )
+            context = StrategyContext(
+                trade_date=trade_date,
+                trade_index=trade_index,
+                cash=cash,
+                total_asset=total_asset,
+                holdings=holdings,
+                watch_pool=watch_pool,
+                trade_records=trade_records,
+            )
+
+            for decision in lifecycle.decide_buys(context=context, market=market):
+                signal_for_order = self._with_buy_research_fields(
+                    signal=decision.signal,
+                    buy_price=decision.price,
+                )
+                if decision.code in holdings:
+                    holding = holdings[decision.code]
+                    quantity = decision.quantity
+                    if quantity <= 0:
+                        continue
+                    amount = decision.price * quantity
+                    fee = amount * self.BUY_FEE_BPS / 10000
+                    if amount + fee > cash:
+                        continue
+                    cash -= amount + fee
+                    total_cost = holding.buy_price * holding.quantity + amount
+                    holding.quantity += quantity
+                    holding.buy_price = total_cost / holding.quantity
+                    holding.buy_fee += fee
+                    holding.signal = signal_for_order
+                    holding.max_high_since_buy = max(
+                        holding.max_high_since_buy,
+                        self._initial_max_high_since_buy(
+                            bar=market.today_bars.get(decision.code, (decision.price,) * 6),
+                            buy_price=decision.price,
+                        ),
+                    )
+                else:
+                    if decision.quantity <= 0:
+                        continue
+                    amount = decision.price * decision.quantity
+                    fee = amount * self.BUY_FEE_BPS / 10000
+                    if amount + fee > cash:
+                        continue
+                    cash -= amount + fee
+                    holdings[decision.code] = HoldingItem(
+                        code=decision.code,
+                        code_name=decision.code_name,
+                        buy_date=trade_date,
+                        buy_trade_index=trade_index,
+                        buy_price=decision.price,
+                        quantity=decision.quantity,
+                        buy_fee=fee,
+                        level=0,
+                        stop_losses=[],
+                        take_profits=[],
+                        max_high_since_buy=self._initial_max_high_since_buy(
+                            bar=market.today_bars.get(decision.code, (decision.price,) * 6),
+                            buy_price=decision.price,
+                        ),
+                        signal=signal_for_order,
+                    )
+                buy_rows.append(
                     [
                         task_id,
                         run_no,
                         trade_date,
-                        total_asset,
+                        decision.code,
+                        decision.code_name,
+                        decision.price,
+                        decision.quantity,
+                        decision.price * decision.quantity,
+                        decision.price * decision.quantity * self.BUY_FEE_BPS / 10000,
                         cash,
-                        market_value,
-                        len(holdings),
-                        0,
-                        self.repository.to_json([item.to_snapshot() for item in holdings.values()]),
-                        self.repository.to_json([]),
+                        self.repository.to_json(signal_for_order),
                     ]
                 )
-                continue
+                watch_pool.pop(decision.code, None)
 
-            # 1. 处理持仓池（跳过当日刚买入的，先止损后止盈的阶梯引擎）
-            cash = self._process_sells(
-                task_id=task_id,
-                run_no=run_no,
+            context = StrategyContext(
                 trade_date=trade_date,
                 trade_index=trade_index,
                 cash=cash,
-                holdings=holdings,
-                prices=prices,
-                strategy=strategy,
-                sell_rows=sell_rows,
-                run_stats=run_stats,
-            )
-            # 2. 处理观望池（跳过当日刚加入的，signal_close 限价买入）
-            cash = self._process_watches(
-                task_id=task_id,
-                run_no=run_no,
-                random_seed=random_seed,
-                trade_date=trade_date,
-                trade_index=trade_index,
-                cash=cash,
+                total_asset=self._mark_total_asset(
+                    cash=cash,
+                    holdings=holdings,
+                    prices=prices,
+                    trade_date=trade_date,
+                    prefer_open=False,
+                ),
                 holdings=holdings,
                 watch_pool=watch_pool,
-                prices=prices,
-                strategy=strategy,
-                buy_rows=buy_rows,
+                trade_records=trade_records,
             )
-            # 3. 当日新信号加入观望池（不允许当天买入）
-            for signal_item in signals_by_date.get(trade_date, []):
-                code = signal_item["code"]
-                if code in holdings or code in watch_pool:
-                    continue
+            watch_decision = lifecycle.update_watch_pool(
+                context=context,
+                raw_signals=signals_by_date.get(trade_date, []),
+            )
+            for code in watch_decision.remove:
+                watch_pool.pop(code, None)
+            if watch_decision.keep:
+                for code in list(watch_pool):
+                    if code not in watch_decision.keep:
+                        watch_pool.pop(code, None)
+            for signal_item in watch_decision.add:
+                code = str(signal_item["code"])
                 signal = signal_item.get("signal") or {}
                 watch_pool[code] = WatchItem(
                     code=code,
@@ -519,13 +583,14 @@ class BacktestService:
                     max_watch_days=signal.get("max_watch_days"),
                     signal=signal,
                 )
-            # 4. 每日快照（收盘价估值，内存累积）
-            market_value = 0.0
-            for holding in holdings.values():
-                close_price = self._bar_close(prices.get(holding.code, {}).get(trade_date))
-                price = close_price if close_price is not None else holding.buy_price
-                market_value += price * holding.quantity
-            total_asset = cash + market_value
+
+            total_asset = self._mark_total_asset(
+                cash=cash,
+                holdings=holdings,
+                prices=prices,
+                trade_date=trade_date,
+                prefer_open=False,
+            )
             snapshot_rows.append(
                 [
                     task_id,
@@ -533,7 +598,7 @@ class BacktestService:
                     trade_date,
                     total_asset,
                     cash,
-                    market_value,
+                    total_asset - cash,
                     len(holdings),
                     len(watch_pool),
                     self.repository.to_json([item.to_snapshot() for item in holdings.values()]),
@@ -558,301 +623,6 @@ class BacktestService:
         run_stats["buys"] = len(buy_rows)
         return total_asset, run_stats
 
-    def _process_daily_target_rebalance(
-        self,
-        *,
-        task_id: int,
-        run_no: int,
-        random_seed: int,
-        trade_date: date,
-        trade_index: int,
-        cash: float,
-        holdings: dict[str, HoldingItem],
-        signals: list[dict[str, Any]],
-        prices: dict[str, dict[date, Bar]],
-        strategy: StrategyRegistration,
-        buy_rows: list[list[Any]],
-        sell_rows: list[list[Any]],
-        run_stats: dict[str, int],
-    ) -> float:
-        target_size = strategy.portfolio_target_size or len(signals)
-        target_by_code = {
-            str(item["code"]): item
-            for item in signals[:target_size]
-            if item.get("code") is not None
-        }
-        target_codes = set(target_by_code)
-
-        for code, holding in list(holdings.items()):
-            if code in target_codes:
-                continue
-            bar = prices.get(code, {}).get(trade_date)
-            if not self._is_tradeable(bar):
-                continue
-            if self._is_open_limit_up(bar):
-                continue
-            sell_price = bar[0]
-            if sell_price <= 0 or not math.isfinite(sell_price):
-                continue
-            cash = self._sell_holding(
-                task_id=task_id,
-                run_no=run_no,
-                trade_date=trade_date,
-                cash=cash,
-                holdings=holdings,
-                code=code,
-                holding=holding,
-                price=sell_price,
-                quantity=holding.quantity,
-                reason="rebalance_open",
-                sell_rows=sell_rows,
-                run_stats=run_stats,
-            )
-
-        market_value = 0.0
-        for holding in holdings.values():
-            open_price = self._bar_open(prices.get(holding.code, {}).get(trade_date))
-            price = open_price if open_price is not None else holding.buy_price
-            market_value += price * holding.quantity
-        total_asset = cash + market_value
-
-        target_amount = total_asset / max(target_size, 1)
-        for code, holding in list(holdings.items()):
-            if code not in target_codes:
-                continue
-            bar = prices.get(code, {}).get(trade_date)
-            if not self._is_tradeable(bar):
-                continue
-            if self._is_open_limit_up(bar):
-                continue
-            open_price = bar[0]
-            if open_price <= 0 or not math.isfinite(open_price):
-                continue
-            current_amount = open_price * holding.quantity
-            excess_amount = current_amount - target_amount
-            if excess_amount < open_price * 100:
-                continue
-            sell_quantity = int(excess_amount // (open_price * 100)) * 100
-            if sell_quantity <= 0:
-                continue
-            cash = self._sell_holding(
-                task_id=task_id,
-                run_no=run_no,
-                trade_date=trade_date,
-                cash=cash,
-                holdings=holdings,
-                code=code,
-                holding=holding,
-                price=open_price,
-                quantity=sell_quantity,
-                reason="rebalance_trim_open",
-                sell_rows=sell_rows,
-                run_stats=run_stats,
-            )
-
-        candidates = list(target_by_code.values())
-        candidates.sort(
-            key=lambda item: (
-                self._positive_int(self._signal_value(item.get("signal") or {}, "target_rank")) or 999999,
-                str(item["code"]),
-            )
-        )
-        for item in candidates:
-            code = item["code"]
-            bar = prices.get(code, {}).get(trade_date)
-            if not self._is_tradeable(bar):
-                continue
-            existing_holding = holdings.get(code)
-            if existing_holding is None and len(holdings) >= target_size:
-                continue
-            if self._is_open_limit_move(bar):
-                continue
-            previous_bar = self._previous_bar(prices.get(code, {}), trade_date)
-            if self._is_limit_move(previous_bar):
-                continue
-            buy_price = bar[0]
-            if buy_price <= 0 or not math.isfinite(buy_price):
-                continue
-            current_quantity = existing_holding.quantity if existing_holding is not None else 0
-            current_amount = current_quantity * buy_price
-            missing_amount = target_amount - current_amount
-            if missing_amount < buy_price * 100:
-                continue
-            quantity = self._resolve_fixed_amount_quantity(
-                cash=cash,
-                buy_price=buy_price,
-                amount=missing_amount,
-            )
-            if quantity <= 0:
-                continue
-            amount = buy_price * quantity
-            fee = amount * self.BUY_FEE_BPS / 10000
-            if amount + fee > cash:
-                continue
-            cash -= amount + fee
-            signal = item.get("signal") or {}
-            signal_for_order = self._with_buy_research_fields(
-                signal=signal,
-                buy_price=buy_price,
-            )
-            if existing_holding is None:
-                holdings[code] = HoldingItem(
-                    code=code,
-                    code_name=item.get("code_name"),
-                    buy_date=trade_date,
-                    buy_trade_index=trade_index,
-                    buy_price=buy_price,
-                    quantity=quantity,
-                    buy_fee=fee,
-                    level=0,
-                    stop_losses=[],
-                    take_profits=[],
-                    max_high_since_buy=self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
-                    signal=signal_for_order,
-                )
-            else:
-                total_cost = existing_holding.buy_price * existing_holding.quantity + amount
-                existing_holding.quantity += quantity
-                existing_holding.buy_price = total_cost / existing_holding.quantity
-                existing_holding.buy_fee += fee
-                existing_holding.signal = signal_for_order
-                existing_holding.max_high_since_buy = max(
-                    existing_holding.max_high_since_buy,
-                    self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
-                )
-            buy_rows.append(
-                [
-                    task_id,
-                    run_no,
-                    trade_date,
-                    code,
-                    item.get("code_name"),
-                    buy_price,
-                    quantity,
-                    amount,
-                    fee,
-                    cash,
-                    self.repository.to_json(signal_for_order),
-                ]
-            )
-        return cash
-
-    def _process_limit_break_exits(
-        self,
-        *,
-        task_id: int,
-        run_no: int,
-        trade_date: date,
-        trade_index: int,
-        cash: float,
-        holdings: dict[str, HoldingItem],
-        prices: dict[str, dict[date, Bar]],
-        strategy: StrategyRegistration,
-        sell_rows: list[list[Any]],
-        run_stats: dict[str, int],
-    ) -> float:
-        if not strategy.limit_break_exit or trade_index <= 0:
-            return cash
-        for code, holding in list(holdings.items()):
-            if holding.buy_trade_index >= trade_index:
-                continue
-            code_prices = prices.get(code, {})
-            previous_bar = None
-            previous_trade_date = None
-            for candidate_date, candidate_bar in code_prices.items():
-                if candidate_date < trade_date and (
-                    previous_trade_date is None or candidate_date > previous_trade_date
-                ):
-                    previous_trade_date = candidate_date
-                    previous_bar = candidate_bar
-            current_bar = code_prices.get(trade_date)
-            if previous_bar is None or current_bar is None:
-                continue
-            if not self._is_tradeable(current_bar):
-                continue
-            if not self._is_limit_up(previous_bar):
-                continue
-            if self._is_limit_up(current_bar):
-                continue
-            sell_price = self._bar_close(current_bar)
-            if sell_price is None or sell_price <= 0:
-                continue
-            cash = self._sell_holding(
-                task_id=task_id,
-                run_no=run_no,
-                trade_date=trade_date,
-                cash=cash,
-                holdings=holdings,
-                code=code,
-                holding=holding,
-                price=sell_price,
-                quantity=holding.quantity,
-                reason="limit_break_close",
-                sell_rows=sell_rows,
-                run_stats=run_stats,
-            )
-        return cash
-
-    def _process_sells(
-        self,
-        *,
-        task_id: int,
-        run_no: int,
-        trade_date: date,
-        trade_index: int,
-        cash: float,
-        holdings: dict[str, HoldingItem],
-        prices: dict[str, dict[date, Bar]],
-        strategy: StrategyRegistration,
-        sell_rows: list[list[Any]],
-        run_stats: dict[str, int],
-    ) -> float:
-        for code, holding in list(holdings.items()):
-            if holding.buy_date >= trade_date:
-                continue
-            bar = prices.get(code, {}).get(trade_date)
-            if not self._is_tradeable(bar):
-                continue
-            if strategy.exit_strategy is not None:
-                actions = [
-                    self._call_exit_strategy(
-                        strategy=strategy,
-                        bar=bar,
-                        holding=holding,
-                        trade_index=trade_index,
-                    )
-                ]
-            else:
-                actions = self._ladder_exit_actions(
-                    bar=bar,
-                    holding=holding,
-                    trade_index=trade_index,
-                    max_holding_days=strategy.max_holding_days,
-                    time_exit_price=strategy.time_exit_price,
-                )
-            for action in actions:
-                if action is None or code not in holdings:
-                    continue
-                sell_quantity = min(action.quantity, holding.quantity)
-                if sell_quantity <= 0:
-                    continue
-                cash = self._sell_holding(
-                    task_id=task_id,
-                    run_no=run_no,
-                    trade_date=trade_date,
-                    cash=cash,
-                    holdings=holdings,
-                    code=code,
-                    holding=holding,
-                    price=action.price,
-                    quantity=sell_quantity,
-                    reason=action.reason,
-                    sell_rows=sell_rows,
-                    run_stats=run_stats,
-                    advance_level=action.advance_level,
-                )
-        return cash
-
     def _sell_holding(
         self,
         *,
@@ -868,8 +638,9 @@ class BacktestService:
         reason: str,
         sell_rows: list[list[Any]],
         run_stats: dict[str, int],
-        advance_level: bool = False,
     ) -> float:
+        if holding.buy_date >= trade_date:
+            return cash
         sell_quantity = min(quantity, holding.quantity)
         if sell_quantity <= 0:
             return cash
@@ -907,230 +678,77 @@ class BacktestService:
         else:
             holding.quantity -= sell_quantity
             holding.buy_fee -= buy_fee_part
-            if advance_level:
-                holding.level += 1
         return cash
 
-    def _call_exit_strategy(
+    def _build_market_views(
         self,
         *,
-        strategy: StrategyRegistration,
-        bar: Bar,
-        holding: HoldingItem,
-        trade_index: int,
-    ) -> Any:
-        if strategy.exit_strategy is None:
-            return None
-        try:
-            return strategy.exit_strategy(
-                bar=bar,
-                holding=holding,
-                trade_index=trade_index,
-            )
-        except TypeError as exc:
-            if "trade_index" not in str(exc):
-                raise
-            return strategy.exit_strategy(bar=bar, holding=holding)
-
-    def _ladder_exit_actions(
-        self,
-        *,
-        bar: Bar,
-        holding: HoldingItem,
-        trade_index: int,
-        max_holding_days: int | None,
-        time_exit_price: str = "close",
-    ) -> list[SellAction]:
-        """Generic ladder exit engine for take profit, stop loss, and time stops."""
-        open_price, high, _low, close, _vol, _pct = bar[:6]
-        actions: list[SellAction] = []
-        level = holding.level
-        remaining = holding.quantity
-        if math.isfinite(high):
-            holding.max_high_since_buy = max(holding.max_high_since_buy, high)
-
-        take = holding.take_profits[level] if level < len(holding.take_profits) else None
-        if take is not None and math.isfinite(take) and (open_price >= take or high >= take):
-            price = open_price if open_price >= take else take
-            is_last_level = level >= len(holding.take_profits) - 1
-            half = math.ceil(remaining / 2 / 100) * 100
-            if is_last_level or half >= remaining:
-                return [SellAction("take_profit_final", price, remaining, False)]
-            actions.append(SellAction("take_profit_partial", price, half, True))
-            remaining -= half
-            level += 1
-
-        stop = holding.stop_losses[level] if level < len(holding.stop_losses) else None
-        if stop is not None and math.isfinite(stop) and close <= stop:
-            actions.append(SellAction("stop_loss", close, remaining, False))
-            return actions
-
-        failed_start_days = self._positive_int(self._signal_value(holding.signal, "failed_start_days"))
-        failed_start_close_return_ratio = self._to_float(
-            self._signal_value(holding.signal, "failed_start_close_return_ratio")
-        )
-        if (
-            failed_start_days is not None
-            and failed_start_close_return_ratio is not None
-            and failed_start_close_return_ratio > 0
-            and trade_index - holding.buy_trade_index >= failed_start_days - 1
-            and math.isfinite(close)
-            and close < holding.buy_price * failed_start_close_return_ratio
-        ):
-            actions.append(SellAction("failed_start_time_stop", close, remaining, False))
-            return actions
-
-        failed_start_return_ratio = self._to_float(
-            self._signal_value(holding.signal, "failed_start_return_ratio")
-        )
-        if (
-            failed_start_days is not None
-            and failed_start_return_ratio is not None
-            and failed_start_return_ratio > 0
-            and trade_index - holding.buy_trade_index >= failed_start_days - 1
-            and holding.max_high_since_buy < holding.buy_price * failed_start_return_ratio
-        ):
-            actions.append(SellAction("failed_start_time_stop", close, remaining, False))
-            return actions
-
-        if (
-            max_holding_days is not None
-            and trade_index - holding.buy_trade_index >= max_holding_days
-        ):
-            price = open_price if time_exit_price == "open" else close
-            actions.append(SellAction(f"time_stop_{time_exit_price}", price, remaining, False))
-        return actions
-
-    def _process_watches(
-        self,
-        *,
-        task_id: int,
-        run_no: int,
-        random_seed: int,
+        prices: dict[str, dict[date, Bar]],
         trade_date: date,
-        trade_index: int,
+        history_frames: dict[str, StockDailyFrame] | None = None,
+    ) -> MarketViews:
+        today_bars: dict[str, Bar] = {}
+        previous_bars: dict[str, Bar] = {}
+        for code, code_prices in prices.items():
+            bar = code_prices.get(trade_date)
+            if bar is not None:
+                today_bars[code] = bar
+            previous_bar = self._previous_bar(code_prices, trade_date)
+            if previous_bar is not None:
+                previous_bars[code] = previous_bar
+        return MarketViews(
+            today_bars=today_bars,
+            previous_bars=previous_bars,
+            history_by_code=self._slice_history_frames(
+                history_frames=history_frames or {},
+                trade_date=trade_date,
+            ),
+        )
+
+    def _slice_history_frames(
+        self,
+        *,
+        history_frames: dict[str, StockDailyFrame],
+        trade_date: date,
+    ) -> dict[str, StockDailyFrame]:
+        result: dict[str, StockDailyFrame] = {}
+        for code, frame in history_frames.items():
+            end = 0
+            for index, day in enumerate(frame.trade_dates):
+                if day >= trade_date:
+                    break
+                end = index + 1
+            if end <= 0:
+                continue
+            start = max(0, end - SIGNAL_WINDOW_BARS)
+            result[code] = StockDailyFrame(
+                code=frame.code,
+                trade_dates=frame.trade_dates[start:end],
+                columns={
+                    column: values[start:end]
+                    for column, values in frame.columns.items()
+                },
+            )
+        return result
+
+    def _mark_total_asset(
+        self,
+        *,
         cash: float,
         holdings: dict[str, HoldingItem],
-        watch_pool: dict[str, WatchItem],
         prices: dict[str, dict[date, Bar]],
-        strategy: StrategyRegistration,
-        buy_rows: list[list[Any]],
+        trade_date: date,
+        prefer_open: bool,
     ) -> float:
-        items = list(watch_pool.values())
-        random.Random(f"{random_seed}:{run_no}:{trade_date.isoformat()}").shuffle(items)
-        for item in items:
-            if item.added_date >= trade_date:
-                continue
-            # 超过最长观望时长（T+1、T+2 之外）直接移出，不再尝试买入
-            if (
-                item.max_watch_days is not None
-                and trade_index - item.added_trade_index > item.max_watch_days
-            ):
-                watch_pool.pop(item.code, None)
-                continue
-            bar = prices.get(item.code, {}).get(trade_date)
-            if not self._is_tradeable(bar):
-                continue
-            if strategy.entry_strategy is not None:
-                buy_price = strategy.entry_strategy(bar=bar, watch=item)
-            elif strategy.entry_mode == "next_open":
-                buy_price = bar[0]  # 次日开盘市价买入
+        market_value = 0.0
+        for holding in holdings.values():
+            bar = prices.get(holding.code, {}).get(trade_date)
+            if prefer_open:
+                price = self._bar_open(bar)
             else:
-                buy_price = self._default_entry(bar=bar, watch=item)
-            if buy_price is None or buy_price <= 0 or not math.isfinite(buy_price):
-                continue
-            # 成交时落定止损/止盈价位（依赖成交价的策略由 exit_plan_builder 填充）
-            if strategy.exit_plan_builder is not None:
-                exit_plan = strategy.exit_plan_builder(buy_price, item.signal)
-                if exit_plan is None:
-                    continue
-                stop_losses, take_profits = exit_plan
-            else:
-                stop_losses = [
-                    float(value)
-                    for value in (item.signal.get("stop_losses") or [])
-                    if isinstance(value, (int, float))
-                ]
-                take_profits = [
-                    float(value)
-                    for value in (item.signal.get("take_profits") or [])
-                    if isinstance(value, (int, float))
-                ]
-            total_asset = cash
-            for holding in holdings.values():
-                open_price = self._bar_open(prices.get(holding.code, {}).get(trade_date))
-                price = open_price if open_price is not None else holding.buy_price
-                total_asset += price * holding.quantity
-            if strategy.position_sizing == "fraction":
-                quantity = self._resolve_fraction_quantity(
-                    cash=cash,
-                    total_asset=total_asset,
-                    buy_price=buy_price,
-                    fraction=strategy.position_fraction,
-                )
-            elif strategy.position_sizing == "fixed_amount":
-                quantity = self._resolve_fixed_amount_quantity(
-                    cash=cash,
-                    buy_price=buy_price,
-                    amount=strategy.position_amount,
-                )
-            else:
-                risk_price = (
-                    item.signal_close
-                    if strategy.risk_price_basis == "signal_close"
-                    else buy_price
-                )
-                quantity = self._resolve_buy_quantity(
-                    cash=cash,
-                    total_asset=total_asset,
-                    buy_price=buy_price,
-                    risk_price=risk_price,
-                    first_stop=stop_losses[0] if stop_losses else None,
-                    risk_per_trade=strategy.risk_per_trade,
-                    position_cap_fraction=strategy.position_cap_fraction,
-                )
-            if quantity <= 0:
-                continue
-            amount = buy_price * quantity
-            fee = amount * self.BUY_FEE_BPS / 10000
-            if amount + fee > cash:
-                continue
-            cash -= amount + fee
-            signal_for_order = self._with_buy_research_fields(
-                signal=item.signal,
-                buy_price=buy_price,
-            )
-            holdings[item.code] = HoldingItem(
-                code=item.code,
-                code_name=item.code_name,
-                buy_date=trade_date,
-                buy_trade_index=trade_index,
-                buy_price=buy_price,
-                quantity=quantity,
-                buy_fee=fee,
-                level=0,
-                stop_losses=[float(value) for value in stop_losses],
-                take_profits=[float(value) for value in take_profits],
-                max_high_since_buy=self._initial_max_high_since_buy(bar=bar, buy_price=buy_price),
-                signal=signal_for_order,
-            )
-            watch_pool.pop(item.code, None)
-            buy_rows.append(
-                [
-                    task_id,
-                    run_no,
-                    trade_date,
-                    item.code,
-                    item.code_name,
-                    buy_price,
-                    quantity,
-                    amount,
-                    fee,
-                    cash,
-                    self.repository.to_json(signal_for_order),
-                ]
-            )
-        return cash
+                price = self._bar_close(bar)
+            market_value += (price if price is not None else holding.buy_price) * holding.quantity
+        return cash + market_value
 
     def _with_buy_research_fields(
         self,
@@ -1179,149 +797,11 @@ class BacktestService:
             "win_rate_avg": sum(win_rates) / len(win_rates) if win_rates else None,
         }
 
-    def _resolve_buy_quantity(
-        self,
-        *,
-        cash: float,
-        total_asset: float,
-        buy_price: float,
-        risk_price: float | None,
-        first_stop: float | None,
-        risk_per_trade: float,
-        position_cap_fraction: float | None,
-    ) -> int:
-        """风险敞口定仓：最坏止损亏损 <= 总资产 * risk_per_trade，取最大百股仓位。
-
-        - 没有第一止损位、或买入价已不高于止损位（风险无法界定）时不买。
-        - 可选叠加单笔市值上限 position_cap_fraction。
-        - 同时受可用现金约束（含买入手续费）。
-        """
-        if buy_price <= 0 or risk_price is None or first_stop is None:
-            return 0
-        risk_per_share = risk_price - first_stop
-        if risk_per_share <= 0:
-            return 0
-        max_risk_amount = total_asset * risk_per_trade
-        lots_by_risk = int(max_risk_amount // (risk_per_share * 100))
-        cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
-        lots_by_cash = int(cash // cost_per_lot)
-        lot_limits = [lots_by_risk, lots_by_cash]
-        if position_cap_fraction is not None:
-            if position_cap_fraction <= 0:
-                return 0
-            lots_by_cap = int((total_asset * position_cap_fraction) // (buy_price * 100))
-            lot_limits.append(lots_by_cap)
-        return max(min(lot_limits), 0) * 100
-
-    def _resolve_fraction_quantity(
-        self,
-        *,
-        cash: float,
-        total_asset: float,
-        buy_price: float,
-        fraction: float,
-    ) -> int:
-        """固定比例定仓：单笔股票市值 <= 总资产 * fraction，受可用现金（含手续费）约束。"""
-        if buy_price <= 0 or fraction <= 0:
-            return 0
-        budget = total_asset * fraction
-        cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
-        lots_by_budget = int(budget // (buy_price * 100))
-        lots_by_cash = int(cash // cost_per_lot)
-        return max(min(lots_by_budget, lots_by_cash), 0) * 100
-
-    def _resolve_fixed_amount_quantity(
-        self,
-        *,
-        cash: float,
-        buy_price: float,
-        amount: float | None,
-    ) -> int:
-        """固定金额定仓：单笔市值 <= amount，按 100 股一手尽可能多买。"""
-        if buy_price <= 0 or amount is None or amount <= 0:
-            return 0
-        cost_per_lot = buy_price * 100 * (1 + self.BUY_FEE_BPS / 10000)
-        lots_by_amount = int(amount // (buy_price * 100))
-        lots_by_cash = int(cash // cost_per_lot)
-        return max(min(lots_by_amount, lots_by_cash), 0) * 100
-
     def _initial_max_high_since_buy(self, *, bar: Bar, buy_price: float) -> float:
         high = bar[1]
         if math.isfinite(high):
             return max(high, buy_price)
         return buy_price
-
-    def _default_entry(self, *, bar: Bar, watch: WatchItem) -> float | None:
-        """框架默认入场：以 signal_close 为限价买单。
-
-        开盘价 <= signal_close 时按开盘价成交（低开买得更便宜）；
-        否则盘中触及 signal_close（low <= signal_close）按 signal_close 成交。
-        """
-        signal_close = watch.signal_close
-        if signal_close is None or signal_close <= 0:
-            return None
-        open_price, _high, low, _close, _vol, _pct = bar[:6]
-        if open_price <= signal_close:
-            return open_price
-        if low <= signal_close:
-            return signal_close
-        return None
-
-    def _is_tradeable(self, bar: Bar | None) -> bool:
-        """撮合边界：停牌（无行情/零量）与一字板（open==high==low==close）不可交易。"""
-        if bar is None:
-            return False
-        open_price, high, low, close, vol, _pct = bar[:6]
-        if not (
-            math.isfinite(open_price)
-            and math.isfinite(high)
-            and math.isfinite(low)
-            and math.isfinite(close)
-        ):
-            return False
-        if not math.isfinite(vol) or vol <= 0:
-            return False
-        if open_price == high == low == close:
-            return False
-        return True
-
-    def _is_limit_up(self, bar: Bar | None) -> bool:
-        if bar is None or len(bar) < 6:
-            return False
-        pct_chg = bar[5]
-        return math.isfinite(pct_chg) and pct_chg >= 9.8
-
-    def _is_limit_move(self, bar: Bar | None) -> bool:
-        if bar is None or len(bar) < 6:
-            return False
-        pct_chg = bar[5]
-        return math.isfinite(pct_chg) and abs(pct_chg) >= 9.8
-
-    def _is_open_limit_move(self, bar: Bar | None) -> bool:
-        if bar is None or len(bar) < 8:
-            return False
-        open_price = bar[0]
-        pre_close = bar[7]
-        if not (
-            math.isfinite(open_price)
-            and math.isfinite(pre_close)
-            and pre_close > 0
-        ):
-            return False
-        return abs(open_price / pre_close - 1.0) >= 0.098
-
-    def _is_open_limit_up(self, bar: Bar | None) -> bool:
-        if bar is None or len(bar) < 8:
-            return False
-        open_price = bar[0]
-        pre_close = bar[7]
-        if not (
-            math.isfinite(open_price)
-            and math.isfinite(pre_close)
-            and pre_close > 0
-        ):
-            return False
-        return open_price / pre_close - 1.0 >= 0.098
 
     def _previous_bar(
         self,

@@ -313,11 +313,12 @@ class SignalRepository:
             ).fetchall()
         return {row[0]: int(row[1]) for row in rows if isinstance(row[0], date)}
 
-    def load_portfolio_selection_rows(
+    def load_signal_selection_rows(
         self,
         *,
         start_date: date,
         end_date: date,
+        window: int = 200,
         code_filter: Any | None = None,
     ) -> Any:
         from app.repositories.tushare_repository import TushareRepository
@@ -326,26 +327,45 @@ class SignalRepository:
         with self.duckdb.connect(read_only=True) as connection:
             frame = connection.execute(
                 """
-                select
-                    trade_date,
-                    code,
-                    name,
-                    close,
-                    qfq_open,
-                    qfq_close,
-                    vol,
-                    pct_chg,
-                    is_st,
-                    list_date,
-                    eps,
-                    total_mv,
-                    circ_mv
-                from tushare.stock_daily_technical
-                where trade_date between ? and ?
-                  and code is not null
+                with src as (
+                    select *
+                    from tushare.stock_daily_technical
+                    where code is not null
+                ),
+                codes as (
+                    select distinct code
+                    from src
+                    where trade_date between ? and ?
+                ),
+                ranked_before as (
+                    select src.*,
+                           row_number() over (
+                               partition by src.code
+                               order by trade_date desc
+                           ) as rn
+                    from src
+                    join codes using (code)
+                    where trade_date < ?
+                ),
+                before_window as (
+                    select * exclude (rn)
+                    from ranked_before
+                    where rn <= ?
+                ),
+                in_range as (
+                    select src.*
+                    from src
+                    join codes using (code)
+                    where trade_date between ? and ?
+                )
+                select *
+                from before_window
+                union all
+                select *
+                from in_range
                 order by trade_date, code
                 """,
-                [start_date, end_date],
+                [start_date, end_date, start_date, window, start_date, end_date],
             ).fetchdf()
         if not frame.empty:
             frame["trade_date"] = frame["trade_date"].apply(
@@ -357,6 +377,39 @@ class SignalRepository:
         if frame.empty or code_filter is None:
             return frame
         return frame[frame["code"].apply(lambda value: code_filter(str(value)))].copy()
+
+    def slice_signal_rows_for_trade_date(
+        self,
+        *,
+        rows: Any,
+        trade_date: date,
+        window: int = 200,
+        include_trade_date: bool = True,
+    ) -> Any:
+        """Return the strategy-visible wide-table rows for one T date.
+
+        Signal selection runs after T close, so include_trade_date=True exposes
+        the full T wide row plus prior rows. Buy/sell stages should pass
+        include_trade_date=False and use market views for T-day observable bars.
+        """
+        if rows.empty:
+            return rows
+        if include_trade_date:
+            visible = rows[rows["trade_date"] <= trade_date]
+        else:
+            visible = rows[rows["trade_date"] < trade_date]
+        if visible.empty:
+            return visible.copy()
+
+        def tail_window(group: Any) -> Any:
+            return group.sort_values("trade_date").tail(window)
+
+        return (
+            visible.groupby("code", group_keys=False, sort=False)
+            .apply(tail_window)
+            .sort_values(["trade_date", "code"])
+            .copy()
+        )
 
     def load_stock_frames(
         self,

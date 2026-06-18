@@ -7,12 +7,24 @@ from typing import Any
 import pandas as pd
 
 from app.entities.stock_data_context import SignalDecision
+from app.services.strategy_lifecycle import (
+    MarketViews,
+    StrategyBuyDecision,
+    StrategyContext,
+    StrategySellDecision,
+    StrategyWatchDecision,
+)
 
 
-SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 10
+SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 5
 SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE = 0.10
+SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
+SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 5
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
+SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
+LIMIT_MOVE_PCT = 9.8
+OPEN_LIMIT_MOVE_RATIO = 0.098
 
 
 def small_float_value_code_filter(code: str) -> bool:
@@ -23,16 +35,20 @@ def small_float_value_code_filter(code: str) -> bool:
     return value.startswith("sh.6") or value.startswith("sz.0")
 
 
-def small_float_value_portfolio_signal_builder(
+def small_float_value_select_signals(
     *,
     trade_dates: list[date],
     rows: pd.DataFrame,
 ) -> dict[date, list[dict[str, Any]]]:
+    """Select T-close raw target signals from full-market wide-table rows."""
     if rows.empty:
         return {day: [] for day in trade_dates}
 
+    target_days = set(trade_dates)
     result: dict[date, list[dict[str, Any]]] = {}
     for day, group in rows.groupby("trade_date", sort=True):
+        if day not in target_days:
+            continue
         result[day] = _select_day(group)
     for day in trade_dates:
         result.setdefault(day, [])
@@ -62,16 +78,20 @@ def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
 
     low_price_count = max(
         int(math.ceil(len(pool) * SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE)),
-        SMALL_FLOAT_VALUE_TARGET_HOLDINGS,
+        SMALL_FLOAT_VALUE_CIRC_MV_RANK_END,
     )
     low_price_pool = pool.sort_values(
         ["unadjusted_close", "code"],
         ascending=[True, True],
     ).head(low_price_count)
-    selected = low_price_pool.sort_values(
+    ranked_by_circ_mv = low_price_pool.sort_values(
         ["selection_circ_mv", "code"],
         ascending=[True, True],
-    ).head(SMALL_FLOAT_VALUE_TARGET_HOLDINGS)
+    ).copy()
+    ranked_by_circ_mv["circ_mv_rank_in_low_price_pool"] = range(1, len(ranked_by_circ_mv) + 1)
+    selected = ranked_by_circ_mv.iloc[
+        SMALL_FLOAT_VALUE_CIRC_MV_RANK_START - 1 : SMALL_FLOAT_VALUE_CIRC_MV_RANK_END
+    ]
 
     items: list[dict[str, Any]] = []
     for rank, row in enumerate(selected.itertuples(index=False), start=1):
@@ -85,6 +105,9 @@ def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
                 "target_rank": rank,
                 "target_holdings": SMALL_FLOAT_VALUE_TARGET_HOLDINGS,
                 "low_price_quantile": SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE,
+                "circ_mv_rank_start": SMALL_FLOAT_VALUE_CIRC_MV_RANK_START,
+                "circ_mv_rank_end": SMALL_FLOAT_VALUE_CIRC_MV_RANK_END,
+                "circ_mv_rank_in_low_price_pool": int(row.circ_mv_rank_in_low_price_pool),
                 "listed_days": int(row.listed_days),
                 "eps": float(row.eps_value),
                 "close": float(row.unadjusted_close),
@@ -93,7 +116,7 @@ def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
                 "circ_mv": float(row.selection_circ_mv),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "unadjusted close lowest 10%; select 10 smallest circ_mv"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-5"
                 ),
                 "entry_rule": "previous signal day target, next Monday open rebalance",
                 "exit_rule": (
@@ -117,12 +140,183 @@ def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
                     "qfq_close": qfq_close,
                     "total_mv": _optional_float(getattr(row, "total_mv", None)),
                     "circ_mv": float(row.selection_circ_mv),
+                    "circ_mv_rank_in_low_price_pool": int(row.circ_mv_rank_in_low_price_pool),
                     "target_rank": rank,
                 },
                 "signal": _decision_to_payload(signal),
             }
         )
     return items
+
+
+class SmallFloatValueLifecycle:
+    """Reference lifecycle implementation for portfolio-style strategies."""
+
+    target_size = SMALL_FLOAT_VALUE_TARGET_HOLDINGS
+    rebalance_weekday = SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY
+
+    def select_signals(
+        self,
+        *,
+        trade_date: date,
+        rows: pd.DataFrame,
+    ) -> list[dict[str, Any]]:
+        if rows.empty:
+            return []
+        today_rows = rows[rows["trade_date"] == trade_date]
+        if today_rows.empty:
+            return []
+        return _select_day(today_rows)
+
+    def decide_sells(
+        self,
+        *,
+        context: StrategyContext,
+        market: MarketViews,
+    ) -> list[StrategySellDecision]:
+        decisions: list[StrategySellDecision] = []
+
+        for code, holding in context.holdings.items():
+            if getattr(holding, "buy_trade_index", context.trade_index) >= context.trade_index:
+                continue
+            bar = market.today_bars.get(code)
+            previous_bar = market.previous_bars.get(code)
+            if not _is_tradeable_bar(bar):
+                continue
+
+            # Daily close exit: yesterday limit-up, today not limit-up.
+            if _is_limit_up_bar(previous_bar) and not _is_limit_up_bar(bar):
+                close_price = _bar_close(bar)
+                if close_price is not None:
+                    decisions.append(
+                        StrategySellDecision(
+                            code=code,
+                            price=close_price,
+                            quantity=int(holding.quantity),
+                            reason="limit_break_close",
+                        )
+                    )
+                continue
+
+            if context.trade_date.weekday() != self.rebalance_weekday:
+                continue
+
+            target_codes = set(context.watch_pool)
+            if code not in target_codes:
+                if _is_open_limit_up_bar(bar):
+                    continue
+                open_price = _bar_open(bar)
+                if open_price is not None:
+                    decisions.append(
+                        StrategySellDecision(
+                            code=code,
+                            price=open_price,
+                            quantity=int(holding.quantity),
+                            reason="rebalance_open",
+                        )
+                    )
+                continue
+
+            if _is_open_limit_up_bar(bar):
+                continue
+            open_price = _bar_open(bar)
+            if open_price is None:
+                continue
+            target_amount = context.total_asset / max(self.target_size, 1)
+            current_amount = open_price * int(holding.quantity)
+            excess_amount = current_amount - target_amount
+            if excess_amount < open_price * 100:
+                continue
+            sell_quantity = int(excess_amount // (open_price * 100)) * 100
+            if sell_quantity > 0:
+                decisions.append(
+                    StrategySellDecision(
+                        code=code,
+                        price=open_price,
+                        quantity=sell_quantity,
+                        reason="rebalance_trim_open",
+                    )
+                )
+
+        return decisions
+
+    def decide_buys(
+        self,
+        *,
+        context: StrategyContext,
+        market: MarketViews,
+    ) -> list[StrategyBuyDecision]:
+        if context.trade_date.weekday() != self.rebalance_weekday:
+            return []
+
+        target_items = sorted(
+            context.watch_pool.values(),
+            key=lambda item: (
+                _positive_int(_signal_value(item.signal, "target_rank")) or 999999,
+                item.code,
+            ),
+        )[: self.target_size]
+        target_amount = context.total_asset / max(self.target_size, 1)
+        decisions: list[StrategyBuyDecision] = []
+        reserved_cash = 0.0
+
+        for item in target_items:
+            code = item.code
+            bar = market.today_bars.get(code)
+            if not _is_tradeable_bar(bar):
+                continue
+            if code not in context.holdings and len(context.holdings) + len(decisions) >= self.target_size:
+                continue
+            if _is_open_limit_move_bar(bar):
+                continue
+            if _is_limit_move_bar(market.previous_bars.get(code)):
+                continue
+            buy_price = _bar_open(bar)
+            if buy_price is None:
+                continue
+            existing = context.holdings.get(code)
+            current_quantity = int(existing.quantity) if existing is not None else 0
+            current_amount = current_quantity * buy_price
+            missing_amount = target_amount - current_amount
+            if missing_amount < buy_price * 100:
+                continue
+            available_cash = max(context.cash - reserved_cash, 0.0)
+            quantity = _fixed_amount_quantity(
+                cash=available_cash,
+                buy_price=buy_price,
+                amount=missing_amount,
+            )
+            if quantity <= 0:
+                continue
+            amount = buy_price * quantity
+            reserved_cash += amount * 1.0005
+            decisions.append(
+                StrategyBuyDecision(
+                    code=code,
+                    code_name=item.code_name,
+                    price=buy_price,
+                    quantity=quantity,
+                    signal=dict(item.signal),
+                )
+            )
+
+        return decisions
+
+    def update_watch_pool(
+        self,
+        *,
+        context: StrategyContext,
+        raw_signals: list[dict[str, Any]],
+    ) -> StrategyWatchDecision:
+        if context.trade_index == 0:
+            return StrategyWatchDecision(
+                add=raw_signals[: self.target_size],
+                remove=set(context.watch_pool),
+            )
+        return StrategyWatchDecision(
+            add=raw_signals[: self.target_size],
+            remove=set(context.watch_pool),
+        )
 
 
 def _decision_to_payload(decision: SignalDecision) -> dict[str, Any]:
@@ -160,3 +354,94 @@ def _positive(value: Any) -> bool:
 
 def _optional_float(value: Any) -> float | None:
     return None if not _finite(value) else float(value)
+
+
+def _signal_value(signal: dict[str, Any], key: str) -> Any:
+    if key in signal:
+        return signal[key]
+    extras = signal.get("extras")
+    if isinstance(extras, dict):
+        return extras.get(key)
+    return None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value > 0:
+        return int(value)
+    return None
+
+
+def _bar_open(bar: tuple[float, ...] | None) -> float | None:
+    if bar is None or not math.isfinite(bar[0]) or bar[0] <= 0:
+        return None
+    return float(bar[0])
+
+
+def _bar_close(bar: tuple[float, ...] | None) -> float | None:
+    if bar is None or not math.isfinite(bar[3]) or bar[3] <= 0:
+        return None
+    return float(bar[3])
+
+
+def _is_tradeable_bar(bar: tuple[float, ...] | None) -> bool:
+    if bar is None:
+        return False
+    open_price, high, low, close, vol, _pct = bar[:6]
+    if not (
+        math.isfinite(open_price)
+        and math.isfinite(high)
+        and math.isfinite(low)
+        and math.isfinite(close)
+    ):
+        return False
+    if not math.isfinite(vol) or vol <= 0:
+        return False
+    return open_price != high or high != low or low != close
+
+
+def _is_limit_up_bar(bar: tuple[float, ...] | None) -> bool:
+    if bar is None or len(bar) < 6:
+        return False
+    pct_chg = bar[5]
+    return math.isfinite(pct_chg) and pct_chg >= LIMIT_MOVE_PCT
+
+
+def _is_limit_move_bar(bar: tuple[float, ...] | None) -> bool:
+    if bar is None or len(bar) < 6:
+        return False
+    pct_chg = bar[5]
+    return math.isfinite(pct_chg) and abs(pct_chg) >= LIMIT_MOVE_PCT
+
+
+def _is_open_limit_move_bar(bar: tuple[float, ...] | None) -> bool:
+    if bar is None or len(bar) < 8:
+        return False
+    open_price = bar[0]
+    pre_close = bar[7]
+    if not (math.isfinite(open_price) and math.isfinite(pre_close) and pre_close > 0):
+        return False
+    return abs(open_price / pre_close - 1.0) >= OPEN_LIMIT_MOVE_RATIO
+
+
+def _is_open_limit_up_bar(bar: tuple[float, ...] | None) -> bool:
+    if bar is None or len(bar) < 8:
+        return False
+    open_price = bar[0]
+    pre_close = bar[7]
+    if not (math.isfinite(open_price) and math.isfinite(pre_close) and pre_close > 0):
+        return False
+    return open_price / pre_close - 1.0 >= OPEN_LIMIT_MOVE_RATIO
+
+
+def _fixed_amount_quantity(*, cash: float, buy_price: float, amount: float) -> int:
+    if buy_price <= 0 or amount <= 0:
+        return 0
+    cost_per_lot = buy_price * 100 * 1.0005
+    lots_by_amount = int(amount // (buy_price * 100))
+    lots_by_cash = int(cash // cost_per_lot)
+    return max(min(lots_by_amount, lots_by_cash), 0) * 100
+
+
+small_float_value_lifecycle = SmallFloatValueLifecycle()
