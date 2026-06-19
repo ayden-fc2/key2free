@@ -16,8 +16,23 @@ STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2016, 12, 6)
 STOCK_DAILY_TECHNICAL_LOG_ROW_STEP = 100000
 STOCK_DAILY_TECHNICAL_WORKERS = int(os.getenv("STOCK_DAILY_TECHNICAL_WORKERS", "4"))
 STOCK_DAILY_TECHNICAL_BATCH_SIZE = int(os.getenv("STOCK_DAILY_TECHNICAL_BATCH_SIZE", "40"))
+INDEX_BASIC_WATERMARK = date(2014, 1, 2)
+INDEX_BASIC_MARKETS = ("SSE", "SZSE", "OTH", "CSI")
+INDEX_KEEP_TS_CODES = (
+    "000001.SH",  # 上证指数
+    "399001.SZ",  # 深证成指
+    "399006.SZ",  # 创业板指
+    "899050.BJ",  # 北证50
+    "000680.SH",  # 科创综指
+    "399300.SZ",  # 沪深300
+    "000905.SH",  # 中证500
+    "000852.SH",  # 中证1000
+    "932000.CSI",  # 中证2000
+)
 TUSHARE_ASSET_TABLE_NAMES = [
     "tushare.trade_cal",
+    "tushare.index_basic",
+    "tushare.index_daily",
     "tushare.bak_basic",
     "tushare.adj_factor",
     "tushare.daily",
@@ -30,6 +45,15 @@ TUSHARE_ASSET_TABLE_NAMES = [
 class TushareRepository:
     def __init__(self) -> None:
         self.duckdb = DuckDBRepository()
+
+    def index_basic_watermark(self) -> date:
+        return INDEX_BASIC_WATERMARK
+
+    def index_basic_markets(self) -> tuple[str, ...]:
+        return INDEX_BASIC_MARKETS
+
+    def index_keep_ts_codes(self) -> tuple[str, ...]:
+        return INDEX_KEEP_TS_CODES
 
     def ensure_tables(self) -> None:
         with self.duckdb.connect(read_only=False) as connection:
@@ -67,6 +91,8 @@ class TushareRepository:
                 update meta.tushare_asset_watermark
                 set earliest_trusted_watermark = case asset_table_name
                     when 'tushare.trade_cal' then coalesce(earliest_trusted_watermark, date '2014-01-02')
+                    when 'tushare.index_basic' then coalesce(earliest_trusted_watermark, date '2014-01-02')
+                    when 'tushare.index_daily' then coalesce(earliest_trusted_watermark, date '2014-01-02')
                     when 'tushare.adj_factor' then coalesce(earliest_trusted_watermark, date '2014-01-02')
                     when 'tushare.daily' then coalesce(earliest_trusted_watermark, date '2014-01-02')
                     when 'tushare.daily_basic' then
@@ -113,6 +139,42 @@ class TushareRepository:
                     cal_date date,
                     is_open smallint,
                     pretrade_date date
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists tushare.index_basic (
+                    ts_code varchar,
+                    name varchar,
+                    fullname varchar,
+                    market varchar,
+                    publisher varchar,
+                    index_type varchar,
+                    category varchar,
+                    base_date date,
+                    base_point double,
+                    list_date date,
+                    weight_rule varchar,
+                    description varchar,
+                    exp_date date
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists tushare.index_daily (
+                    ts_code varchar,
+                    trade_date date,
+                    close double,
+                    open double,
+                    high double,
+                    low double,
+                    pre_close double,
+                    change double,
+                    pct_chg double,
+                    vol double,
+                    amount double
                 )
                 """
             )
@@ -380,6 +442,8 @@ class TushareRepository:
                         watermark.earliest_trusted_watermark,
                         case expected.asset_table_name
                             when 'tushare.trade_cal' then date '2014-01-02'
+                            when 'tushare.index_basic' then date '2014-01-02'
+                            when 'tushare.index_daily' then date '2014-01-02'
                             when 'tushare.adj_factor' then date '2014-01-02'
                             when 'tushare.daily' then date '2014-01-02'
                             when 'tushare.bak_basic' then date '2016-12-06'
@@ -549,6 +613,186 @@ class TushareRepository:
                 rows,
             )
         return len(rows)
+
+    def get_trade_cal_window_coverage(self, start_date: date, end_date: date) -> dict[str, int]:
+        self.ensure_tables()
+        expected_day_count = (end_date - start_date).days + 1
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                """
+                select count(distinct cal_date) as existing_day_count,
+                       count(*) as existing_row_count
+                from tushare.trade_cal
+                where cal_date >= ?
+                  and cal_date <= ?
+                """,
+                [start_date, end_date],
+            ).fetchone()
+        existing_day_count = 0 if row is None else int(row[0] or 0)
+        existing_row_count = 0 if row is None else int(row[1] or 0)
+        return {
+            "expected_day_count": expected_day_count,
+            "existing_day_count": existing_day_count,
+            "existing_row_count": existing_row_count,
+        }
+
+    def upsert_index_basic(self, frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        fields = [
+            "ts_code",
+            "name",
+            "fullname",
+            "market",
+            "publisher",
+            "index_type",
+            "category",
+            "base_date",
+            "base_point",
+            "list_date",
+            "weight_rule",
+            "desc",
+            "exp_date",
+        ]
+        rows = []
+        for item in frame.to_dict("records"):
+            row = [self._none_if_blank(item.get(field)) for field in fields]
+            row[7] = self._parse_yyyymmdd(row[7])
+            row[8] = self._none_or_float(row[8])
+            row[9] = self._parse_yyyymmdd(row[9])
+            row[12] = self._parse_yyyymmdd(row[12])
+            if row[0] not in INDEX_KEEP_TS_CODES:
+                continue
+            rows.append(row)
+        if not rows:
+            return 0
+        with self.duckdb.connect(read_only=False) as connection:
+            connection.execute("delete from tushare.index_basic")
+            connection.executemany(
+                """
+                insert into tushare.index_basic(
+                    ts_code, name, fullname, market, publisher, index_type,
+                    category, base_date, base_point, list_date, weight_rule,
+                    description, exp_date
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def get_index_basic_count(self) -> int:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute("select count(*) from tushare.index_basic").fetchone()
+        return 0 if row is None else int(row[0] or 0)
+
+    def get_index_daily_ts_codes(self) -> list[str]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select ts_code
+                from tushare.index_basic
+                where ts_code is not null
+                  and ts_code in (select unnest(?))
+                order by ts_code
+                """,
+                [list(INDEX_KEEP_TS_CODES)],
+            ).fetchall()
+        return [str(row[0]) for row in rows if row[0] is not None]
+
+    def upsert_index_daily(self, frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        fields = [
+            "ts_code",
+            "trade_date",
+            "close",
+            "open",
+            "high",
+            "low",
+            "pre_close",
+            "change",
+            "pct_chg",
+            "vol",
+            "amount",
+        ]
+        rows = []
+        date_ranges: dict[str, tuple[date, date]] = {}
+        for item in frame.to_dict("records"):
+            row = [self._none_if_blank(item.get(field)) for field in fields]
+            row[1] = self._parse_yyyymmdd(row[1])
+            for index in range(2, len(row)):
+                row[index] = self._none_or_float(row[index])
+            if row[0] is not None and row[1] is not None:
+                ts_code = str(row[0])
+                existing_range = date_ranges.get(ts_code)
+                if existing_range is None:
+                    date_ranges[ts_code] = (row[1], row[1])
+                else:
+                    date_ranges[ts_code] = (min(existing_range[0], row[1]), max(existing_range[1], row[1]))
+            rows.append(row)
+        if not rows:
+            return 0
+        with self.duckdb.connect(read_only=False) as connection:
+            if date_ranges:
+                connection.executemany(
+                    """
+                    delete from tushare.index_daily
+                    where ts_code = ?
+                      and trade_date >= ?
+                      and trade_date <= ?
+                    """,
+                    [[ts_code, start, end] for ts_code, (start, end) in sorted(date_ranges.items())],
+                )
+            connection.executemany(
+                """
+                insert into tushare.index_daily(
+                    ts_code, trade_date, close, open, high, low, pre_close,
+                    change, pct_chg, vol, amount
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def get_index_daily_day_coverage(self, trade_day: date) -> dict[str, int]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            row = connection.execute(
+                """
+                with index_codes as (
+                    select ts_code
+                    from tushare.index_basic
+                    where ts_code is not null
+                      and ts_code in (select unnest(?))
+                      and (list_date is null or list_date <= ?)
+                      and (exp_date is null or exp_date >= ?)
+                )
+                select
+                    (select count(*) from index_codes) as expected_code_count,
+                    count(distinct daily.ts_code) as existing_code_count,
+                    count(*) as existing_row_count
+                from tushare.index_daily daily
+                join index_codes codes
+                  on codes.ts_code = daily.ts_code
+                where daily.trade_date = ?
+                """,
+                [list(INDEX_KEEP_TS_CODES), trade_day, trade_day, trade_day],
+            ).fetchone()
+        if row is None:
+            return {
+                "expected_code_count": 0,
+                "existing_code_count": 0,
+                "existing_row_count": 0,
+            }
+        return {
+            "expected_code_count": int(row[0] or 0),
+            "existing_code_count": int(row[1] or 0),
+            "existing_row_count": int(row[2] or 0),
+        }
 
     def upsert_bak_basic(self, frame: pd.DataFrame) -> int:
         if frame.empty:
@@ -942,6 +1186,102 @@ class TushareRepository:
                 [trade_day],
             ).fetchall()
         return [str(row[0]) for row in rows if row[0] is not None]
+
+    def get_daily_ts_codes_between(self, start_date: date, end_date: date) -> list[str]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select distinct ts_code
+                from tushare.daily
+                where trade_date >= ?
+                  and trade_date <= ?
+                  and ts_code is not null
+                order by ts_code
+                """,
+                [start_date, end_date],
+            ).fetchall()
+        return [str(row[0]) for row in rows if row[0] is not None]
+
+    def get_daily_asset_day_coverage(self, asset_table_name: str, trade_day: date) -> dict[str, int]:
+        self.ensure_tables()
+        allowed_tables = {
+            "tushare.bak_basic",
+            "tushare.adj_factor",
+            "tushare.daily",
+            "tushare.daily_basic",
+        }
+        if asset_table_name not in allowed_tables:
+            raise ValueError(f"unsupported daily asset table: {asset_table_name}")
+
+        with self.duckdb.connect(read_only=True) as connection:
+            if asset_table_name == "tushare.daily":
+                row = connection.execute(
+                    """
+                    select count(distinct ts_code) as table_code_count,
+                           count(*) as table_row_count
+                    from tushare.daily
+                    where trade_date = ?
+                      and ts_code is not null
+                    """,
+                    [trade_day],
+                ).fetchone()
+                table_code_count = 0 if row is None else int(row[0] or 0)
+                table_row_count = 0 if row is None else int(row[1] or 0)
+                return {
+                    "expected_code_count": table_code_count,
+                    "existing_code_count": table_code_count,
+                    "existing_row_count": table_row_count,
+                    "table_code_count": table_code_count,
+                    "table_row_count": table_row_count,
+                }
+
+            row = connection.execute(
+                f"""
+                with daily_codes as (
+                    select distinct ts_code
+                    from tushare.daily
+                    where trade_date = ?
+                      and ts_code is not null
+                ),
+                target_day as (
+                    select ts_code
+                    from {asset_table_name}
+                    where trade_date = ?
+                      and ts_code is not null
+                )
+                select
+                    (select count(*) from daily_codes) as expected_code_count,
+                    (
+                        select count(distinct target.ts_code)
+                        from target_day target
+                        join daily_codes daily on daily.ts_code = target.ts_code
+                    ) as existing_code_count,
+                    (
+                        select count(*)
+                        from target_day target
+                        join daily_codes daily on daily.ts_code = target.ts_code
+                    ) as existing_row_count,
+                    (select count(distinct ts_code) from target_day) as table_code_count,
+                    (select count(*) from target_day) as table_row_count
+                """,
+                [trade_day, trade_day],
+            ).fetchone()
+        if row is None:
+            return {
+                "expected_code_count": 0,
+                "existing_code_count": 0,
+                "existing_row_count": 0,
+                "table_code_count": 0,
+                "table_row_count": 0,
+            }
+        return {
+            "expected_code_count": int(row[0] or 0),
+            "existing_code_count": int(row[1] or 0),
+            "existing_row_count": int(row[2] or 0),
+            "table_code_count": int(row[3] or 0),
+            "table_row_count": int(row[4] or 0),
+        }
 
     def get_stk_mins_5min_day_coverage(self, trade_day: date) -> dict[str, int]:
         self.ensure_tables()
@@ -1570,8 +1910,10 @@ class TushareRepository:
         return f"[{timestamp}] watermark={trusted_watermark} scope={scope} issue={issue_message}\n"
 
     def _default_earliest_trusted_watermark(self, asset_table_name: str) -> date | None:
-        if asset_table_name in {"tushare.trade_cal", "tushare.adj_factor", "tushare.daily"}:
+        if asset_table_name in {"tushare.trade_cal", "tushare.index_daily", "tushare.adj_factor", "tushare.daily"}:
             return date(2014, 1, 2)
+        if asset_table_name == "tushare.index_basic":
+            return INDEX_BASIC_WATERMARK
         if asset_table_name in {"tushare.bak_basic", "tushare.daily_basic", "tushare.stk_mins_5min"}:
             return date(2016, 12, 6)
         if asset_table_name == "tushare.stock_daily_technical":

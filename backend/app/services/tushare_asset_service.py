@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
+import baostock as bs
 import pandas as pd
 
 from app.repositories.tushare_repository import TushareRepository
@@ -16,6 +17,8 @@ from app.services.tushare_client import get_tushare_pro, reset_tushare_pro
 RETRY_DELAYS_SECONDS = (10, 60, 180)
 MAX_CALL_ATTEMPTS = len(RETRY_DELAYS_SECONDS) + 1
 STK_MINS_CALL_INTERVAL_SECONDS = float(os.getenv("TUSHARE_STK_MINS_CALL_INTERVAL_SECONDS", "0.2"))
+TUSHARE_STK_MINS_MAX_ROWS = int(os.getenv("TUSHARE_STK_MINS_MAX_ROWS", "8000"))
+BAOSTOCK_STK_MINS_MAX_ROWS = int(os.getenv("BAOSTOCK_STK_MINS_MAX_ROWS", "200000"))
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class TushareAssetService:
 
     def __init__(self) -> None:
         self.repository = TushareRepository()
+        self._baostock_logged_in = False
 
     def list_watermarks(self) -> list[dict[str, Any]]:
         return self.repository.get_watermarks()
@@ -76,6 +80,10 @@ class TushareAssetService:
                 f"start Tushare asset refresh, end_date={end_date}, skip_stk_mins_5min={skip_stk_mins_5min}",
             )
             if not self._refresh_trade_cal(task_id=task_id, end_date=end_date):
+                return
+            if not self._refresh_index_basic(task_id=task_id):
+                return
+            if not self._refresh_index_daily(task_id=task_id, end_date=end_date):
                 return
             if not self._refresh_by_trade_dates(
                 task_id=task_id,
@@ -134,6 +142,193 @@ class TushareAssetService:
         except Exception as exc:
             self._fail_task(task_id, f"refresh task failed: {type(exc).__name__}: {exc}")
 
+    def _refresh_index_basic(self, *, task_id: int) -> bool:
+        asset_table_name = "tushare.index_basic"
+        existing_count = self.repository.get_index_basic_count()
+        if existing_count > 0:
+            self.repository.update_watermark(
+                asset_table_name,
+                self.repository.index_basic_watermark(),
+                earliest_trusted_watermark=self.repository.index_basic_watermark(),
+            )
+            self._append_log(task_id, f"{asset_table_name} static pool already covered rows={existing_count}")
+            return True
+
+        frames = []
+        markets = self.repository.index_basic_markets()
+        index_basic_fields = (
+            "ts_code,name,fullname,market,publisher,index_type,category,"
+            "base_date,base_point,list_date,weight_rule,desc,exp_date"
+        )
+        self.repository.update_refresh_task(
+            task_id=task_id,
+            current_asset_table_name=asset_table_name,
+            current_watermark=self.repository.get_watermark(asset_table_name),
+        )
+        for market in markets:
+            frame = self._call_with_retries(
+                task_id=task_id,
+                asset_table_name=asset_table_name,
+                scope=market,
+                fetcher=lambda market=market: get_tushare_pro().index_basic(
+                    market=market,
+                    fields=index_basic_fields,
+                ),
+            )
+            if frame is None:
+                self.repository.update_watermark(
+                    asset_table_name,
+                    self.repository.index_basic_watermark(),
+                    earliest_trusted_watermark=self.repository.index_basic_watermark(),
+                    issue_scope=market,
+                    issue_message=f"{market} retries exhausted",
+                )
+                self._append_log(task_id, f"{asset_table_name} {market} retries exhausted; skipped")
+                continue
+            frames.append(frame)
+        if not frames:
+            self.repository.update_watermark(
+                asset_table_name,
+                self.repository.index_basic_watermark(),
+                earliest_trusted_watermark=self.repository.index_basic_watermark(),
+                issue_scope="all",
+                issue_message="index_basic returned no market frames",
+            )
+            self._append_log(task_id, f"{asset_table_name} returned no market frames")
+            return True
+        row_count = self.repository.upsert_index_basic(pd.concat(frames, ignore_index=True))
+        self.repository.update_watermark(
+            asset_table_name,
+            self.repository.index_basic_watermark(),
+            earliest_trusted_watermark=self.repository.index_basic_watermark(),
+        )
+        self._append_log(
+            task_id,
+            (
+                f"{asset_table_name} success rows={row_count} "
+                f"keep_codes={len(self.repository.index_keep_ts_codes())}"
+            ),
+        )
+        return True
+
+    def _refresh_index_daily(self, *, task_id: int, end_date: date) -> bool:
+        asset_table_name = "tushare.index_daily"
+        watermark = self.repository.get_refresh_start_watermark(asset_table_name)
+        trade_dates = self.repository.get_open_trade_dates_after(watermark, end_date)
+        self._append_log(task_id, f"{asset_table_name} pending open trade dates={len(trade_dates)}")
+        if not trade_dates:
+            return True
+
+        uncovered_dates: list[date] = []
+        for trade_day in trade_dates:
+            coverage = self.repository.get_index_daily_day_coverage(trade_day)
+            if (
+                coverage["expected_code_count"] > 0
+                and coverage["existing_code_count"] >= coverage["expected_code_count"]
+            ):
+                self.repository.update_watermark(asset_table_name, trade_day)
+                watermark = trade_day
+                self._append_log(
+                    task_id,
+                    (
+                        f"{asset_table_name} {self._format_tushare_date(trade_day)} already covered "
+                        f"codes={coverage['existing_code_count']}/{coverage['expected_code_count']} "
+                        f"rows={coverage['existing_row_count']}; watermark advanced"
+                    ),
+                )
+                continue
+            uncovered_dates.append(trade_day)
+
+        if not uncovered_dates:
+            return True
+
+        ts_codes = self.repository.get_index_daily_ts_codes()
+        if not ts_codes:
+            issue_message = "index_basic static pool is empty"
+            self.repository.update_watermark(
+                asset_table_name,
+                uncovered_dates[-1],
+                issue_scope=f"{uncovered_dates[0]}->{uncovered_dates[-1]}",
+                issue_message=issue_message,
+            )
+            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
+            return True
+
+        start_date = uncovered_dates[0]
+        end_uncovered_date = uncovered_dates[-1]
+        start_text = self._format_tushare_date(start_date)
+        end_text = self._format_tushare_date(end_uncovered_date)
+        total_rows = 0
+        failed_count = 0
+        for index, ts_code in enumerate(ts_codes, start=1):
+            self.repository.update_refresh_task(
+                task_id=task_id,
+                current_asset_table_name=asset_table_name,
+                current_watermark=watermark,
+            )
+            frame = self._call_with_retries(
+                task_id=task_id,
+                asset_table_name=asset_table_name,
+                scope=f"{ts_code} {start_text}->{end_text}",
+                fetcher=lambda code=ts_code: get_tushare_pro().index_daily(
+                    ts_code=code,
+                    start_date=start_text,
+                    end_date=end_text,
+                ),
+            )
+            if frame is None:
+                failed_count += 1
+                continue
+            total_rows += self.repository.upsert_index_daily(frame)
+            if index % 200 == 0:
+                self._append_log(
+                    task_id,
+                    f"{asset_table_name} progress {index}/{len(ts_codes)} rows={total_rows}",
+                )
+
+        if total_rows <= 0:
+            issue_message = (
+                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
+            )
+            self.repository.update_watermark(
+                asset_table_name,
+                end_uncovered_date,
+                issue_scope=f"{start_text}->{end_text}",
+                issue_message=issue_message,
+            )
+            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
+            return True
+
+        for trade_day in uncovered_dates:
+            coverage = self.repository.get_index_daily_day_coverage(trade_day)
+            if (
+                coverage["expected_code_count"] > 0
+                and coverage["existing_code_count"] >= coverage["expected_code_count"]
+            ):
+                self.repository.update_watermark(asset_table_name, trade_day)
+                watermark = trade_day
+                continue
+            issue_message = (
+                f"partial coverage codes={coverage['existing_code_count']}/"
+                f"{coverage['expected_code_count']} rows={coverage['existing_row_count']}"
+            )
+            self.repository.update_watermark(
+                asset_table_name,
+                trade_day,
+                issue_scope=self._format_tushare_date(trade_day),
+                issue_message=issue_message,
+            )
+            watermark = trade_day
+            self._append_log(task_id, f"{asset_table_name} {trade_day} {issue_message}; watermark advanced")
+        self._append_log(
+            task_id,
+            (
+                f"{asset_table_name} {start_text}->{end_text} success rows={total_rows} "
+                f"codes={len(ts_codes)} failed_codes={failed_count}"
+            ),
+        )
+        return True
+
     def _refresh_trade_cal(self, *, task_id: int, end_date: date) -> bool:
         asset_table_name = "tushare.trade_cal"
         watermark = self.repository.get_refresh_start_watermark(asset_table_name)
@@ -149,6 +344,19 @@ class TushareAssetService:
                 current_asset_table_name=asset_table_name,
                 current_watermark=watermark,
             )
+            coverage = self.repository.get_trade_cal_window_coverage(window_start, window_end)
+            if coverage["existing_day_count"] >= coverage["expected_day_count"]:
+                self.repository.update_watermark(asset_table_name, window_end)
+                watermark = window_end
+                self._append_log(
+                    task_id,
+                    (
+                        f"{asset_table_name} {start_text}->{end_text} already covered "
+                        f"days={coverage['existing_day_count']}/{coverage['expected_day_count']} "
+                        f"rows={coverage['existing_row_count']}; watermark advanced"
+                    ),
+                )
+                continue
             frame = self._call_with_retries(
                 task_id=task_id,
                 asset_table_name=asset_table_name,
@@ -206,6 +414,20 @@ class TushareAssetService:
                 current_asset_table_name=asset_table_name,
                 current_watermark=watermark,
             )
+            coverage = self.repository.get_daily_asset_day_coverage(asset_table_name, trade_day)
+            if self._is_daily_asset_covered(asset_table_name, coverage):
+                self.repository.update_watermark(asset_table_name, trade_day)
+                watermark = trade_day
+                self._append_log(
+                    task_id,
+                    (
+                        f"{asset_table_name} {trade_date_text} already covered "
+                        f"codes={coverage['existing_code_count']}/{coverage['expected_code_count']} "
+                        f"rows={coverage['existing_row_count']} "
+                        f"table_rows={coverage['table_row_count']}; watermark advanced"
+                    ),
+                )
+                continue
             frame = self._call_with_retries(
                 task_id=task_id,
                 asset_table_name=asset_table_name,
@@ -239,6 +461,16 @@ class TushareAssetService:
             watermark = trade_day
             self._append_log(task_id, f"{asset_table_name} {trade_date_text} success rows={row_count}")
         return True
+
+    def _is_daily_asset_covered(self, asset_table_name: str, coverage: dict[str, int]) -> bool:
+        existing_code_count = coverage["existing_code_count"]
+        expected_code_count = coverage["expected_code_count"]
+        existing_row_count = coverage["existing_row_count"]
+        if asset_table_name == "tushare.daily":
+            return existing_code_count > 0 and existing_row_count > 0
+        if coverage["table_row_count"] > 0:
+            return True
+        return expected_code_count > 0 and existing_code_count >= expected_code_count
 
     def _refresh_stock_daily_technical(
         self,
@@ -341,9 +573,13 @@ class TushareAssetService:
             task_id,
             (
                 f"{asset_table_name} pending open trade dates={len(trade_dates)}, "
-                f"call_interval={STK_MINS_CALL_INTERVAL_SECONDS}s"
+                "source=baostock, fallback=tushare"
             ),
         )
+        if not trade_dates:
+            return True
+
+        uncovered_dates: list[date] = []
         for trade_day in trade_dates:
             trade_date_text = self._format_tushare_date(trade_day)
             self.repository.update_refresh_task(
@@ -379,62 +615,341 @@ class TushareAssetService:
                     ),
                 )
                 continue
-            row_count = 0
-            failed_count = 0
+            uncovered_dates.append(trade_day)
+
+        if not uncovered_dates:
+            return True
+
+        start_date = uncovered_dates[0]
+        end_uncovered_date = uncovered_dates[-1]
+        ts_codes = self.repository.get_daily_ts_codes_between(start_date, end_uncovered_date)
+        if not ts_codes:
+            issue_message = f"{start_date}->{end_uncovered_date} has no daily ts_codes"
+            self.repository.update_watermark(
+                asset_table_name,
+                end_uncovered_date,
+                issue_scope=f"{start_date}->{end_uncovered_date}",
+                issue_message=issue_message,
+            )
+            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
+            return True
+
+        start_text = self._format_tushare_date(start_date)
+        end_text = self._format_tushare_date(end_uncovered_date)
+        total_rows = 0
+        failed_count = 0
+        fallback_count = 0
+        self._append_log(
+            task_id,
+            (
+                f"{asset_table_name} {start_text}->{end_text} begin range refresh "
+                f"open_dates={len(uncovered_dates)} codes={len(ts_codes)} source=baostock fallback=tushare"
+            ),
+        )
+        try:
             for index, ts_code in enumerate(ts_codes, start=1):
-                frame = self._call_with_retries(
+                self.repository.update_refresh_task(
+                    task_id=task_id,
+                    current_asset_table_name=asset_table_name,
+                    current_watermark=watermark,
+                )
+                frame, source_name = self._call_stk_mins_5min_range_with_retries(
                     task_id=task_id,
                     asset_table_name=asset_table_name,
-                    scope=f"{trade_date_text} {ts_code}",
-                    fetcher=lambda code=ts_code, day=trade_day: get_tushare_pro().stk_mins(
-                        ts_code=code,
-                        freq="5min",
-                        start_date=self._format_minute_start(day),
-                        end_date=self._format_minute_end(day),
-                    ),
+                    scope=f"{ts_code} {start_text}->{end_text}",
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_uncovered_date,
                 )
                 if frame is None:
                     failed_count += 1
-                    if row_count <= 0:
-                        break
                     continue
-                written_rows = self.repository.upsert_stk_mins_5min(frame)
-                row_count += written_rows
-                if STK_MINS_CALL_INTERVAL_SECONDS > 0:
-                    time.sleep(STK_MINS_CALL_INTERVAL_SECONDS)
-                if index % 500 == 0:
+                if source_name == "tushare":
+                    fallback_count += 1
+                total_rows += self.repository.upsert_stk_mins_5min(frame)
+                if index % 10 == 0:
                     self._append_log(
                         task_id,
-                        f"{asset_table_name} {trade_date_text} progress {index}/{len(ts_codes)} rows={row_count}",
+                        (
+                            f"{asset_table_name} {start_text}->{end_text} progress "
+                            f"{index}/{len(ts_codes)} rows={total_rows} "
+                            f"failed_codes={failed_count} fallback_codes={fallback_count}"
+                        ),
                     )
-            if row_count <= 0:
-                issue_message = f"{trade_date_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    trade_day,
-                    issue_scope=trade_date_text,
-                    issue_message=issue_message,
-                )
-                watermark = trade_day
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-                continue
-            if failed_count > 0:
-                issue_message = f"{trade_date_text} partial failures={failed_count}/{len(ts_codes)}"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    trade_day,
-                    issue_scope=trade_date_text,
-                    issue_message=issue_message,
-                )
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-            else:
-                self.repository.update_watermark(asset_table_name, trade_day)
-            watermark = trade_day
-            self._append_log(
-                task_id,
-                f"{asset_table_name} {trade_date_text} success rows={row_count} codes={len(ts_codes)}",
+        finally:
+            self._logout_baostock()
+
+        if total_rows <= 0:
+            issue_message = (
+                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
             )
+            self.repository.update_watermark(
+                asset_table_name,
+                end_uncovered_date,
+                issue_scope=f"{start_text}->{end_text}",
+                issue_message=issue_message,
+            )
+            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
+            return True
+
+        for trade_day in uncovered_dates:
+            trade_date_text = self._format_tushare_date(trade_day)
+            coverage = self.repository.get_stk_mins_5min_day_coverage(trade_day)
+            if (
+                coverage["expected_code_count"] > 0
+                and coverage["existing_code_count"] >= coverage["expected_code_count"]
+            ):
+                self.repository.update_watermark(asset_table_name, trade_day)
+                watermark = trade_day
+                continue
+            issue_message = (
+                f"partial coverage codes={coverage['existing_code_count']}/"
+                f"{coverage['expected_code_count']} rows={coverage['existing_row_count']}"
+            )
+            self.repository.update_watermark(
+                asset_table_name,
+                trade_day,
+                issue_scope=trade_date_text,
+                issue_message=issue_message,
+            )
+            watermark = trade_day
+            self._append_log(task_id, f"{asset_table_name} {trade_date_text} {issue_message}; watermark advanced")
+        self._append_log(
+            task_id,
+            (
+                f"{asset_table_name} {start_text}->{end_text} success rows={total_rows} "
+                f"codes={len(ts_codes)} failed_codes={failed_count} fallback_codes={fallback_count}"
+            ),
+        )
         return True
+
+    def _call_stk_mins_5min_range_with_retries(
+        self,
+        *,
+        task_id: int,
+        asset_table_name: str,
+        scope: str,
+        ts_code: str,
+        start_date: date,
+        end_date: date,
+    ) -> tuple[pd.DataFrame | None, str | None]:
+        use_tushare_fallback = False
+        for attempt in range(1, MAX_CALL_ATTEMPTS + 1):
+            source_name = "tushare" if use_tushare_fallback else "baostock"
+            try:
+                if use_tushare_fallback:
+                    frame = self._fetch_tushare_stk_mins_5min_range(
+                        ts_code=ts_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                else:
+                    frame = self._fetch_baostock_stk_mins_5min_range(
+                        ts_code=ts_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                if not isinstance(frame, pd.DataFrame):
+                    raise RuntimeError(f"unexpected {source_name} response type: {type(frame).__name__}")
+                return frame, source_name
+            except Exception as exc:
+                if use_tushare_fallback:
+                    reset_tushare_pro()
+                if attempt >= MAX_CALL_ATTEMPTS:
+                    self._append_log(
+                        task_id,
+                        (
+                            f"{asset_table_name} {scope} source={source_name} "
+                            f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}"
+                        ),
+                    )
+                    return None, source_name
+                if not use_tushare_fallback and attempt >= 3:
+                    use_tushare_fallback = True
+                    self._append_log(
+                        task_id,
+                        (
+                            f"{asset_table_name} {scope} source=baostock "
+                            f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}; "
+                            "fallback to tushare"
+                        ),
+                    )
+                    continue
+                delay = RETRY_DELAYS_SECONDS[attempt - 1]
+                self._append_log(
+                    task_id,
+                    (
+                        f"{asset_table_name} {scope} source={source_name} "
+                        f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}; "
+                        f"retry after {delay}s"
+                    ),
+                )
+                time.sleep(delay)
+        return None, None
+
+    def _fetch_tushare_stk_mins_5min_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: date,
+        end_date: date,
+    ) -> pd.DataFrame:
+        frame = get_tushare_pro().stk_mins(
+            ts_code=ts_code,
+            freq="5min",
+            start_date=self._format_minute_start(start_date),
+            end_date=self._format_minute_end(end_date),
+        )
+        if not isinstance(frame, pd.DataFrame):
+            raise RuntimeError(f"unexpected tushare response type: {type(frame).__name__}")
+        if len(frame) >= TUSHARE_STK_MINS_MAX_ROWS:
+            raise RuntimeError(
+                f"tushare stk_mins returned {len(frame)} rows, reaches max limit {TUSHARE_STK_MINS_MAX_ROWS}"
+            )
+        return frame
+
+    def _fetch_baostock_stk_mins_5min_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: date,
+        end_date: date,
+    ) -> pd.DataFrame:
+        self._ensure_baostock_login()
+        query = bs.query_history_k_data_plus(
+            self._to_baostock_code(ts_code),
+            "date,time,code,open,high,low,close,volume,amount,adjustflag",
+            start_date=f"{start_date:%Y-%m-%d}",
+            end_date=f"{end_date:%Y-%m-%d}",
+            frequency="5",
+            adjustflag="3",
+        )
+        if query.error_code != "0":
+            raise RuntimeError(f"baostock query failed: {query.error_code} {query.error_msg}")
+        frame = self._baostock_5min_query_to_tushare_shape(query, ts_code)
+        if len(frame) >= BAOSTOCK_STK_MINS_MAX_ROWS:
+            raise RuntimeError(
+                f"baostock stk_mins returned {len(frame)} rows, reaches max limit {BAOSTOCK_STK_MINS_MAX_ROWS}"
+            )
+        return frame
+
+    def _call_stk_mins_5min_with_retries(
+        self,
+        *,
+        task_id: int,
+        asset_table_name: str,
+        scope: str,
+        ts_code: str,
+        trade_day: date,
+        use_baostock_source: bool,
+    ) -> tuple[pd.DataFrame | None, bool]:
+        for attempt in range(1, MAX_CALL_ATTEMPTS + 1):
+            source_name = "baostock" if use_baostock_source else "tushare"
+            try:
+                if use_baostock_source:
+                    frame = self._fetch_baostock_stk_mins_5min(ts_code=ts_code, trade_day=trade_day)
+                else:
+                    frame = get_tushare_pro().stk_mins(
+                        ts_code=ts_code,
+                        freq="5min",
+                        start_date=self._format_minute_start(trade_day),
+                        end_date=self._format_minute_end(trade_day),
+                    )
+                if not isinstance(frame, pd.DataFrame):
+                    raise RuntimeError(f"unexpected {source_name} response type: {type(frame).__name__}")
+                return frame, use_baostock_source
+            except Exception as exc:
+                if not use_baostock_source:
+                    reset_tushare_pro()
+                if attempt >= MAX_CALL_ATTEMPTS:
+                    self._append_log(
+                        task_id,
+                        (
+                            f"{asset_table_name} {scope} source={source_name} "
+                            f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}"
+                        ),
+                    )
+                    return None, use_baostock_source
+                if not use_baostock_source and attempt >= 2:
+                    use_baostock_source = True
+                    self._append_log(
+                        task_id,
+                        (
+                            f"{asset_table_name} {scope} source=tushare "
+                            f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}; "
+                            "switch subsequent 5min fetches to baostock"
+                        ),
+                    )
+                    continue
+                delay = RETRY_DELAYS_SECONDS[attempt - 1]
+                self._append_log(
+                    task_id,
+                    (
+                        f"{asset_table_name} {scope} source={source_name} "
+                        f"attempt {attempt}/{MAX_CALL_ATTEMPTS} failed: {type(exc).__name__}: {exc}; "
+                        f"retry after {delay}s"
+                    ),
+                )
+                time.sleep(delay)
+        return None, use_baostock_source
+
+    def _fetch_baostock_stk_mins_5min(self, *, ts_code: str, trade_day: date) -> pd.DataFrame:
+        return self._fetch_baostock_stk_mins_5min_range(
+            ts_code=ts_code,
+            start_date=trade_day,
+            end_date=trade_day,
+        )
+
+    def _baostock_5min_query_to_tushare_shape(self, query: Any, ts_code: str) -> pd.DataFrame:
+        rows = []
+        while query.next():
+            rows.append(query.get_row_data())
+        if not rows:
+            return pd.DataFrame(
+                columns=["ts_code", "trade_time", "open", "close", "high", "low", "vol", "amount"],
+            )
+        frame = pd.DataFrame(rows, columns=query.fields)
+        trade_time = pd.to_datetime(frame["time"].astype(str).str.slice(0, 14), format="%Y%m%d%H%M%S")
+        return pd.DataFrame(
+            {
+                "ts_code": ts_code,
+                "trade_time": trade_time.dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "open": pd.to_numeric(frame["open"], errors="coerce"),
+                "close": pd.to_numeric(frame["close"], errors="coerce"),
+                "high": pd.to_numeric(frame["high"], errors="coerce"),
+                "low": pd.to_numeric(frame["low"], errors="coerce"),
+                "vol": pd.to_numeric(frame["volume"], errors="coerce"),
+                "amount": pd.to_numeric(frame["amount"], errors="coerce"),
+            },
+        )
+
+    def _ensure_baostock_login(self) -> None:
+        if self._baostock_logged_in:
+            return
+        login_result = bs.login()
+        if login_result.error_code != "0":
+            raise RuntimeError(f"baostock login failed: {login_result.error_code} {login_result.error_msg}")
+        self._baostock_logged_in = True
+
+    def _logout_baostock(self) -> None:
+        if not self._baostock_logged_in:
+            return
+        bs.logout()
+        self._baostock_logged_in = False
+
+    def _to_baostock_code(self, ts_code: str) -> str:
+        parts = ts_code.split(".", maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError(f"invalid Tushare ts_code: {ts_code}")
+        symbol, exchange = parts
+        exchange_prefix = {
+            "SH": "sh",
+            "SZ": "sz",
+            "BJ": "bj",
+        }.get(exchange.upper())
+        if exchange_prefix is None:
+            raise ValueError(f"unsupported Baostock exchange for ts_code: {ts_code}")
+        return f"{exchange_prefix}.{symbol}"
 
     def _fail_task(self, task_id: int, message: str) -> None:
         self._append_log(task_id, message)

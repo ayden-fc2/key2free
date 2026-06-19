@@ -50,6 +50,17 @@ const TUSHARE_ASSET_META: Record<
     purpose: "交易日历",
     refresh: "按年份窗口刷新",
   },
+  "tushare.index_basic": {
+    api: "index_basic",
+    purpose: "核心指数静态白名单",
+    refresh: "静态维护，不参与每日水位刷新",
+    note: "仅保留上证指数、深证成指、创业板指、北证50、科创综指、沪深300、中证500、中证1000、中证2000",
+  },
+  "tushare.index_daily": {
+    api: "index_daily",
+    purpose: "核心指数日线行情",
+    refresh: "依赖指数白名单，按指数代码和交易日区间刷新",
+  },
   "tushare.bak_basic": {
     api: "bak_basic",
     purpose: "历史股票列表/基础信息",
