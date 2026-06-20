@@ -406,7 +406,7 @@ class TushareAssetService:
     ) -> bool:
         watermark = self.repository.get_refresh_start_watermark(asset_table_name)
         trade_dates = self.repository.get_open_trade_dates_after(watermark, end_date)
-        self._append_log(task_id, f"{asset_table_name} pending open trade dates={len(trade_dates)}")
+        self._append_log(task_id, f"{asset_table_name} pending open trade dates={len(trade_dates)}, stock_universe=SH/SZ excluding BJ")
         for trade_day in trade_dates:
             trade_date_text = self._format_tushare_date(trade_day)
             self.repository.update_refresh_task(
@@ -573,7 +573,7 @@ class TushareAssetService:
             task_id,
             (
                 f"{asset_table_name} pending open trade dates={len(trade_dates)}, "
-                "source=baostock, fallback=tushare"
+                "source=baostock, fallback=tushare, stock_universe=SH/SZ excluding BJ"
             ),
         )
         if not trade_dates:
@@ -636,6 +636,45 @@ class TushareAssetService:
 
         start_text = self._format_tushare_date(start_date)
         end_text = self._format_tushare_date(end_uncovered_date)
+        all_ts_code_count = len(ts_codes)
+        covered_ts_codes = self.repository.get_stk_mins_5min_covered_ts_codes_between(
+            start_date,
+            end_uncovered_date,
+            ts_codes,
+        )
+        if covered_ts_codes:
+            ts_codes = [ts_code for ts_code in ts_codes if ts_code not in covered_ts_codes]
+        if not ts_codes:
+            self._append_log(
+                task_id,
+                (
+                    f"{asset_table_name} {start_text}->{end_text} all range codes already covered "
+                    f"codes={all_ts_code_count}; verify watermarks"
+                ),
+            )
+            for trade_day in uncovered_dates:
+                coverage = self.repository.get_stk_mins_5min_day_coverage(trade_day)
+                if (
+                    coverage["expected_code_count"] > 0
+                    and coverage["existing_code_count"] >= coverage["expected_code_count"]
+                ):
+                    self.repository.update_watermark(asset_table_name, trade_day)
+                    watermark = trade_day
+                    continue
+                trade_date_text = self._format_tushare_date(trade_day)
+                issue_message = (
+                    f"partial coverage codes={coverage['existing_code_count']}/"
+                    f"{coverage['expected_code_count']} rows={coverage['existing_row_count']}"
+                )
+                self.repository.update_watermark(
+                    asset_table_name,
+                    trade_day,
+                    issue_scope=trade_date_text,
+                    issue_message=issue_message,
+                )
+                watermark = trade_day
+                self._append_log(task_id, f"{asset_table_name} {trade_date_text} {issue_message}; watermark advanced")
+            return True
         total_rows = 0
         failed_count = 0
         fallback_count = 0
@@ -643,7 +682,8 @@ class TushareAssetService:
             task_id,
             (
                 f"{asset_table_name} {start_text}->{end_text} begin range refresh "
-                f"open_dates={len(uncovered_dates)} codes={len(ts_codes)} source=baostock fallback=tushare"
+                f"open_dates={len(uncovered_dates)} codes={len(ts_codes)}/{all_ts_code_count} "
+                f"skipped_codes={len(covered_ts_codes)} source=baostock fallback=tushare stock_universe=SH/SZ excluding BJ"
             ),
         )
         try:

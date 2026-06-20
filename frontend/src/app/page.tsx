@@ -64,35 +64,38 @@ const TUSHARE_ASSET_META: Record<
   "tushare.bak_basic": {
     api: "bak_basic",
     purpose: "历史股票列表/基础信息",
-    refresh: "按交易日全市场刷新",
+    note: "股票资产层默认排除北交所 BJ；指数资产中的北证50不受影响",
+    refresh: "按交易日沪深股票刷新，默认排除北交所 BJ",
   },
   "tushare.adj_factor": {
     api: "adj_factor",
     purpose: "复权因子",
-    refresh: "按交易日全市场刷新",
+    note: "股票资产层默认排除北交所 BJ",
+    refresh: "按交易日沪深股票刷新，默认排除北交所 BJ",
   },
   "tushare.daily": {
     api: "daily",
     purpose: "未复权日线行情",
-    refresh: "按交易日全市场刷新",
+    note: "股票资产层默认排除北交所 BJ",
+    refresh: "按交易日沪深股票刷新，默认排除北交所 BJ",
   },
   "tushare.daily_basic": {
     api: "daily_basic",
     purpose: "估值/市值/股本/换手率",
-    refresh: "按交易日全市场刷新",
-    note: "最早可信 2016-12-06",
+    refresh: "按交易日沪深股票刷新，默认排除北交所 BJ",
+    note: "最早可信 2016-12-06；股票资产层默认排除北交所 BJ",
   },
   "tushare.stk_mins_5min": {
     api: "stk_mins 5min",
     purpose: "5分钟线原始行情",
-    refresh: "按交易日逐股刷新",
-    note: "需单独分钟权限",
+    refresh: "按交易日逐股刷新，默认排除北交所 BJ",
+    note: "需单独分钟权限；北交所 BJ 不进入默认股票资产层",
   },
   "tushare.stock_daily_technical": {
     api: "派生表",
     purpose: "前复权日线/基础信息/技术指标宽表",
-    refresh: "依赖基础资产最小水位覆盖重建",
-    note: "正式落表自 2017-06-01",
+    refresh: "依赖沪深股票基础资产最小水位覆盖重建",
+    note: "正式落表自 2017-06-01；默认排除北交所 BJ 股票",
   },
 };
 

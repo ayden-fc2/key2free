@@ -29,6 +29,7 @@ INDEX_KEEP_TS_CODES = (
     "000852.SH",  # 中证1000
     "932000.CSI",  # 中证2000
 )
+EXCLUDED_STOCK_EXCHANGES = ("BJ",)
 TUSHARE_ASSET_TABLE_NAMES = [
     "tushare.trade_cal",
     "tushare.index_basic",
@@ -54,6 +55,14 @@ class TushareRepository:
 
     def index_keep_ts_codes(self) -> tuple[str, ...]:
         return INDEX_KEEP_TS_CODES
+
+    def is_supported_stock_ts_code(self, ts_code: str | None) -> bool:
+        if ts_code is None:
+            return False
+        parts = str(ts_code).split(".", maxsplit=1)
+        if len(parts) != 2:
+            return False
+        return parts[1].upper() not in EXCLUDED_STOCK_EXCHANGES
 
     def ensure_tables(self) -> None:
         with self.duckdb.connect(read_only=False) as connection:
@@ -834,9 +843,13 @@ class TushareRepository:
             for index in range(17, 23):
                 row[index] = self._none_or_float(row[index])
             row[23] = self._none_or_int(row[23])
+            if not self.is_supported_stock_ts_code(row[1]):
+                continue
             if row[0] is not None:
                 trade_dates.add(row[0])
             rows.append(row)
+        if not rows:
+            return 0
         with self.duckdb.connect(read_only=False) as connection:
             if trade_dates:
                 connection.executemany(
@@ -867,7 +880,10 @@ class TushareRepository:
                 self._none_or_float(item.get("adj_factor")),
             ]
             for item in frame.to_dict("records")
+            if self.is_supported_stock_ts_code(item.get("ts_code"))
         ]
+        if not rows:
+            return 0
         trade_dates = sorted({row[1] for row in rows if row[1] is not None})
         with self.duckdb.connect(read_only=False) as connection:
             if trade_dates:
@@ -907,9 +923,13 @@ class TushareRepository:
             row[1] = self._parse_yyyymmdd(row[1])
             for index in range(2, len(row)):
                 row[index] = self._none_or_float(row[index])
+            if not self.is_supported_stock_ts_code(row[0]):
+                continue
             if row[1] is not None:
                 trade_dates.add(row[1])
             rows.append(row)
+        if not rows:
+            return 0
         with self.duckdb.connect(read_only=False) as connection:
             if trade_dates:
                 connection.executemany(
@@ -958,9 +978,13 @@ class TushareRepository:
             row[1] = self._parse_yyyymmdd(row[1])
             for index in range(2, len(row)):
                 row[index] = self._none_or_float(row[index])
+            if not self.is_supported_stock_ts_code(row[0]):
+                continue
             if row[1] is not None:
                 trade_dates.add(row[1])
             rows.append(row)
+        if not rows:
+            return 0
         with self.duckdb.connect(read_only=False) as connection:
             if trade_dates:
                 connection.executemany(
@@ -1002,9 +1026,13 @@ class TushareRepository:
             row[1] = trade_time
             for index in range(2, len(row)):
                 row[index] = self._none_or_float(row[index])
+            if not self.is_supported_stock_ts_code(row[0]):
+                continue
             if row[0] is not None and trade_date is not None:
                 delete_keys.add((str(row[0]), trade_date))
             rows.append([row[0], row[1], trade_date, *row[2:]])
+        if not rows:
+            return 0
         with self.duckdb.connect(read_only=False) as connection:
             if delete_keys:
                 connection.executemany(
@@ -1066,6 +1094,7 @@ class TushareRepository:
                     where trade_date >= ?
                       and trade_date <= ?
                       and ts_code is not null
+                      and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                     order by ts_code
                     """,
                     [STOCK_DAILY_TECHNICAL_START_DATE, target_watermark],
@@ -1181,6 +1210,7 @@ class TushareRepository:
                 from tushare.daily
                 where trade_date = ?
                   and ts_code is not null
+                  and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                 order by ts_code
                 """,
                 [trade_day],
@@ -1197,6 +1227,7 @@ class TushareRepository:
                 where trade_date >= ?
                   and trade_date <= ?
                   and ts_code is not null
+                  and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                 order by ts_code
                 """,
                 [start_date, end_date],
@@ -1223,6 +1254,7 @@ class TushareRepository:
                     from tushare.daily
                     where trade_date = ?
                       and ts_code is not null
+                      and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                     """,
                     [trade_day],
                 ).fetchone()
@@ -1243,12 +1275,14 @@ class TushareRepository:
                     from tushare.daily
                     where trade_date = ?
                       and ts_code is not null
+                      and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                 ),
                 target_day as (
                     select ts_code
                     from {asset_table_name}
                     where trade_date = ?
                       and ts_code is not null
+                      and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                 )
                 select
                     (select count(*) from daily_codes) as expected_code_count,
@@ -1293,6 +1327,7 @@ class TushareRepository:
                     from tushare.daily
                     where trade_date = ?
                       and ts_code is not null
+                      and upper(split_part(ts_code, '.', 2)) not in ('BJ')
                 )
                 select
                     (select count(*) from daily_codes) as expected_code_count,
@@ -1316,6 +1351,49 @@ class TushareRepository:
             "existing_code_count": int(row[1] or 0),
             "existing_row_count": int(row[2] or 0),
         }
+
+    def get_stk_mins_5min_covered_ts_codes_between(
+        self,
+        start_date: date,
+        end_date: date,
+        ts_codes: list[str],
+    ) -> set[str]:
+        self.ensure_tables()
+        if not ts_codes:
+            return set()
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                with expected as (
+                    select daily.ts_code,
+                           count(distinct daily.trade_date) as expected_day_count
+                    from tushare.daily daily
+                    where daily.trade_date >= ?
+                      and daily.trade_date <= ?
+                      and daily.ts_code in (select unnest(?))
+                      and upper(split_part(daily.ts_code, '.', 2)) not in ('BJ')
+                    group by daily.ts_code
+                ),
+                existing as (
+                    select minutes.ts_code,
+                           count(distinct minutes.trade_date) as existing_day_count
+                    from tushare.stk_mins_5min minutes
+                    join expected expected
+                      on expected.ts_code = minutes.ts_code
+                    where minutes.trade_date >= ?
+                      and minutes.trade_date <= ?
+                    group by minutes.ts_code
+                )
+                select expected.ts_code
+                from expected
+                join existing
+                  on existing.ts_code = expected.ts_code
+                where existing.existing_day_count >= expected.expected_day_count
+                order by expected.ts_code
+                """,
+                [start_date, end_date, ts_codes, start_date, end_date],
+            ).fetchall()
+        return {str(row[0]) for row in rows if row[0] is not None}
 
     def _load_stock_daily_technical_base(
         self,
@@ -1457,6 +1535,7 @@ class TushareRepository:
             where daily.trade_date >= ?
               and daily.trade_date <= ?
               and daily.ts_code in (select unnest(?))
+              and upper(split_part(daily.ts_code, '.', 2)) not in ('BJ')
               and latest_factor.latest_adj_factor is not null
               and latest_factor.latest_adj_factor > 0
             order by daily.ts_code, daily.trade_date
