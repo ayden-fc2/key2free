@@ -152,7 +152,7 @@ class SignalService:
             normalized_dates = [
                 day
                 for day in requested_dates
-                if (clock := trading_clocks.get(day)) is not None and clock.is_period_end
+                if (clock := trading_clocks.get(day)) is not None and strategy.is_signal_day(clock)
             ]
 
         if progress_callback is not None:
@@ -198,6 +198,7 @@ class SignalService:
                     max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
                     index_source=batch_index_rows,
                     params=self._strategy_params_for_date(
+                        strategy=strategy,
                         trade_date=day,
                         trading_clocks=trading_clocks,
                     ),
@@ -385,6 +386,7 @@ class SignalService:
     def _strategy_params_for_date(
         self,
         *,
+        strategy: Any,
         trade_date: date,
         trading_clocks: dict[date, Any],
     ) -> dict[str, Any]:
@@ -393,8 +395,8 @@ class SignalService:
             return {}
         params = {
             "trading_clock": clock.to_params(),
-            "is_rebalance_period_start": clock.is_period_start,
-            "is_signal_period_end": clock.is_period_end,
+            "is_rebalance_period_start": strategy.is_rebalance_day(clock),
+            "is_signal_period_end": strategy.is_signal_day(clock),
         }
         return params
 

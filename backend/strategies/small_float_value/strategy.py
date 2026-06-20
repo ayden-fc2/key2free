@@ -21,8 +21,6 @@ SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
-SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS = 20
-SMALL_FLOAT_VALUE_MAX_CLOSE_TO_LOW_20 = 1.35
 LIMIT_MOVE_PCT = 9.8
 MOMENTUM_TRIGGER_PCT = 7.0
 MOMENTUM_CONTINUE_PCT = 7.0
@@ -43,12 +41,6 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
     pool["selection_circ_mv"] = _numeric_column(pool, "circ_mv")
     pool["eps_value"] = _numeric_column(pool, "eps")
     pool["listed_days"] = _listed_days(pool)
-    pool["low_20_close"] = _rolling_low_by_code(
-        pool,
-        column="unadjusted_close",
-        window=SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS,
-    )
-    pool["close_to_low_20"] = pool["unadjusted_close"] / pool["low_20_close"]
     if trade_date is not None:
         pool = pool[pool["trade_date"] == trade_date].copy()
 
@@ -61,8 +53,6 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
         & (pool["eps_value"] >= 0)
         & pool["unadjusted_close"].apply(_positive)
         & pool["selection_circ_mv"].apply(_positive)
-        & pool["low_20_close"].apply(_positive)
-        & (pool["close_to_low_20"] <= SMALL_FLOAT_VALUE_MAX_CLOSE_TO_LOW_20)
     )
     pool = pool[mask.fillna(False)]
     if pool.empty:
@@ -103,14 +93,11 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                 "eps": float(row.eps_value),
                 "close": float(row.unadjusted_close),
                 "circ_mv": float(row.selection_circ_mv),
-                "low_20_close": float(row.low_20_close),
-                "close_to_low_20": float(row.close_to_low_20),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "close/20d_low<=1.35; unadjusted close lowest 10%; "
-                    "select circ_mv ranks 1-10"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-10"
                 ),
-                "entry_rule": "previous signal day target, next Monday open rebalance",
+                "entry_rule": "previous signal day target, next trading-cycle rebalance open",
                 "exit_rule": (
                     "weekly open rebalance when absent from latest target; "
                     "daily close exit after previous pct_chg>=7 and today pct_chg<7"
@@ -130,8 +117,6 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                     "eps": float(row.eps_value),
                     "close": float(row.unadjusted_close),
                     "circ_mv": float(row.selection_circ_mv),
-                    "low_20_close": float(row.low_20_close),
-                    "close_to_low_20": float(row.close_to_low_20),
                     "circ_mv_rank_in_low_price_pool": int(row.circ_mv_rank_in_low_price_pool),
                     "target_rank": rank,
                 },
@@ -162,7 +147,7 @@ class SmallFloatValueLifecycle:
                 "eps",
                 "circ_mv",
             ),
-            window=SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS,
+            window=0,
         )
         return _select_day(rows, trade_date=trade_date)
 
@@ -195,7 +180,7 @@ class SmallFloatValueLifecycle:
                     )
                 continue
 
-            if not _is_rebalance_period_start(context, self.rebalance_weekday):
+            if not _is_rebalance_day(context, self.rebalance_weekday):
                 continue
 
             target_codes = set(context.watch_pool)
@@ -243,7 +228,7 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         market: MarketViews,
     ) -> list[StrategyBuyDecision]:
-        if not _is_rebalance_period_start(context, self.rebalance_weekday):
+        if not _is_rebalance_day(context, self.rebalance_weekday):
             return []
 
         target_items = sorted(
@@ -305,7 +290,7 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         raw_signals: list[dict[str, Any]],
     ) -> StrategyWatchDecision:
-        if not _is_signal_period_end(context):
+        if not _is_signal_day(context):
             return StrategyWatchDecision(keep=set(context.watch_pool))
         if context.trade_index == 0:
             return StrategyWatchDecision(
@@ -330,19 +315,6 @@ def _numeric_column(pool: pd.DataFrame, column: str) -> pd.Series:
     if column not in pool.columns:
         return pd.Series(float("nan"), index=pool.index, dtype=float)
     return pd.to_numeric(pool[column], errors="coerce")
-
-
-def _rolling_low_by_code(pool: pd.DataFrame, *, column: str, window: int) -> pd.Series:
-    if column not in pool.columns:
-        return pd.Series(float("nan"), index=pool.index, dtype=float)
-    ordered = pool.sort_values(["code", "trade_date"])
-    lows = (
-        ordered.groupby("code", sort=False)[column]
-        .rolling(window=window, min_periods=window)
-        .min()
-        .reset_index(level=0, drop=True)
-    )
-    return lows.reindex(pool.index)
 
 
 def _finite(value: Any) -> bool:
@@ -370,21 +342,21 @@ def _positive_int(value: Any) -> int | None:
     return None
 
 
-def _is_rebalance_period_start(context: StrategyContext, fallback_weekday: int) -> bool:
+def _is_rebalance_day(context: StrategyContext, fallback_weekday: int) -> bool:
     clock = context.params.get("trading_clock")
-    if isinstance(clock, dict) and "is_period_start" in clock:
-        return bool(clock.get("is_period_start"))
     if "is_rebalance_period_start" in context.params:
         return bool(context.params.get("is_rebalance_period_start"))
+    if isinstance(clock, dict) and "is_period_start" in clock:
+        return bool(clock.get("is_period_start"))
     return context.trade_date.weekday() == fallback_weekday
 
 
-def _is_signal_period_end(context: StrategyContext) -> bool:
+def _is_signal_day(context: StrategyContext) -> bool:
     clock = context.params.get("trading_clock")
-    if isinstance(clock, dict) and "is_period_end" in clock:
-        return bool(clock.get("is_period_end"))
     if "is_signal_period_end" in context.params:
         return bool(context.params.get("is_signal_period_end"))
+    if isinstance(clock, dict) and "is_period_end" in clock:
+        return bool(clock.get("is_period_end"))
     return True
 
 

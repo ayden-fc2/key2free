@@ -25,10 +25,22 @@ class StrategyRegistration:
     signal_history_window: int = 200
     signal_index_codes: tuple[str, ...] = ()
     trading_clock_period: str | None = None
+    signal_period_day: int | None = None
+    rebalance_period_day: int | None = None
 
     @property
     def use_trading_week_clock(self) -> bool:
         return self.trading_clock_period == "W"
+
+    def is_signal_day(self, clock: object) -> bool:
+        if self.signal_period_day is not None and hasattr(clock, "is_period_day"):
+            return bool(clock.is_period_day(self.signal_period_day))
+        return bool(getattr(clock, "is_period_end", False))
+
+    def is_rebalance_day(self, clock: object) -> bool:
+        if self.rebalance_period_day is not None and hasattr(clock, "is_period_day"):
+            return bool(clock.is_period_day(self.rebalance_period_day))
+        return bool(getattr(clock, "is_period_start", False))
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -62,7 +74,7 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "eps",
             "circ_mv",
         ),
-        signal_history_window=20,
+        signal_history_window=0,
         trading_clock_period="W",
     ),
 }

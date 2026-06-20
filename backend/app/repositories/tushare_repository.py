@@ -16,6 +16,7 @@ STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2016, 12, 6)
 STOCK_DAILY_TECHNICAL_LOG_ROW_STEP = 100000
 STOCK_DAILY_TECHNICAL_WORKERS = int(os.getenv("STOCK_DAILY_TECHNICAL_WORKERS", "4"))
 STOCK_DAILY_TECHNICAL_BATCH_SIZE = int(os.getenv("STOCK_DAILY_TECHNICAL_BATCH_SIZE", "40"))
+RSRS_WINDOWS = (5, 10, 20, 30)
 INDEX_BASIC_WATERMARK = date(2014, 1, 2)
 INDEX_BASIC_MARKETS = ("SSE", "SZSE", "OTH", "CSI")
 INDEX_KEEP_TS_CODES = (
@@ -374,6 +375,10 @@ class TushareRepository:
                     avg_volume_5 double,
                     avg_volume_10 double,
                     avg_volume_20 double,
+                    avg_amount_5 double,
+                    avg_amount_10 double,
+                    avg_amount_20 double,
+                    avg_amount_30 double,
                     volume_ratio_5 double,
                     volume_ratio_10 double,
                     volume_ratio_20 double,
@@ -431,6 +436,10 @@ class TushareRepository:
                     kdj_k_9_3_3 double,
                     kdj_d_9_3_3 double,
                     kdj_j_9_3_3 double,
+                    rsrs_5 double,
+                    rsrs_10 double,
+                    rsrs_20 double,
+                    rsrs_30 double,
                     body_atr14_ratio double,
                     range_atr14_ratio double,
                     body_range_ratio double,
@@ -456,6 +465,14 @@ class TushareRepository:
                 "turnover_rate_f",
                 "daily_basic_volume_ratio",
                 "min5_close",
+                "avg_amount_5",
+                "avg_amount_10",
+                "avg_amount_20",
+                "avg_amount_30",
+                "rsrs_5",
+                "rsrs_10",
+                "rsrs_20",
+                "rsrs_30",
             ):
                 connection.execute(
                     f"alter table tushare.stock_daily_technical add column if not exists {column_name} double"
@@ -1788,6 +1805,9 @@ class TushareRepository:
             frame[f"avg_volume_{window}"] = avg_volume
             frame[f"volume_ratio_{window}"] = self._safe_divide_series(volume, avg_volume)
 
+        for window in (5, 10, 20, 30):
+            frame[f"avg_amount_{window}"] = amount.rolling(window=window, min_periods=window).mean()
+
         # 成交额对复权不变，成交量按复权比例折算成前复权股数，使 VWAP 落在前复权价格量纲上
         adj_ratio = frame["adj_factor"].astype(float) / frame["latest_adj_factor"].astype(float)
         qfq_volume = self._safe_divide_series(volume, adj_ratio)
@@ -1848,6 +1868,13 @@ class TushareRepository:
         frame["kdj_d_9_3_3"] = d
         frame["kdj_j_9_3_3"] = 3.0 * k - 2.0 * d
 
+        for window in RSRS_WINDOWS:
+            frame[f"rsrs_{window}"] = self._rolling_regression_slope(
+                x=low,
+                y=high,
+                window=window,
+            )
+
         body = (close - open_).abs()
         total_range = high - low
         upper_shadow = high - pd.concat([open_, close], axis=1).max(axis=1)
@@ -1859,6 +1886,22 @@ class TushareRepository:
         frame["lower_shadow_range_ratio"] = self._safe_divide_series(lower_shadow, total_range)
         frame["overnight_return"] = self._safe_divide_series(open_, pre_close) - 1.0
         return frame
+
+    def _rolling_regression_slope(
+        self,
+        *,
+        x: pd.Series,
+        y: pd.Series,
+        window: int,
+    ) -> pd.Series:
+        x_mean = x.rolling(window=window, min_periods=window).mean()
+        y_mean = y.rolling(window=window, min_periods=window).mean()
+        xy_mean = (x * y).rolling(window=window, min_periods=window).mean()
+        x2_mean = (x * x).rolling(window=window, min_periods=window).mean()
+        covariance = xy_mean - x_mean * y_mean
+        variance = x2_mean - x_mean * x_mean
+        slope = self._safe_divide_series(covariance, variance)
+        return slope.where(variance.abs() > 1e-12)
 
     def create_refresh_task(self) -> int:
         self.ensure_tables()
@@ -2120,6 +2163,10 @@ class TushareRepository:
             "avg_volume_5",
             "avg_volume_10",
             "avg_volume_20",
+            "avg_amount_5",
+            "avg_amount_10",
+            "avg_amount_20",
+            "avg_amount_30",
             "volume_ratio_5",
             "volume_ratio_10",
             "volume_ratio_20",
@@ -2177,6 +2224,10 @@ class TushareRepository:
             "kdj_k_9_3_3",
             "kdj_d_9_3_3",
             "kdj_j_9_3_3",
+            "rsrs_5",
+            "rsrs_10",
+            "rsrs_20",
+            "rsrs_30",
             "body_atr14_ratio",
             "range_atr14_ratio",
             "body_range_ratio",

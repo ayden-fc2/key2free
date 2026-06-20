@@ -36,6 +36,17 @@ class TradingPeriodClock:
     def is_period_end(self) -> bool:
         return self.trade_date == self.period_end
 
+    @property
+    def period_day_index(self) -> int:
+        return self.period_open_dates.index(self.trade_date) + 1
+
+    @property
+    def period_day_count(self) -> int:
+        return len(self.period_open_dates)
+
+    def is_period_day(self, day_index: int) -> bool:
+        return self.period_day_index == day_index
+
     def to_params(self) -> dict[str, object]:
         return {
             "trade_date": self.trade_date,
@@ -49,6 +60,8 @@ class TradingPeriodClock:
             "period_end": self.period_end,
             "is_period_start": self.is_period_start,
             "is_period_end": self.is_period_end,
+            "period_day_index": self.period_day_index,
+            "period_day_count": self.period_day_count,
             "period_open_dates": self.period_open_dates,
             "open_dates_window": self.open_dates_window,
         }

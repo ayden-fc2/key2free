@@ -432,6 +432,7 @@ class BacktestService:
         )
         for trade_index, trade_date in enumerate(trading_dates):
             strategy_params = self._strategy_params_for_date(
+                strategy=strategy,
                 trade_date=trade_date,
                 trading_clocks=trading_clocks,
             )
@@ -669,7 +670,7 @@ class BacktestService:
         return [
             trade_date
             for trade_date in trading_dates
-            if (clock := clocks.get(trade_date)) is not None and clock.is_period_end
+            if (clock := clocks.get(trade_date)) is not None and strategy.is_signal_day(clock)
         ]
 
     def _build_trading_clocks_for_dates(
@@ -692,6 +693,7 @@ class BacktestService:
     def _strategy_params_for_date(
         self,
         *,
+        strategy: StrategyRegistration,
         trade_date: date,
         trading_clocks: dict[date, TradingPeriodClock],
     ) -> dict[str, Any]:
@@ -700,8 +702,8 @@ class BacktestService:
             return {}
         return {
             "trading_clock": clock.to_params(),
-            "is_rebalance_period_start": clock.is_period_start,
-            "is_signal_period_end": clock.is_period_end,
+            "is_rebalance_period_start": strategy.is_rebalance_day(clock),
+            "is_signal_period_end": strategy.is_signal_day(clock),
         }
 
     def _sell_holding(
