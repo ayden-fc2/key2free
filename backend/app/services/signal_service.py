@@ -157,11 +157,17 @@ class SignalService:
                 code_filter=strategy.code_filter,
                 columns=strategy.signal_required_columns,
             )
+            batch_index_rows = self.repository.load_signal_index_rows(
+                ts_codes=strategy.signal_index_codes,
+                start_date=batch_dates[0],
+                end_date=batch_dates[-1],
+            )
             for day in batch_dates:
                 view = SignalDataView(
                     trade_date=day,
                     source=batch_rows,
                     max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
+                    index_source=batch_index_rows,
                 )
                 raw_items = strategy.lifecycle.select_signals(
                     trade_date=day,

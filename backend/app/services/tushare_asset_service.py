@@ -85,6 +85,8 @@ class TushareAssetService:
                 return
             if not self._refresh_index_daily(task_id=task_id, end_date=end_date):
                 return
+            if not self._refresh_index_dailybasic(task_id=task_id, end_date=end_date):
+                return
             if not self._refresh_by_trade_dates(
                 task_id=task_id,
                 asset_table_name="tushare.bak_basic",
@@ -142,10 +144,27 @@ class TushareAssetService:
         except Exception as exc:
             self._fail_task(task_id, f"refresh task failed: {type(exc).__name__}: {exc}")
 
+    def refresh_index_dailybasic_only(self, *, end_date: date) -> int:
+        self.repository.ensure_tables()
+        task_id = self.repository.create_refresh_task()
+        try:
+            self._append_log(task_id, f"start Tushare index_dailybasic refresh only, end_date={end_date}")
+            ok = self._refresh_index_dailybasic(task_id=task_id, end_date=end_date)
+            self.repository.update_refresh_task(
+                task_id=task_id,
+                status="success" if ok else "error",
+                finished=True,
+            )
+            return task_id
+        except Exception as exc:
+            self._fail_task(task_id, f"index_dailybasic refresh failed: {type(exc).__name__}: {exc}")
+            return task_id
+
     def _refresh_index_basic(self, *, task_id: int) -> bool:
         asset_table_name = "tushare.index_basic"
         existing_count = self.repository.get_index_basic_count()
-        if existing_count > 0:
+        missing_codes = self.repository.get_missing_index_basic_ts_codes()
+        if existing_count > 0 and not missing_codes:
             self.repository.update_watermark(
                 asset_table_name,
                 self.repository.index_basic_watermark(),
@@ -153,6 +172,11 @@ class TushareAssetService:
             )
             self._append_log(task_id, f"{asset_table_name} static pool already covered rows={existing_count}")
             return True
+        if missing_codes:
+            self._append_log(
+                task_id,
+                f"{asset_table_name} static pool missing keep codes={','.join(missing_codes)}; refreshing",
+            )
 
         frames = []
         markets = self.repository.index_basic_markets()
@@ -214,7 +238,11 @@ class TushareAssetService:
     def _refresh_index_daily(self, *, task_id: int, end_date: date) -> bool:
         asset_table_name = "tushare.index_daily"
         watermark = self.repository.get_refresh_start_watermark(asset_table_name)
-        trade_dates = self.repository.get_open_trade_dates_after(watermark, end_date)
+        missing_range = self.repository.get_index_daily_missing_date_range(end_date=end_date)
+        start_watermark = watermark
+        if missing_range is not None:
+            start_watermark = min(start_watermark, missing_range[0] - timedelta(days=1))
+        trade_dates = self.repository.get_open_trade_dates_after(start_watermark, end_date)
         self._append_log(task_id, f"{asset_table_name} pending open trade dates={len(trade_dates)}")
         if not trade_dates:
             return True
@@ -226,8 +254,9 @@ class TushareAssetService:
                 coverage["expected_code_count"] > 0
                 and coverage["existing_code_count"] >= coverage["expected_code_count"]
             ):
-                self.repository.update_watermark(asset_table_name, trade_day)
-                watermark = trade_day
+                next_watermark = max(watermark, trade_day)
+                self.repository.update_watermark(asset_table_name, next_watermark)
+                watermark = next_watermark
                 self._append_log(
                     task_id,
                     (
@@ -305,8 +334,9 @@ class TushareAssetService:
                 coverage["expected_code_count"] > 0
                 and coverage["existing_code_count"] >= coverage["expected_code_count"]
             ):
-                self.repository.update_watermark(asset_table_name, trade_day)
-                watermark = trade_day
+                next_watermark = max(watermark, trade_day)
+                self.repository.update_watermark(asset_table_name, next_watermark)
+                watermark = next_watermark
                 continue
             issue_message = (
                 f"partial coverage codes={coverage['existing_code_count']}/"
@@ -314,16 +344,133 @@ class TushareAssetService:
             )
             self.repository.update_watermark(
                 asset_table_name,
-                trade_day,
+                max(watermark, trade_day),
                 issue_scope=self._format_tushare_date(trade_day),
                 issue_message=issue_message,
             )
-            watermark = trade_day
+            watermark = max(watermark, trade_day)
             self._append_log(task_id, f"{asset_table_name} {trade_day} {issue_message}; watermark advanced")
         self._append_log(
             task_id,
             (
                 f"{asset_table_name} {start_text}->{end_text} success rows={total_rows} "
+                f"codes={len(ts_codes)} failed_codes={failed_count}"
+            ),
+        )
+        return True
+
+    def _refresh_index_dailybasic(self, *, task_id: int, end_date: date) -> bool:
+        asset_table_name = "tushare.index_dailybasic"
+        watermark = self.repository.get_refresh_start_watermark(asset_table_name)
+        missing_range = self.repository.get_index_dailybasic_missing_date_range(end_date=end_date)
+        start_watermark = watermark
+        if missing_range is not None:
+            start_watermark = min(start_watermark, missing_range[0] - timedelta(days=1))
+        trade_dates = self.repository.get_open_trade_dates_after(start_watermark, end_date)
+        self._append_log(task_id, f"{asset_table_name} pending open trade dates={len(trade_dates)}")
+        if not trade_dates:
+            return True
+
+        uncovered_dates: list[date] = []
+        for trade_day in trade_dates:
+            coverage = self.repository.get_index_dailybasic_day_coverage(trade_day)
+            if (
+                coverage["expected_code_count"] > 0
+                and coverage["existing_code_count"] >= coverage["expected_code_count"]
+            ):
+                next_watermark = max(watermark, trade_day)
+                self.repository.update_watermark(asset_table_name, next_watermark)
+                watermark = next_watermark
+                continue
+            uncovered_dates.append(trade_day)
+
+        if not uncovered_dates:
+            return True
+
+        fields = (
+            "ts_code,trade_date,total_mv,float_mv,total_share,float_share,"
+            "free_share,turnover_rate,turnover_rate_f,pe,pe_ttm,pb"
+        )
+        ts_codes = self.repository.index_dailybasic_ts_codes()
+        start_date = uncovered_dates[0]
+        end_uncovered_date = uncovered_dates[-1]
+        total_rows = 0
+        failed_count = 0
+        for index, ts_code in enumerate(ts_codes, start=1):
+            code_failed = False
+            for window_start, window_end in self._iter_year_windows(start_date, end_uncovered_date):
+                start_text = self._format_tushare_date(window_start)
+                end_text = self._format_tushare_date(window_end)
+                self.repository.update_refresh_task(
+                    task_id=task_id,
+                    current_asset_table_name=asset_table_name,
+                    current_watermark=watermark,
+                )
+                frame = self._call_with_retries(
+                    task_id=task_id,
+                    asset_table_name=asset_table_name,
+                    scope=f"{ts_code} {start_text}->{end_text}",
+                    fetcher=lambda code=ts_code, start=start_text, end=end_text: get_tushare_pro().index_dailybasic(
+                        ts_code=code,
+                        start_date=start,
+                        end_date=end,
+                        fields=fields,
+                    ),
+                )
+                if frame is None:
+                    code_failed = True
+                    continue
+                total_rows += self.repository.upsert_index_dailybasic(frame)
+            if code_failed:
+                failed_count += 1
+            self._append_log(
+                task_id,
+                f"{asset_table_name} progress {index}/{len(ts_codes)} {ts_code} rows={total_rows}",
+            )
+
+        if total_rows <= 0:
+            start_text = self._format_tushare_date(start_date)
+            end_text = self._format_tushare_date(end_uncovered_date)
+            issue_message = (
+                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
+            )
+            self.repository.update_watermark(
+                asset_table_name,
+                end_uncovered_date,
+                issue_scope=f"{start_text}->{end_text}",
+                issue_message=issue_message,
+            )
+            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
+            return True
+
+        for trade_day in uncovered_dates:
+            coverage = self.repository.get_index_dailybasic_day_coverage(trade_day)
+            if (
+                coverage["expected_code_count"] > 0
+                and coverage["existing_code_count"] >= coverage["expected_code_count"]
+            ):
+                next_watermark = max(watermark, trade_day)
+                self.repository.update_watermark(asset_table_name, next_watermark)
+                watermark = next_watermark
+                continue
+            issue_message = (
+                f"partial coverage codes={coverage['existing_code_count']}/"
+                f"{coverage['expected_code_count']} rows={coverage['existing_row_count']}"
+            )
+            next_watermark = max(watermark, trade_day)
+            self.repository.update_watermark(
+                asset_table_name,
+                next_watermark,
+                issue_scope=self._format_tushare_date(trade_day),
+                issue_message=issue_message,
+            )
+            watermark = next_watermark
+            self._append_log(task_id, f"{asset_table_name} {trade_day} {issue_message}; watermark advanced")
+        self._append_log(
+            task_id,
+            (
+                f"{asset_table_name} {self._format_tushare_date(start_date)}->"
+                f"{self._format_tushare_date(end_uncovered_date)} success rows={total_rows} "
                 f"codes={len(ts_codes)} failed_codes={failed_count}"
             ),
         )

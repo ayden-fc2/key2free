@@ -31,6 +31,16 @@ def start_refresh(request: TushareRefreshRequest) -> dict:
     )
 
 
+@router.post("/refresh-index-dailybasic")
+def refresh_index_dailybasic(request: TushareRefreshRequest) -> dict:
+    task_id = TushareAssetService().refresh_index_dailybasic_only(end_date=request.end_date)
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "message": "tushare index_dailybasic refresh completed",
+    }
+
+
 @router.get("/refresh-task")
 def get_refresh_task(task_id: int | None = Query(default=None)) -> dict:
     task = TushareAssetService().get_refresh_task(task_id)

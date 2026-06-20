@@ -855,7 +855,7 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">Tushare 数据资产</div>
                   <div className="panel-subtitle">
-                    当前资产刷新按水位顺序轮转；每次接口成功后立即推进对应表水位。
+                    当前资产刷新按水位顺序轮转；后端运行时每天 03:00 自动刷新到昨日，自动任务包含 5 分钟线。
                   </div>
                 </div>
                 <Space>

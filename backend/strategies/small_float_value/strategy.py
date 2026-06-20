@@ -23,6 +23,8 @@ SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
+SMALL_FLOAT_VALUE_MARKET_INDEX_CODE = "000905.SH"
+SMALL_FLOAT_VALUE_MARKET_MA_WINDOW = 20
 LIMIT_MOVE_PCT = 9.8
 OPEN_LIMIT_MOVE_RATIO = 0.098
 
@@ -141,6 +143,13 @@ class SmallFloatValueLifecycle:
         trade_date: date,
         view: Any,
     ) -> list[dict[str, Any]]:
+        if not _is_market_environment_favorable(
+            view=view,
+            index_code=SMALL_FLOAT_VALUE_MARKET_INDEX_CODE,
+            ma_window=SMALL_FLOAT_VALUE_MARKET_MA_WINDOW,
+        ):
+            return []
+
         today_rows = view.cross_section(
             columns=(
                 "name",
@@ -403,6 +412,32 @@ def _history_snapshot(frame: Any, trade_date: date) -> dict[str, Any]:
         if base_close is not None and base_close > 0:
             snapshot[f"history_return_{window}"] = last_close / base_close - 1.0
     return snapshot
+
+
+def _is_market_environment_favorable(
+    *,
+    view: Any,
+    index_code: str,
+    ma_window: int,
+) -> bool:
+    history = view.index_history(
+        index_code,
+        columns=("close",),
+        window=ma_window,
+    )
+    if len(history) < ma_window:
+        return False
+
+    closes = pd.to_numeric(history["close"], errors="coerce").dropna()
+    if len(closes) < ma_window:
+        return False
+
+    latest_close = float(closes.iloc[-1])
+    moving_average = float(closes.tail(ma_window).mean())
+    if not (math.isfinite(latest_close) and math.isfinite(moving_average)):
+        return False
+
+    return latest_close >= moving_average
 
 
 def _with_history_snapshot(signal: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:

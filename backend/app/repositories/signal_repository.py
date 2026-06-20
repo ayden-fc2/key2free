@@ -529,12 +529,91 @@ class SignalRepository:
             return frame
         return frame[frame["code"].apply(lambda value: code_filter(str(value)))].copy()
 
+    def load_signal_index_rows(
+        self,
+        *,
+        ts_codes: tuple[str, ...],
+        start_date: date,
+        end_date: date,
+    ) -> Any:
+        if not ts_codes:
+            return pd.DataFrame(columns=["trade_date", "ts_code", "asset"])
+        from app.repositories.tushare_repository import TushareRepository
+
+        repository = TushareRepository()
+        repository.ensure_tables()
+        allowed_daily_codes = set(repository.index_keep_ts_codes())
+        allowed_dailybasic_codes = set(repository.index_dailybasic_ts_codes())
+        daily_codes = tuple(code for code in ts_codes if code in allowed_daily_codes)
+        dailybasic_codes = tuple(code for code in ts_codes if code in allowed_dailybasic_codes)
+        frames: list[Any] = []
+        with self.duckdb.connect(read_only=True) as connection:
+            if daily_codes:
+                frame = connection.execute(
+                    """
+                    select
+                        'daily' as asset,
+                        ts_code,
+                        trade_date,
+                        close,
+                        open,
+                        high,
+                        low,
+                        pre_close,
+                        change,
+                        pct_chg,
+                        vol,
+                        amount
+                    from tushare.index_daily
+                    where ts_code in (select unnest(?))
+                      and trade_date <= ?
+                    order by ts_code, trade_date
+                    """,
+                    [list(daily_codes), end_date],
+                ).fetchdf()
+                frames.append(frame)
+            if dailybasic_codes:
+                frame = connection.execute(
+                    """
+                    select
+                        'dailybasic' as asset,
+                        ts_code,
+                        trade_date,
+                        total_mv,
+                        float_mv,
+                        total_share,
+                        float_share,
+                        free_share,
+                        turnover_rate,
+                        turnover_rate_f,
+                        pe,
+                        pe_ttm,
+                        pb
+                    from tushare.index_dailybasic
+                    where ts_code in (select unnest(?))
+                      and trade_date <= ?
+                    order by ts_code, trade_date
+                    """,
+                    [list(dailybasic_codes), end_date],
+                ).fetchdf()
+                frames.append(frame)
+        if not frames:
+            return pd.DataFrame(columns=["trade_date", "ts_code", "asset"])
+        frame = pd.concat(frames, ignore_index=True, sort=False)
+        return self._normalize_index_frame(frame)
+
     def _normalize_signal_frame(self, frame: Any) -> Any:
         if frame.empty:
             return frame
         frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
         if "list_date" in frame.columns:
             frame["list_date"] = pd.to_datetime(frame["list_date"], errors="coerce").dt.date
+        return frame
+
+    def _normalize_index_frame(self, frame: Any) -> Any:
+        if frame.empty:
+            return frame
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
         return frame
 
     def get_default_signal_columns(self) -> tuple[str, ...]:

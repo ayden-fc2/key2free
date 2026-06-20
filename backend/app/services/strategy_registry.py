@@ -18,6 +18,7 @@ class StrategyRegistration:
     code_filter: Callable[[str], bool] | None = None
     signal_required_columns: tuple[str, ...] | None = None
     signal_history_window: int = 200
+    signal_index_codes: tuple[str, ...] = ()
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -37,6 +38,7 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "circ_mv",
         ),
         signal_history_window=200,
+        signal_index_codes=("000905.SH",),
     ),
 }
 

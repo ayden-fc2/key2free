@@ -16,6 +16,7 @@
 
 - 全市场股票截至 T 日的宽表数据。
 - 默认每只股票最多包含最近 `signal_history_window` 条记录。
+- 策略注册了 `signal_index_codes` 时，额外提供这些指数截至 T 日的日线历史窗口。
 - 策略通过 `SignalDataView` 选择自己需要的视图：组合排序使用 T 日横截面，单股形态使用个股历史窗口。
 
 策略输出：
@@ -103,6 +104,16 @@
 
 只有在“收盘后选信号”阶段，策略才能使用 T 日完整宽表指标。
 
+信号阶段还支持可选的指数历史。策略必须通过注册项 `signal_index_codes` 显式声明需要的指数，框架会从白名单指数资产中加载截至批次末日的全部历史，并在 `SignalDataView` 访问时按当前 T 日裁剪为 `trade_date <= T`。可用入口包括：
+
+- `view.index_daily_history(ts_code, columns=None, window=None)`：返回指定指数截至 T 日的日线历史，来自 `tushare.index_daily`。
+- `view.index_dailybasic_history(ts_code, columns=None, window=None)`：返回指定指数截至 T 日的每日指标历史，来自 `tushare.index_dailybasic`。
+- `view.index_history(ts_code, columns=None, window=None)`：兼容旧策略的日线别名，等同于 `index_daily_history`。
+
+`window=None` 时指数视图返回 T 日及以前的全部可用历史；传入正数时才截取末尾窗口。若某个指数未在对应白名单资产中，或尚无对应历史数据，相关视图会返回空表，策略应保守处理。
+
+信号系统和回测系统共享同一条信号预计算路径。回测在撮合前调用 `SignalService.get_signals_for_dates_by_stock()` 得到每日原始信号，因此指数环境过滤会同时作用于单日信号查询和回测信号池；不会在买入或卖出阶段重新查询指数，也不会把 T 日之后的指数表现带入交易判断。
+
 `today_bars` 字段顺序：
 
 ```text
@@ -119,6 +130,7 @@
 - `lifecycle`：策略生命周期实现。
 - `signal_history_window`：信号函数可见的每股历史行数，默认 `200`。组合轮动策略也可以配置为 `200`，再通过 `view.cross_section()` 使用 T 日横截面，通过 `view.iter_stock_history()` 使用个股历史。
 - `signal_required_columns`：信号阶段需要的字段；`None` 表示使用默认日频宽表字段，非空时只查询声明字段，并自动补充 `trade_date` 和 `code`。
+- `signal_index_codes`：信号阶段需要的指数代码列表，例如中证500为 `000905.SH`。未声明时不会加载指数数据；只会加载后端白名单中存在的指数日线和每日指标。
 - `required_columns`：买卖阶段 `history_by_code` 额外需要的宽表字段，不影响信号阶段字段。买卖阶段固定只提供截至 T-1 的最近 10 个交易日窗口。
 - `code_filter`：框架加载数据后用于过滤股票代码范围。
 
@@ -143,10 +155,14 @@
 - `history_by_stock(columns=None, window=200, codes=None)`：按股票返回截至 T 日的历史窗口，包含 T 日。
 - `iter_stock_history(columns=None, window=200, codes=None)`：逐股迭代历史窗口，适合全市场形态扫描，避免策略自己写 SQL。
 - `to_frame(columns=None, window=200, codes=None)`：必要时返回 DataFrame；优先使用上面的结构化视图方法。
+- `index_daily_history(ts_code, columns=None, window=None)`：返回指定指数截至 T 日的日线历史。只有策略在注册中声明且该指数在日线白名单中时才会有数据。
+- `index_dailybasic_history(ts_code, columns=None, window=None)`：返回指定指数截至 T 日的每日指标历史。只有策略在注册中声明且该指数在每日指标白名单中时才会有数据。
+- `index_history(ts_code, columns=None, window=None)`：旧版日线别名，等同于 `index_daily_history`。
 
 可用数据：
 
 - 可以使用 T 日完整日频宽表，因为该阶段模拟收盘后选信号。
+- 可以使用已注册指数截至 T 日的日线数据和每日指标数据做市场环境过滤、择时开关或仓位信号。
 - 不默认包含分钟线字段；不得假设 `min5_close` 或分钟线明细存在。
 
 输出：`list[dict]`，每个元素至少包含：
@@ -225,5 +241,19 @@ backend/strategies/<strategy_name>/strategy.py
 - 明确声明 `signal_required_columns`，并在策略内部确认关键字段存在，避免字段缺失被静默忽略后产生错误信号。
 
 单股形态策略通常通过 `view.iter_stock_history(window=200)` 在每只股票的历史窗口里寻找结构。组合轮动策略也可以配置 `signal_history_window=200`，通过 `view.cross_section()` 在 T 日全市场横截面里排序和选股，同时仍可读取个股历史窗口。
+
+## 小市值低价轮动策略
+
+当前 `small_float_value` 策略在信号阶段注册并使用中证500指数：
+
+```text
+signal_index_codes = ("000905.SH",)
+```
+
+策略每个 T 日收盘后先读取中证500最近 20 根指数收盘价，并计算 MA20。只有当 T 日中证500收盘价大于等于 MA20 时，才继续执行低价小流通市值选股；否则 `select_signals` 直接返回空列表。
+
+该过滤是信号阶段的市场环境开关，不是交易阶段的临时判断。由于 T 日收盘后的信号会在下一次买入/调仓前进入观望池，环境差时空信号会使目标池为空，回测中的周一调仓逻辑会自然卖出不在目标池内的持仓。整个流程只使用中证500截至 T 日的指数日线数据，不读取 T+1 或更晚的指数表现。
+
+后端只维护当前库中日线和每日指标都能覆盖 2014 年起回测窗口的核心指数：上证指数 `000001.SH`、深证成指 `399001.SZ`、创业板指 `399006.SZ`、中证500 `000905.SH`。北证50、科创综指、中证2000、巨潮小盘等不同时具备 2014 年起日线和每日指标覆盖的指数不进入自动维护池，避免长周期回测因指数历史不足而产生大段空信号。新增维护指数时，刷新链路会检测维护池缺失代码，并从其可用起点补齐指数日线和每日指标，而不是只按全局水位增量刷新。
 
 最高原则：每个策略的信号函数、买入函数、卖出函数都只能看到其交易时点应当可见的信息。T 日完整宽表只允许在收盘后选信号阶段使用；买卖阶段只能使用 T-1 历史宽表和 T 日交易可观察价格。

@@ -101,6 +101,7 @@ function buildChartOption(
       borderWidth: 1,
       extraCssText:
         "box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14); backdrop-filter: blur(4px);",
+      formatter: (params: unknown) => formatAxisTooltip(params, bars),
       textStyle: { color: "#111827" },
       trigger: "axis",
     },
@@ -237,6 +238,130 @@ function buildSharedZoom(length: number, zoomAll: boolean) {
     { endValue, startValue, type: "inside", xAxisIndex: [0, 1, 2] },
     { bottom: 8, endValue, height: 18, startValue, xAxisIndex: [0, 1, 2] },
   ];
+}
+
+type TooltipParam = {
+  dataIndex?: number;
+  marker?: string;
+  seriesName?: string;
+  value?: unknown;
+};
+
+function formatAxisTooltip(params: unknown, bars: Bar1dQfq[]) {
+  const items = Array.isArray(params) ? (params as TooltipParam[]) : [params as TooltipParam];
+  const dataIndex = items.find((item) => typeof item?.dataIndex === "number")?.dataIndex;
+
+  if (dataIndex === undefined) {
+    return "";
+  }
+
+  const bar = bars[dataIndex];
+  if (!bar) {
+    return "";
+  }
+
+  const pctChange = resolvePctChange(bar);
+  const pctColor = pctChange === null ? "#64748b" : pctChange >= 0 ? "#ef4444" : "#10b981";
+  const secondaryRows = items
+    .filter((item) => item.seriesName && item.seriesName !== "K线" && item.seriesName !== "成交量")
+    .map((item) => {
+      const value = Array.isArray(item.value) ? item.value.at(-1) : item.value;
+      return tooltipRow(item.marker ?? "", item.seriesName ?? "", formatNumber(value, 3));
+    })
+    .join("");
+
+  return `
+    <div style="min-width: 190px; padding: 2px 0;">
+      <div style="font-weight: 700; margin-bottom: 8px;">${escapeHtml(bar.trade_date)}</div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-bottom: 8px;">
+        ${tooltipMetric("开", formatNumber(bar.open))}
+        ${tooltipMetric("收", formatNumber(bar.close))}
+        ${tooltipMetric("高", formatNumber(bar.high))}
+        ${tooltipMetric("低", formatNumber(bar.low))}
+      </div>
+      <div style="display: flex; justify-content: space-between; gap: 16px; margin-bottom: 6px;">
+        <span style="color: #64748b;">涨跌幅</span>
+        <span style="color: ${pctColor}; font-weight: 700;">${formatPct(pctChange)}</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; gap: 16px; margin-bottom: ${secondaryRows ? "8px" : "0"};">
+        <span style="color: #64748b;">成交量</span>
+        <span>${formatVolume(bar.volume)}</span>
+      </div>
+      ${secondaryRows ? `<div style="border-top: 1px solid rgba(15, 23, 42, 0.1); padding-top: 8px;">${secondaryRows}</div>` : ""}
+    </div>
+  `;
+}
+
+function tooltipMetric(label: string, value: string) {
+  return `
+    <div style="display: flex; justify-content: space-between; gap: 8px;">
+      <span style="color: #64748b;">${label}</span>
+      <span>${value}</span>
+    </div>
+  `;
+}
+
+function tooltipRow(marker: string, label: string, value: string) {
+  return `
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; line-height: 1.8;">
+      <span>${marker}${escapeHtml(label)}</span>
+      <span>${value}</span>
+    </div>
+  `;
+}
+
+function resolvePctChange(bar: Bar1dQfq) {
+  if (bar.pct_chg !== null) {
+    return bar.pct_chg;
+  }
+
+  if (bar.preclose === null || bar.preclose === 0 || bar.close === null) {
+    return null;
+  }
+
+  return ((bar.close - bar.preclose) / bar.preclose) * 100;
+}
+
+function formatPct(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatNumber(value: unknown, digits = 2) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return value.toFixed(digits);
+}
+
+function formatVolume(value: number | null) {
+  if (value === null || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  if (Math.abs(value) >= 100_000_000) {
+    return `${(value / 100_000_000).toFixed(2)}亿`;
+  }
+
+  if (Math.abs(value) >= 10_000) {
+    return `${(value / 10_000).toFixed(2)}万`;
+  }
+
+  return value.toFixed(0);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function findDateIndex(bars: Bar1dQfq[], target: string) {

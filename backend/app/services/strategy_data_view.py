@@ -22,6 +22,7 @@ class SignalDataView:
     trade_date: date
     source: Any
     max_window: int = 200
+    index_source: Any | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_visible_rows", None)
@@ -94,17 +95,90 @@ class SignalDataView:
                 group.sort_values("trade_date").tail(resolved_window),
             )
 
+    def index_history(
+        self,
+        ts_code: str,
+        *,
+        columns: Iterable[str] | None = None,
+        window: int | None = None,
+    ) -> Any:
+        """Return index daily rows visible to the signal function.
+
+        Kept as a compatibility alias for index_daily_history().
+        """
+        return self.index_daily_history(ts_code, columns=columns, window=window)
+
+    def index_daily_history(
+        self,
+        ts_code: str,
+        *,
+        columns: Iterable[str] | None = None,
+        window: int | None = None,
+    ) -> Any:
+        """Return index OHLCV rows visible to the signal function."""
+        return self._index_asset_history(
+            ts_code,
+            asset="daily",
+            columns=columns,
+            window=window,
+        )
+
+    def index_dailybasic_history(
+        self,
+        ts_code: str,
+        *,
+        columns: Iterable[str] | None = None,
+        window: int | None = None,
+    ) -> Any:
+        """Return index daily-basic rows visible to the signal function."""
+        return self._index_asset_history(
+            ts_code,
+            asset="dailybasic",
+            columns=columns,
+            window=window,
+        )
+
+    def _index_asset_history(
+        self,
+        ts_code: str,
+        *,
+        asset: str,
+        columns: Iterable[str] | None,
+        window: int | None,
+    ) -> Any:
+        if self.index_source is None:
+            return pd.DataFrame(columns=["trade_date", "ts_code", "asset"])
+        frame = self.index_source
+        trade_dates = self._trade_dates(frame)
+        asset_values = frame["asset"].astype(str) if "asset" in frame.columns else pd.Series("", index=frame.index)
+        frame = frame[
+            (frame["ts_code"].astype(str) == str(ts_code))
+            & (asset_values == asset)
+            & (trade_dates <= self.trade_date)
+        ]
+        if window is not None:
+            resolved_window = self._resolve_index_window(window)
+        else:
+            resolved_window = 0
+        if resolved_window > 0:
+            frame = frame.sort_values("trade_date").tail(resolved_window)
+        frame = self._index_columns(frame, columns)
+        self._assert_no_future(frame, include_trade_date=True)
+        return frame.copy()
+
     def _visible_base(self) -> Any:
         cached = getattr(self, "_visible_rows")
         if cached is None:
-            cached = self.source[self.source["trade_date"] <= self.trade_date]
+            trade_dates = self._trade_dates(self.source)
+            cached = self.source[trade_dates <= self.trade_date]
             object.__setattr__(self, "_visible_rows", cached)
         return cached
 
     def _cross_section_base(self) -> Any:
         cached = getattr(self, "_cross_section_rows")
         if cached is None:
-            cached = self.source[self.source["trade_date"] == self.trade_date]
+            trade_dates = self._trade_dates(self.source)
+            cached = self.source[trade_dates == self.trade_date]
             object.__setattr__(self, "_cross_section_rows", cached)
         return cached
 
@@ -115,6 +189,11 @@ class SignalDataView:
             raise ValueError("signal history window must be >= 0")
         return min(int(window), self.max_window)
 
+    def _resolve_index_window(self, window: int) -> int:
+        if window < 0:
+            raise ValueError("signal index history window must be >= 0")
+        return int(window)
+
     def _columns(self, frame: Any, columns: Iterable[str] | None) -> Any:
         if columns is None:
             return frame
@@ -124,6 +203,26 @@ class SignalDataView:
                 selected.append(column)
         existing = [column for column in selected if column in frame.columns]
         return frame[existing]
+
+    def _index_columns(self, frame: Any, columns: Iterable[str] | None) -> Any:
+        if columns is None:
+            return frame
+        selected = ["trade_date", "ts_code"]
+        for column in columns:
+            if column not in selected:
+                selected.append(column)
+        existing = [column for column in selected if column in frame.columns]
+        return frame[existing]
+
+    def _trade_dates(self, frame: Any) -> Any:
+        if frame.empty:
+            return pd.Series([], index=frame.index, dtype=object)
+        if "trade_date" not in frame.columns:
+            return pd.Series([], index=frame.index, dtype=object)
+        return pd.to_datetime(
+            frame["trade_date"],
+            errors="coerce",
+        ).dt.date
 
     def _tail_by_code(self, frame: Any, window: int) -> Any:
         if frame.empty:
@@ -137,12 +236,22 @@ class SignalDataView:
     def _assert_no_future(self, frame: Any, *, include_trade_date: bool) -> None:
         if frame.empty:
             return
-        max_date = frame["trade_date"].max()
+        max_date = self._as_date(frame["trade_date"].max())
+        if max_date is None:
+            return
         if include_trade_date:
             if max_date > self.trade_date:
                 raise ValueError(f"signal view includes future date {max_date} after {self.trade_date}")
         elif max_date >= self.trade_date:
             raise ValueError(f"trade view includes {max_date} at or after {self.trade_date}")
+
+    def _as_date(self, value: Any) -> date | None:
+        if isinstance(value, date):
+            return value
+        timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            return None
+        return timestamp.date()
 
     def _to_stock_frame(self, code: str, group: Any) -> StockDailyFrame:
         ordered = group.sort_values("trade_date")
