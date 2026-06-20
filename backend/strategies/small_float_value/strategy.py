@@ -22,9 +22,11 @@ SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
 SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
-SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
-SMALL_FLOAT_VALUE_MARKET_INDEX_CODE = "000905.SH"
-SMALL_FLOAT_VALUE_MARKET_MA_WINDOW = 20
+SMALL_FLOAT_VALUE_MARKET_TOP_N = 500
+SMALL_FLOAT_VALUE_MARKET_MIN_COUNT = 300
+SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW = 20
+SMALL_FLOAT_VALUE_MARKET_SHORT_WINDOW = 10
+SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW = 40
 LIMIT_MOVE_PCT = 9.8
 OPEN_LIMIT_MOVE_RATIO = 0.098
 
@@ -135,7 +137,6 @@ class SmallFloatValueLifecycle:
     """Reference lifecycle implementation for portfolio-style strategies."""
 
     target_size = SMALL_FLOAT_VALUE_TARGET_HOLDINGS
-    rebalance_weekday = SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY
 
     def select_signals(
         self,
@@ -143,10 +144,11 @@ class SmallFloatValueLifecycle:
         trade_date: date,
         view: Any,
     ) -> list[dict[str, Any]]:
-        if not _is_market_environment_favorable(
+        if not bool(getattr(view, "params", {}).get("is_signal_period_end")):
+            return []
+
+        if not _is_small_cap_market_environment_favorable(
             view=view,
-            index_code=SMALL_FLOAT_VALUE_MARKET_INDEX_CODE,
-            ma_window=SMALL_FLOAT_VALUE_MARKET_MA_WINDOW,
         ):
             return []
 
@@ -222,7 +224,7 @@ class SmallFloatValueLifecycle:
                     )
                 continue
 
-            if context.trade_date.weekday() != self.rebalance_weekday:
+            if not _is_rebalance_period_start(context):
                 continue
 
             target_codes = set(context.watch_pool)
@@ -270,7 +272,7 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         market: MarketViews,
     ) -> list[StrategyBuyDecision]:
-        if context.trade_date.weekday() != self.rebalance_weekday:
+        if not _is_rebalance_period_start(context):
             return []
 
         target_items = sorted(
@@ -414,30 +416,93 @@ def _history_snapshot(frame: Any, trade_date: date) -> dict[str, Any]:
     return snapshot
 
 
-def _is_market_environment_favorable(
-    *,
-    view: Any,
-    index_code: str,
-    ma_window: int,
-) -> bool:
-    history = view.index_history(
-        index_code,
-        columns=("close",),
-        window=ma_window,
+def _is_small_cap_market_environment_favorable(*, view: Any) -> bool:
+    history = view.to_frame(
+        columns=(
+            "name",
+            "list_date",
+            "qfq_close",
+            "is_st",
+            "eps",
+            "circ_mv",
+            "turnover_rate",
+            "turnover_rate_f",
+        ),
+        window=SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW + SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW,
     )
-    if len(history) < ma_window:
+    market = _small_cap_market_indicator(history)
+    if len(market) < SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW:
         return False
 
-    closes = pd.to_numeric(history["close"], errors="coerce").dropna()
-    if len(closes) < ma_window:
+    scores = market["bull_bear_score"].dropna()
+    if len(scores) < SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW:
         return False
 
-    latest_close = float(closes.iloc[-1])
-    moving_average = float(closes.tail(ma_window).mean())
-    if not (math.isfinite(latest_close) and math.isfinite(moving_average)):
+    short_ma = float(scores.tail(SMALL_FLOAT_VALUE_MARKET_SHORT_WINDOW).mean())
+    long_ma = float(scores.tail(SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW).mean())
+    if not (math.isfinite(short_ma) and math.isfinite(long_ma)):
         return False
 
-    return latest_close >= moving_average
+    return short_ma >= long_ma
+
+
+def _small_cap_market_indicator(history: pd.DataFrame) -> pd.DataFrame:
+    if history.empty:
+        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
+
+    pool = history.copy()
+    pool["market_circ_mv"] = _numeric_column(pool, "circ_mv")
+    pool["market_close"] = _numeric_column(pool, "qfq_close")
+    turnover_f = _numeric_column(pool, "turnover_rate_f")
+    turnover = _numeric_column(pool, "turnover_rate")
+    pool["market_turnover"] = turnover_f.where(turnover_f.notna(), turnover)
+    pool["eps_value"] = _numeric_column(pool, "eps")
+    pool["listed_days"] = _listed_days(pool)
+
+    name = pool["name"].fillna("").astype(str).str.upper() if "name" in pool.columns else pd.Series("", index=pool.index)
+    mask = (
+        pool["code"].fillna("").astype(str).apply(small_float_value_code_filter)
+        & (pool["is_st"].fillna(0).astype(float) == 0.0)
+        & ~name.str.contains("ST", regex=False)
+        & (pool["listed_days"] >= SMALL_FLOAT_VALUE_MIN_LIST_DAYS)
+        & (pool["eps_value"] >= 0)
+        & pool["market_close"].apply(_positive)
+        & pool["market_circ_mv"].apply(_positive)
+    )
+    pool = pool[mask.fillna(False)].copy()
+    if pool.empty:
+        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
+
+    pool = pool.sort_values(["code", "trade_date"])
+    pool["market_return"] = pool.groupby("code", sort=False)["market_close"].pct_change()
+
+    rows: list[dict[str, Any]] = []
+    for trade_date, group in pool.groupby("trade_date", sort=True):
+        top = group.sort_values(["market_circ_mv", "code"], ascending=[True, True]).head(
+            SMALL_FLOAT_VALUE_MARKET_TOP_N
+        )
+        if len(top) < SMALL_FLOAT_VALUE_MARKET_MIN_COUNT:
+            continue
+        avg_turnover = float(top["market_turnover"].dropna().mean())
+        avg_return = float(top["market_return"].dropna().mean())
+        if not (math.isfinite(avg_turnover) and math.isfinite(avg_return)):
+            continue
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "avg_turnover": avg_turnover,
+                "avg_return": avg_return,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
+
+    market = pd.DataFrame(rows).sort_values("trade_date")
+    market["volatility_pct"] = (
+        market["avg_return"].rolling(SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW).std(ddof=0) * 100.0
+    )
+    market["bull_bear_score"] = market["avg_turnover"] + market["volatility_pct"]
+    return market.dropna(subset=["bull_bear_score"])
 
 
 def _with_history_snapshot(signal: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -471,6 +536,10 @@ def _positive_int(value: Any) -> int | None:
     if isinstance(value, float) and value.is_integer() and value > 0:
         return int(value)
     return None
+
+
+def _is_rebalance_period_start(context: StrategyContext) -> bool:
+    return bool(context.params.get("is_rebalance_period_start"))
 
 
 def _bar_open(bar: tuple[float, ...] | None) -> float | None:

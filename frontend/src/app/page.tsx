@@ -54,7 +54,7 @@ const TUSHARE_ASSET_META: Record<
     api: "index_basic",
     purpose: "核心指数静态白名单",
     refresh: "静态维护，不参与每日水位刷新",
-    note: "仅保留上证指数、深证成指、创业板指、北证50、科创综指、沪深300、中证500、中证1000、中证2000",
+    note: "仅保留上证指数、深证成指、创业板指、中证500",
   },
   "tushare.index_daily": {
     api: "index_daily",
@@ -64,7 +64,7 @@ const TUSHARE_ASSET_META: Record<
   "tushare.bak_basic": {
     api: "bak_basic",
     purpose: "历史股票列表/基础信息",
-    note: "股票资产层默认排除北交所 BJ；指数资产中的北证50不受影响",
+    note: "股票资产层默认排除北交所 BJ；指数白名单仅维护 2014 年起日线和每日指标都完整的核心指数",
     refresh: "按交易日沪深股票刷新，默认排除北交所 BJ",
   },
   "tushare.adj_factor": {

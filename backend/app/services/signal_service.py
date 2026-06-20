@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from app.dtos.signal_dto import (
@@ -17,6 +17,7 @@ from app.repositories.signal_repository import SignalRepository
 from app.services.strategy_data_view import SignalDataView
 from app.services.signal_window import SIGNAL_WINDOW_BARS
 from app.services.strategy_registry import get_strategy
+from app.services.trading_periods import weekly_period_boundaries
 
 
 class SignalServiceError(ValueError):
@@ -141,6 +142,12 @@ class SignalService:
         if progress_callback is not None:
             progress_callback(0, len(normalized_dates))
 
+        open_dates = self.repository.get_open_trade_dates(
+            start_date=start_date - timedelta(days=10),
+            end_date=end_date + timedelta(days=10),
+        )
+        _period_starts, signal_period_ends = weekly_period_boundaries(open_dates)
+
         window = min(strategy.signal_history_window, SIGNAL_WINDOW_BARS)
         batch_size = self._signal_batch_size(
             window=window,
@@ -168,6 +175,9 @@ class SignalService:
                     source=batch_rows,
                     max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
                     index_source=batch_index_rows,
+                    params={
+                        "is_signal_period_end": day in signal_period_ends,
+                    },
                 )
                 raw_items = strategy.lifecycle.select_signals(
                     trade_date=day,
