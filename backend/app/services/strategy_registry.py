@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from strategies.demo import (
+    SMALL_FLOAT_VALUE_REQUIRED_COLUMNS as DEMO_REQUIRED_COLUMNS,
+    demo_code_filter,
+    demo_lifecycle,
+)
 from strategies.small_float_value import (
     SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
     small_float_value_code_filter,
@@ -19,14 +24,19 @@ class StrategyRegistration:
     signal_required_columns: tuple[str, ...] | None = None
     signal_history_window: int = 200
     signal_index_codes: tuple[str, ...] = ()
+    trading_clock_period: str | None = None
+
+    @property
+    def use_trading_week_clock(self) -> bool:
+        return self.trading_clock_period == "W"
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "small_float_value": StrategyRegistration(
-        name="small_float_value",
-        lifecycle=small_float_value_lifecycle,
-        required_columns=SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
-        code_filter=small_float_value_code_filter,
+    "demo": StrategyRegistration(
+        name="demo",
+        lifecycle=demo_lifecycle,
+        required_columns=DEMO_REQUIRED_COLUMNS,
+        code_filter=demo_code_filter,
         signal_required_columns=(
             "name",
             "list_date",
@@ -38,6 +48,22 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "circ_mv",
         ),
         signal_history_window=200,
+    ),
+    "small_float_value": StrategyRegistration(
+        name="small_float_value",
+        lifecycle=small_float_value_lifecycle,
+        required_columns=SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
+        code_filter=small_float_value_code_filter,
+        signal_required_columns=(
+            "name",
+            "list_date",
+            "close",
+            "is_st",
+            "eps",
+            "circ_mv",
+        ),
+        signal_history_window=20,
+        trading_clock_period="W",
     ),
 }
 

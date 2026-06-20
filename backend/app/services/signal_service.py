@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from app.dtos.signal_dto import (
@@ -17,6 +17,7 @@ from app.repositories.signal_repository import SignalRepository
 from app.services.strategy_data_view import SignalDataView
 from app.services.signal_window import SIGNAL_WINDOW_BARS
 from app.services.strategy_registry import get_strategy
+from app.services.trading_periods import build_trading_clocks
 
 
 class SignalServiceError(ValueError):
@@ -123,23 +124,51 @@ class SignalService:
         progress_interval: int = 500,
     ) -> dict[date, DailySignalResultDTO]:
         """Evaluate signals from per-T visible wide-table windows."""
-        normalized_dates = sorted(set(trade_dates))
-        if not normalized_dates:
+        requested_dates = sorted(set(trade_dates))
+        if not requested_dates:
             return {}
 
         strategy = get_strategy(strategy_name)
         if strategy is None:
             raise SignalServiceError(f"unknown strategy: {strategy_name}")
 
-        start_date = normalized_dates[0]
-        end_date = normalized_dates[-1]
+        start_date = requested_dates[0]
+        end_date = requested_dates[-1]
         universe_counts = self.repository.get_universe_counts_by_date(
             start_date=start_date,
             end_date=end_date,
         )
+        normalized_dates = requested_dates
+        trading_clocks: dict[date, Any] = {}
+        if strategy.trading_clock_period is not None:
+            open_dates = self.repository.get_open_trade_dates(
+                start_date=start_date - timedelta(days=10),
+                end_date=end_date + timedelta(days=10),
+            )
+            trading_clocks = build_trading_clocks(
+                open_dates,
+                period=strategy.trading_clock_period,
+            )
+            normalized_dates = [
+                day
+                for day in requested_dates
+                if (clock := trading_clocks.get(day)) is not None and clock.is_period_end
+            ]
 
         if progress_callback is not None:
             progress_callback(0, len(normalized_dates))
+
+        if not normalized_dates:
+            return {
+                day: DailySignalResultDTO(
+                    trade_date=day.isoformat(),
+                    strategy_name=strategy.name,
+                    universe_count=universe_counts.get(day, 0),
+                    signal_count=0,
+                    signals=[],
+                )
+                for day in requested_dates
+            }
 
         window = min(strategy.signal_history_window, SIGNAL_WINDOW_BARS)
         batch_size = self._signal_batch_size(
@@ -168,6 +197,10 @@ class SignalService:
                     source=batch_rows,
                     max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
                     index_source=batch_index_rows,
+                    params=self._strategy_params_for_date(
+                        trade_date=day,
+                        trading_clocks=trading_clocks,
+                    ),
                 )
                 raw_items = strategy.lifecycle.select_signals(
                     trade_date=day,
@@ -198,7 +231,7 @@ class SignalService:
                 signal_count=len(signal_items_by_date.get(day, [])),
                 signals=signal_items_by_date.get(day, []),
             )
-            for day in normalized_dates
+            for day in requested_dates
         }
 
     def get_stock_data_contexts(
@@ -348,6 +381,22 @@ class SignalService:
         if required_columns is not None and len(required_columns) <= 16:
             return self.SIGNAL_BATCH_DAYS_WITH_NARROW_HISTORY
         return self.SIGNAL_BATCH_DAYS_WITH_HISTORY
+
+    def _strategy_params_for_date(
+        self,
+        *,
+        trade_date: date,
+        trading_clocks: dict[date, Any],
+    ) -> dict[str, Any]:
+        clock = trading_clocks.get(trade_date)
+        if clock is None:
+            return {}
+        params = {
+            "trading_clock": clock.to_params(),
+            "is_rebalance_period_start": clock.is_period_start,
+            "is_signal_period_end": clock.is_period_end,
+        }
+        return params
 
     def _report_progress(
         self,

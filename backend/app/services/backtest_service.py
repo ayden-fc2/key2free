@@ -6,7 +6,7 @@ import time
 from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from app.entities.stock_data_context import StockDailyFrame
@@ -17,6 +17,7 @@ from app.services.signal_service import SignalService
 from app.services.signal_window import SIGNAL_WINDOW_BARS, TRADE_HISTORY_WINDOW_BARS
 from app.services.strategy_registry import StrategyRegistration, get_strategy
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
+from app.services.trading_periods import TradingPeriodClock, build_trading_clocks
 
 
 Bar = tuple[float, ...]
@@ -69,6 +70,7 @@ class BacktestService:
     SELL_FEE_BPS = 10
     DEFAULT_SIMULATION_RUNS = 50
     STRATEGY_DEFAULT_SIMULATION_RUNS = {
+        "demo": 1,
         "small_float_value": 1,
     }
     SIMULATION_WORKERS = 10
@@ -334,6 +336,10 @@ class BacktestService:
         signals_by_date: dict[date, list[dict[str, Any]]] = {}
         signal_rows: list[list[Any]] = []
         total_signals = 0
+        evaluated_signal_days = self._evaluated_signal_days(
+            trading_dates=trading_dates,
+            strategy_name=strategy_name,
+        )
         for day in trading_dates:
             result = daily_results.get(day)
             signals = [] if result is None else [
@@ -364,7 +370,7 @@ class BacktestService:
         self.repository.update_task_progress(task_id=task_id, signal_count=total_signals)
         self.repository.append_task_log(
             task_id,
-            f"信号预计算完成: days={len(trading_dates)}, signals={total_signals}",
+            f"信号预计算完成: days={len(evaluated_signal_days)}, signals={total_signals}",
         )
         return signals_by_date
 
@@ -420,7 +426,15 @@ class BacktestService:
         run_stats = {"buys": 0, "closed": 0, "wins": 0}
         trade_records: dict[str, Any] = {"buys": buy_rows, "sells": sell_rows}
         total_asset = initial_cash
+        trading_clocks = self._build_trading_clocks_for_dates(
+            trading_dates=trading_dates,
+            strategy=strategy,
+        )
         for trade_index, trade_date in enumerate(trading_dates):
+            strategy_params = self._strategy_params_for_date(
+                trade_date=trade_date,
+                trading_clocks=trading_clocks,
+            )
             market = self._build_market_views(
                 prices=prices,
                 trade_date=trade_date,
@@ -442,6 +456,7 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
+                params=strategy_params,
             )
 
             for decision in lifecycle.decide_sells(context=context, market=market):
@@ -480,6 +495,7 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
+                params=strategy_params,
             )
 
             for decision in lifecycle.decide_buys(context=context, market=market):
@@ -565,6 +581,7 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
+                params=strategy_params,
             )
             watch_decision = lifecycle.update_watch_pool(
                 context=context,
@@ -635,6 +652,57 @@ class BacktestService:
         )
         run_stats["profit_loss_ratio"] = self._profit_loss_ratio_from_sells(sell_rows)
         return total_asset, run_stats
+
+    def _evaluated_signal_days(
+        self,
+        *,
+        trading_dates: list[date],
+        strategy_name: str,
+    ) -> list[date]:
+        strategy = get_strategy(strategy_name)
+        if strategy is None or strategy.trading_clock_period is None:
+            return trading_dates
+        clocks = self._build_trading_clocks_for_dates(
+            trading_dates=trading_dates,
+            strategy=strategy,
+        )
+        return [
+            trade_date
+            for trade_date in trading_dates
+            if (clock := clocks.get(trade_date)) is not None and clock.is_period_end
+        ]
+
+    def _build_trading_clocks_for_dates(
+        self,
+        *,
+        trading_dates: list[date],
+        strategy: StrategyRegistration,
+    ) -> dict[date, TradingPeriodClock]:
+        if not trading_dates or strategy.trading_clock_period is None:
+            return {}
+        open_dates = SignalRepository().get_open_trade_dates(
+            start_date=trading_dates[0] - timedelta(days=10),
+            end_date=trading_dates[-1] + timedelta(days=10),
+        )
+        return build_trading_clocks(
+            open_dates,
+            period=strategy.trading_clock_period,
+        )
+
+    def _strategy_params_for_date(
+        self,
+        *,
+        trade_date: date,
+        trading_clocks: dict[date, TradingPeriodClock],
+    ) -> dict[str, Any]:
+        clock = trading_clocks.get(trade_date)
+        if clock is None:
+            return {}
+        return {
+            "trading_clock": clock.to_params(),
+            "is_rebalance_period_start": clock.is_period_start,
+            "is_signal_period_end": clock.is_period_end,
+        }
 
     def _sell_holding(
         self,

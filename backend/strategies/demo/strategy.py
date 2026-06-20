@@ -5,6 +5,8 @@ from datetime import date
 from typing import Any
 
 import pandas as pd
+
+from app.entities.stock_data_context import SignalDecision
 from app.services.strategy_lifecycle import (
     MarketViews,
     StrategyBuyDecision,
@@ -21,11 +23,7 @@ SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
-SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS = 20
-SMALL_FLOAT_VALUE_MAX_CLOSE_TO_LOW_20 = 1.35
 LIMIT_MOVE_PCT = 9.8
-MOMENTUM_TRIGGER_PCT = 7.0
-MOMENTUM_CONTINUE_PCT = 7.0
 OPEN_LIMIT_MOVE_RATIO = 0.098
 
 
@@ -37,20 +35,12 @@ def small_float_value_code_filter(code: str) -> bool:
     return value.startswith("sh.6") or value.startswith("sz.0")
 
 
-def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[dict[str, Any]]:
+def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
     pool = group.copy()
     pool["unadjusted_close"] = _numeric_column(pool, "close")
     pool["selection_circ_mv"] = _numeric_column(pool, "circ_mv")
     pool["eps_value"] = _numeric_column(pool, "eps")
     pool["listed_days"] = _listed_days(pool)
-    pool["low_20_close"] = _rolling_low_by_code(
-        pool,
-        column="unadjusted_close",
-        window=SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS,
-    )
-    pool["close_to_low_20"] = pool["unadjusted_close"] / pool["low_20_close"]
-    if trade_date is not None:
-        pool = pool[pool["trade_date"] == trade_date].copy()
 
     name = pool["name"].fillna("").astype(str).str.upper()
     mask = (
@@ -61,8 +51,6 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
         & (pool["eps_value"] >= 0)
         & pool["unadjusted_close"].apply(_positive)
         & pool["selection_circ_mv"].apply(_positive)
-        & pool["low_20_close"].apply(_positive)
-        & (pool["close_to_low_20"] <= SMALL_FLOAT_VALUE_MAX_CLOSE_TO_LOW_20)
     )
     pool = pool[mask.fillna(False)]
     if pool.empty:
@@ -87,11 +75,12 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
 
     items: list[dict[str, Any]] = []
     for rank, row in enumerate(selected.itertuples(index=False), start=1):
-        signal = {
-            "triggered": True,
-            "signal_close": float(row.unadjusted_close),
-            "max_watch_days": 1,
-            "extras": {
+        qfq_close = _optional_float(getattr(row, "qfq_close", None))
+        signal = SignalDecision(
+            triggered=True,
+            signal_close=qfq_close,
+            max_watch_days=1,
+            extras={
                 "pattern": "small_float_value_weekly_rebalance",
                 "target_rank": rank,
                 "target_holdings": SMALL_FLOAT_VALUE_TARGET_HOLDINGS,
@@ -102,21 +91,20 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                 "listed_days": int(row.listed_days),
                 "eps": float(row.eps_value),
                 "close": float(row.unadjusted_close),
+                "qfq_close": qfq_close,
+                "total_mv": _optional_float(getattr(row, "total_mv", None)),
                 "circ_mv": float(row.selection_circ_mv),
-                "low_20_close": float(row.low_20_close),
-                "close_to_low_20": float(row.close_to_low_20),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "close/20d_low<=1.35; unadjusted close lowest 10%; "
-                    "select circ_mv ranks 1-10"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-10"
                 ),
                 "entry_rule": "previous signal day target, next Monday open rebalance",
                 "exit_rule": (
                     "weekly open rebalance when absent from latest target; "
-                    "daily close exit after previous pct_chg>=7 and today pct_chg<7"
+                    "daily close exit after limit-up fails to continue"
                 ),
             },
-        }
+        )
         items.append(
             {
                 "code": str(row.code),
@@ -129,13 +117,13 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                     "listed_days": int(row.listed_days),
                     "eps": float(row.eps_value),
                     "close": float(row.unadjusted_close),
+                    "qfq_close": qfq_close,
+                    "total_mv": _optional_float(getattr(row, "total_mv", None)),
                     "circ_mv": float(row.selection_circ_mv),
-                    "low_20_close": float(row.low_20_close),
-                    "close_to_low_20": float(row.close_to_low_20),
                     "circ_mv_rank_in_low_price_pool": int(row.circ_mv_rank_in_low_price_pool),
                     "target_rank": rank,
                 },
-                "signal": signal,
+                "signal": _decision_to_payload(signal),
             }
         )
     return items
@@ -153,18 +141,46 @@ class SmallFloatValueLifecycle:
         trade_date: date,
         view: Any,
     ) -> list[dict[str, Any]]:
-        rows = view.to_frame(
+        today_rows = view.cross_section(
             columns=(
                 "name",
                 "list_date",
                 "close",
+                "qfq_close",
                 "is_st",
                 "eps",
+                "total_mv",
                 "circ_mv",
-            ),
-            window=SMALL_FLOAT_VALUE_LOW_LOOKBACK_DAYS,
+            )
         )
-        return _select_day(rows, trade_date=trade_date)
+        selected = _select_day(today_rows)
+        self._probe_signal_history(
+            trade_date=trade_date,
+            view=view,
+            codes=[item["code"] for item in selected],
+        )
+        return selected
+
+    def _probe_signal_history(
+        self,
+        *,
+        trade_date: date,
+        view: Any,
+        codes: list[str],
+    ) -> None:
+        for _code, frame in view.iter_stock_history(
+            columns=("qfq_close",),
+            window=200,
+            codes=codes,
+        ):
+            if len(frame) == 0:
+                continue
+            if len(frame) > 200:
+                raise ValueError(f"signal history has {len(frame)} rows, expected <= 200")
+            if frame.trade_dates[-1] > trade_date:
+                raise ValueError(
+                    f"signal history includes {frame.trade_dates[-1]} after {trade_date}"
+                )
 
     def decide_sells(
         self,
@@ -177,12 +193,14 @@ class SmallFloatValueLifecycle:
         for code, holding in context.holdings.items():
             if getattr(holding, "buy_trade_index", context.trade_index) >= context.trade_index:
                 continue
+            _history_snapshot(market.history_by_code.get(code), context.trade_date)
             bar = market.today_bars.get(code)
             previous_bar = market.previous_bars.get(code)
             if not _is_tradeable_bar(bar):
                 continue
 
-            if _is_momentum_break_close_exit(previous_bar, bar):
+            # Daily close exit: yesterday limit-up, today not limit-up.
+            if _is_limit_up_bar(previous_bar) and not _is_limit_up_bar(bar):
                 close_price = _bar_close(bar)
                 if close_price is not None:
                     decisions.append(
@@ -190,12 +208,12 @@ class SmallFloatValueLifecycle:
                             code=code,
                             price=close_price,
                             quantity=int(holding.quantity),
-                            reason="momentum_break_close",
+                            reason="limit_break_close",
                         )
                     )
                 continue
 
-            if not _is_rebalance_period_start(context, self.rebalance_weekday):
+            if context.trade_date.weekday() != self.rebalance_weekday:
                 continue
 
             target_codes = set(context.watch_pool)
@@ -243,7 +261,7 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         market: MarketViews,
     ) -> list[StrategyBuyDecision]:
-        if not _is_rebalance_period_start(context, self.rebalance_weekday):
+        if context.trade_date.weekday() != self.rebalance_weekday:
             return []
 
         target_items = sorted(
@@ -259,6 +277,10 @@ class SmallFloatValueLifecycle:
 
         for item in target_items:
             code = item.code
+            history_snapshot = _history_snapshot(
+                market.history_by_code.get(code),
+                context.trade_date,
+            )
             bar = market.today_bars.get(code)
             if not _is_tradeable_bar(bar):
                 continue
@@ -293,7 +315,7 @@ class SmallFloatValueLifecycle:
                     code_name=item.code_name,
                     price=buy_price,
                     quantity=quantity,
-                    signal=item.signal,
+                    signal=_with_history_snapshot(item.signal, history_snapshot),
                 )
             )
 
@@ -305,8 +327,6 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         raw_signals: list[dict[str, Any]],
     ) -> StrategyWatchDecision:
-        if not _is_signal_period_end(context):
-            return StrategyWatchDecision(keep=set(context.watch_pool))
         if context.trade_index == 0:
             return StrategyWatchDecision(
                 add=raw_signals[: self.target_size],
@@ -316,6 +336,17 @@ class SmallFloatValueLifecycle:
             add=raw_signals[: self.target_size],
             remove=set(context.watch_pool),
         )
+
+
+def _decision_to_payload(decision: SignalDecision) -> dict[str, Any]:
+    return {
+        "triggered": bool(decision.triggered),
+        "signal_close": decision.signal_close,
+        "stop_losses": [float(value) for value in decision.stop_losses],
+        "take_profits": [float(value) for value in decision.take_profits],
+        "max_watch_days": decision.max_watch_days,
+        "extras": decision.extras,
+    }
 
 
 def _listed_days(pool: pd.DataFrame) -> pd.Series:
@@ -332,25 +363,62 @@ def _numeric_column(pool: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(pool[column], errors="coerce")
 
 
-def _rolling_low_by_code(pool: pd.DataFrame, *, column: str, window: int) -> pd.Series:
-    if column not in pool.columns:
-        return pd.Series(float("nan"), index=pool.index, dtype=float)
-    ordered = pool.sort_values(["code", "trade_date"])
-    lows = (
-        ordered.groupby("code", sort=False)[column]
-        .rolling(window=window, min_periods=window)
-        .min()
-        .reset_index(level=0, drop=True)
-    )
-    return lows.reindex(pool.index)
-
-
 def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
 def _positive(value: Any) -> bool:
     return _finite(value) and float(value) > 0
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if not _finite(value) else float(value)
+
+
+def _history_snapshot(frame: Any, trade_date: date) -> dict[str, Any]:
+    if frame is None or len(frame) == 0:
+        return {"history_bars": 0}
+    if frame.trade_dates[-1] >= trade_date:
+        raise ValueError(
+            f"history frame for {frame.code} includes {frame.trade_dates[-1]} at {trade_date}"
+        )
+
+    snapshot: dict[str, Any] = {
+        "history_bars": int(len(frame)),
+        "history_last_date": frame.trade_dates[-1].isoformat(),
+    }
+    qfq_close = frame.columns.get("qfq_close")
+    if qfq_close is None or len(qfq_close) == 0:
+        return snapshot
+
+    last_close = _history_float(qfq_close[-1])
+    snapshot["history_last_qfq_close"] = last_close
+    if last_close is None or last_close <= 0:
+        return snapshot
+
+    for window in (5, 10):
+        if len(qfq_close) < window:
+            continue
+        base_close = _history_float(qfq_close[-window])
+        if base_close is not None and base_close > 0:
+            snapshot[f"history_return_{window}"] = last_close / base_close - 1.0
+    return snapshot
+
+
+def _with_history_snapshot(signal: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(signal)
+    extras = dict(copied.get("extras") or {})
+    extras["buy_history_probe"] = snapshot
+    copied["extras"] = extras
+    return copied
+
+
+def _history_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _signal_value(signal: dict[str, Any], key: str) -> Any:
@@ -368,24 +436,6 @@ def _positive_int(value: Any) -> int | None:
     if isinstance(value, float) and value.is_integer() and value > 0:
         return int(value)
     return None
-
-
-def _is_rebalance_period_start(context: StrategyContext, fallback_weekday: int) -> bool:
-    clock = context.params.get("trading_clock")
-    if isinstance(clock, dict) and "is_period_start" in clock:
-        return bool(clock.get("is_period_start"))
-    if "is_rebalance_period_start" in context.params:
-        return bool(context.params.get("is_rebalance_period_start"))
-    return context.trade_date.weekday() == fallback_weekday
-
-
-def _is_signal_period_end(context: StrategyContext) -> bool:
-    clock = context.params.get("trading_clock")
-    if isinstance(clock, dict) and "is_period_end" in clock:
-        return bool(clock.get("is_period_end"))
-    if "is_signal_period_end" in context.params:
-        return bool(context.params.get("is_signal_period_end"))
-    return True
 
 
 def _bar_open(bar: tuple[float, ...] | None) -> float | None:
@@ -428,22 +478,6 @@ def _is_limit_move_bar(bar: tuple[float, ...] | None) -> bool:
         return False
     pct_chg = bar[5]
     return math.isfinite(pct_chg) and abs(pct_chg) >= LIMIT_MOVE_PCT
-
-
-def _is_momentum_break_close_exit(
-    previous_bar: tuple[float, ...] | None,
-    bar: tuple[float, ...] | None,
-) -> bool:
-    if previous_bar is None or bar is None or len(previous_bar) < 6 or len(bar) < 6:
-        return False
-    previous_pct = previous_bar[5]
-    today_pct = bar[5]
-    return (
-        math.isfinite(previous_pct)
-        and math.isfinite(today_pct)
-        and previous_pct >= MOMENTUM_TRIGGER_PCT
-        and today_pct < MOMENTUM_CONTINUE_PCT
-    )
 
 
 def _is_open_limit_move_bar(bar: tuple[float, ...] | None) -> bool:
