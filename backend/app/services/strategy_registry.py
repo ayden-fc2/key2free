@@ -36,8 +36,6 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "eps",
             "total_mv",
             "circ_mv",
-            "turnover_rate",
-            "turnover_rate_f",
         ),
         signal_history_window=200,
     ),

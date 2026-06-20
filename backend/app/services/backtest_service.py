@@ -17,7 +17,6 @@ from app.services.signal_service import SignalService
 from app.services.signal_window import SIGNAL_WINDOW_BARS, TRADE_HISTORY_WINDOW_BARS
 from app.services.strategy_registry import StrategyRegistration, get_strategy
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
-from app.services.trading_periods import weekly_period_boundaries
 
 
 Bar = tuple[float, ...]
@@ -421,8 +420,6 @@ class BacktestService:
         run_stats = {"buys": 0, "closed": 0, "wins": 0}
         trade_records: dict[str, Any] = {"buys": buy_rows, "sells": sell_rows}
         total_asset = initial_cash
-        period_starts, _period_ends = weekly_period_boundaries(trading_dates)
-
         for trade_index, trade_date in enumerate(trading_dates):
             market = self._build_market_views(
                 prices=prices,
@@ -445,9 +442,6 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
-                params={
-                    "is_rebalance_period_start": trade_date in period_starts,
-                },
             )
 
             for decision in lifecycle.decide_sells(context=context, market=market):
@@ -486,9 +480,6 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
-                params={
-                    "is_rebalance_period_start": trade_date in period_starts,
-                },
             )
 
             for decision in lifecycle.decide_buys(context=context, market=market):
@@ -574,9 +565,6 @@ class BacktestService:
                 holdings=holdings,
                 watch_pool=watch_pool,
                 trade_records=trade_records,
-                params={
-                    "is_rebalance_period_start": trade_date in period_starts,
-                },
             )
             watch_decision = lifecycle.update_watch_pool(
                 context=context,

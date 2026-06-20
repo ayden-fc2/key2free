@@ -22,11 +22,7 @@ SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
 SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
-SMALL_FLOAT_VALUE_MARKET_TOP_N = 500
-SMALL_FLOAT_VALUE_MARKET_MIN_COUNT = 300
-SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW = 20
-SMALL_FLOAT_VALUE_MARKET_SHORT_WINDOW = 10
-SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW = 40
+SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
 LIMIT_MOVE_PCT = 9.8
 OPEN_LIMIT_MOVE_RATIO = 0.098
 
@@ -100,7 +96,7 @@ def _select_day(group: pd.DataFrame) -> list[dict[str, Any]]:
                 "circ_mv": float(row.selection_circ_mv),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "unadjusted close lowest 10%; select circ_mv ranks 1-5"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-10"
                 ),
                 "entry_rule": "previous signal day target, next Monday open rebalance",
                 "exit_rule": (
@@ -137,6 +133,7 @@ class SmallFloatValueLifecycle:
     """Reference lifecycle implementation for portfolio-style strategies."""
 
     target_size = SMALL_FLOAT_VALUE_TARGET_HOLDINGS
+    rebalance_weekday = SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY
 
     def select_signals(
         self,
@@ -144,14 +141,6 @@ class SmallFloatValueLifecycle:
         trade_date: date,
         view: Any,
     ) -> list[dict[str, Any]]:
-        if not bool(getattr(view, "params", {}).get("is_signal_period_end")):
-            return []
-
-        if not _is_small_cap_market_environment_favorable(
-            view=view,
-        ):
-            return []
-
         today_rows = view.cross_section(
             columns=(
                 "name",
@@ -224,7 +213,7 @@ class SmallFloatValueLifecycle:
                     )
                 continue
 
-            if not _is_rebalance_period_start(context):
+            if context.trade_date.weekday() != self.rebalance_weekday:
                 continue
 
             target_codes = set(context.watch_pool)
@@ -272,7 +261,7 @@ class SmallFloatValueLifecycle:
         context: StrategyContext,
         market: MarketViews,
     ) -> list[StrategyBuyDecision]:
-        if not _is_rebalance_period_start(context):
+        if context.trade_date.weekday() != self.rebalance_weekday:
             return []
 
         target_items = sorted(
@@ -416,95 +405,6 @@ def _history_snapshot(frame: Any, trade_date: date) -> dict[str, Any]:
     return snapshot
 
 
-def _is_small_cap_market_environment_favorable(*, view: Any) -> bool:
-    history = view.to_frame(
-        columns=(
-            "name",
-            "list_date",
-            "qfq_close",
-            "is_st",
-            "eps",
-            "circ_mv",
-            "turnover_rate",
-            "turnover_rate_f",
-        ),
-        window=SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW + SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW,
-    )
-    market = _small_cap_market_indicator(history)
-    if len(market) < SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW:
-        return False
-
-    scores = market["bull_bear_score"].dropna()
-    if len(scores) < SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW:
-        return False
-
-    short_ma = float(scores.tail(SMALL_FLOAT_VALUE_MARKET_SHORT_WINDOW).mean())
-    long_ma = float(scores.tail(SMALL_FLOAT_VALUE_MARKET_LONG_WINDOW).mean())
-    if not (math.isfinite(short_ma) and math.isfinite(long_ma)):
-        return False
-
-    return short_ma >= long_ma
-
-
-def _small_cap_market_indicator(history: pd.DataFrame) -> pd.DataFrame:
-    if history.empty:
-        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
-
-    pool = history.copy()
-    pool["market_circ_mv"] = _numeric_column(pool, "circ_mv")
-    pool["market_close"] = _numeric_column(pool, "qfq_close")
-    turnover_f = _numeric_column(pool, "turnover_rate_f")
-    turnover = _numeric_column(pool, "turnover_rate")
-    pool["market_turnover"] = turnover_f.where(turnover_f.notna(), turnover)
-    pool["eps_value"] = _numeric_column(pool, "eps")
-    pool["listed_days"] = _listed_days(pool)
-
-    name = pool["name"].fillna("").astype(str).str.upper() if "name" in pool.columns else pd.Series("", index=pool.index)
-    mask = (
-        pool["code"].fillna("").astype(str).apply(small_float_value_code_filter)
-        & (pool["is_st"].fillna(0).astype(float) == 0.0)
-        & ~name.str.contains("ST", regex=False)
-        & (pool["listed_days"] >= SMALL_FLOAT_VALUE_MIN_LIST_DAYS)
-        & (pool["eps_value"] >= 0)
-        & pool["market_close"].apply(_positive)
-        & pool["market_circ_mv"].apply(_positive)
-    )
-    pool = pool[mask.fillna(False)].copy()
-    if pool.empty:
-        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
-
-    pool = pool.sort_values(["code", "trade_date"])
-    pool["market_return"] = pool.groupby("code", sort=False)["market_close"].pct_change()
-
-    rows: list[dict[str, Any]] = []
-    for trade_date, group in pool.groupby("trade_date", sort=True):
-        top = group.sort_values(["market_circ_mv", "code"], ascending=[True, True]).head(
-            SMALL_FLOAT_VALUE_MARKET_TOP_N
-        )
-        if len(top) < SMALL_FLOAT_VALUE_MARKET_MIN_COUNT:
-            continue
-        avg_turnover = float(top["market_turnover"].dropna().mean())
-        avg_return = float(top["market_return"].dropna().mean())
-        if not (math.isfinite(avg_turnover) and math.isfinite(avg_return)):
-            continue
-        rows.append(
-            {
-                "trade_date": trade_date,
-                "avg_turnover": avg_turnover,
-                "avg_return": avg_return,
-            }
-        )
-    if not rows:
-        return pd.DataFrame(columns=["trade_date", "bull_bear_score"])
-
-    market = pd.DataFrame(rows).sort_values("trade_date")
-    market["volatility_pct"] = (
-        market["avg_return"].rolling(SMALL_FLOAT_VALUE_MARKET_VOL_WINDOW).std(ddof=0) * 100.0
-    )
-    market["bull_bear_score"] = market["avg_turnover"] + market["volatility_pct"]
-    return market.dropna(subset=["bull_bear_score"])
-
-
 def _with_history_snapshot(signal: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     copied = dict(signal)
     extras = dict(copied.get("extras") or {})
@@ -536,10 +436,6 @@ def _positive_int(value: Any) -> int | None:
     if isinstance(value, float) and value.is_integer() and value > 0:
         return int(value)
     return None
-
-
-def _is_rebalance_period_start(context: StrategyContext) -> bool:
-    return bool(context.params.get("is_rebalance_period_start"))
 
 
 def _bar_open(bar: tuple[float, ...] | None) -> float | None:

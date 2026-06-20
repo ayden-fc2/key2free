@@ -446,20 +446,6 @@ class SignalRepository:
             ).fetchall()
         return {row[0]: int(row[1]) for row in rows if isinstance(row[0], date)}
 
-    def get_open_trade_dates(self, *, start_date: date, end_date: date) -> list[date]:
-        with self.duckdb.connect(read_only=True) as connection:
-            rows = connection.execute(
-                """
-                select cal_date
-                from tushare.trade_cal
-                where cal_date between ? and ?
-                  and is_open = 1
-                order by cal_date
-                """,
-                [start_date, end_date],
-            ).fetchall()
-        return [row[0] for row in rows if isinstance(row[0], date)]
-
     def load_signal_selection_rows(
         self,
         *,
