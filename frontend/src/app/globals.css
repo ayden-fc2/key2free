@@ -256,6 +256,23 @@ button {
   gap: 12px;
 }
 
+.signal-plan {
+  background: #f7fafc;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  display: grid;
+  font-size: 13px;
+  gap: 6px;
+  line-height: 1.55;
+  padding: 10px 12px;
+}
+
+.signal-plan-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .signal-metrics {
   border: 1px solid var(--panel-border);
   border-radius: 6px;

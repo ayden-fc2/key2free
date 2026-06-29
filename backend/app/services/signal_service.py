@@ -38,20 +38,30 @@ class SignalService:
         *,
         trade_date: date,
         strategy_name: str,
+        lookback_trade_days: int = 1,
     ) -> DailySignalTaskStartDTO:
         if get_strategy(strategy_name) is None:
             raise SignalServiceError(f"unknown strategy: {strategy_name}")
+        lookback_trade_days = self._normalize_lookback_trade_days(lookback_trade_days)
 
         latest_task = self.repository.get_latest_daily_signal_task(
             trade_date=trade_date,
             strategy_name=strategy_name,
         )
-        if latest_task is not None and latest_task.status == "success":
+        if (
+            latest_task is not None
+            and latest_task.lookback_trade_days == lookback_trade_days
+            and latest_task.status == "success"
+        ):
             return DailySignalTaskStartDTO(
                 task=latest_task,
                 message="daily signal task already completed",
             )
-        if latest_task is not None and latest_task.status == "running":
+        if (
+            latest_task is not None
+            and latest_task.lookback_trade_days == lookback_trade_days
+            and latest_task.status == "running"
+        ):
             return DailySignalTaskStartDTO(
                 task=latest_task,
                 message="daily signal task already running",
@@ -60,9 +70,10 @@ class SignalService:
         task = self.repository.create_daily_signal_task(
             trade_date=trade_date,
             strategy_name=strategy_name,
+            lookback_trade_days=lookback_trade_days,
             initial_log=(
                 f"创建当日信号任务: strategy={strategy_name}, trade_date={trade_date.isoformat()}, "
-                "mode=lifecycle"
+                f"lookback_trade_days={lookback_trade_days}, mode=lifecycle"
             ),
         )
         thread = threading.Thread(
@@ -71,6 +82,7 @@ class SignalService:
                 "task_id": task.id,
                 "trade_date": trade_date,
                 "strategy_name": strategy_name,
+                "lookback_trade_days": lookback_trade_days,
             },
             daemon=True,
         )
@@ -99,20 +111,23 @@ class SignalService:
         *,
         trade_date: date,
         strategy_name: str,
+        lookback_trade_days: int = 1,
     ) -> DailySignalResultDTO:
+        lookback_trade_days = self._normalize_lookback_trade_days(lookback_trade_days)
+        trade_dates = self._resolve_signal_trade_dates(
+            end_date=trade_date,
+            lookback_trade_days=lookback_trade_days,
+        )
         result_by_date = self.get_signals_for_dates_by_stock(
-            trade_dates=[trade_date],
+            trade_dates=trade_dates,
             strategy_name=strategy_name,
         )
-        return result_by_date.get(
-            trade_date,
-            DailySignalResultDTO(
-                trade_date=trade_date.isoformat(),
-                strategy_name=strategy_name,
-                universe_count=0,
-                signal_count=0,
-                signals=[],
-            ),
+        return self._merge_daily_signal_results(
+            results=result_by_date,
+            requested_dates=trade_dates,
+            end_date=trade_date,
+            strategy_name=strategy_name,
+            lookback_trade_days=lookback_trade_days,
         )
 
     def get_signals_for_dates_by_stock(
@@ -272,6 +287,7 @@ class SignalService:
         task_id: int | None,
         trade_date: date,
         strategy_name: str,
+        lookback_trade_days: int,
     ) -> None:
         if task_id is None:
             return
@@ -281,7 +297,11 @@ class SignalService:
             self.repository.clear_daily_signal_results(task_id)
             self.repository.append_daily_signal_task_log(
                 task_id,
-                "开始计算当日信号: 按交易日切片加载策略可见宽表窗口",
+                "开始计算信号: 按交易日切片加载策略可见宽表窗口",
+            )
+            trade_dates = self._resolve_signal_trade_dates(
+                end_date=trade_date,
+                lookback_trade_days=lookback_trade_days,
             )
 
             def report_progress(processed_codes: int, total_codes: int) -> None:
@@ -295,20 +315,18 @@ class SignalService:
                     f"信号扫描进度: processed_days={processed_codes}/{total_codes}",
                 )
 
-            result = self.get_signals_for_dates_by_stock(
-                trade_dates=[trade_date],
+            daily_results = self.get_signals_for_dates_by_stock(
+                trade_dates=trade_dates,
                 strategy_name=strategy_name,
                 progress_callback=report_progress,
                 progress_interval=self.DAILY_SIGNAL_PROGRESS_INTERVAL,
-            ).get(
-                trade_date,
-                DailySignalResultDTO(
-                    trade_date=trade_date.isoformat(),
-                    strategy_name=strategy_name,
-                    universe_count=0,
-                    signal_count=0,
-                    signals=[],
-                ),
+            )
+            result = self._merge_daily_signal_results(
+                results=daily_results,
+                requested_dates=trade_dates,
+                end_date=trade_date,
+                strategy_name=strategy_name,
+                lookback_trade_days=lookback_trade_days,
             )
             rows = [
                 [
@@ -323,29 +341,23 @@ class SignalService:
                 for item in result.signals
             ]
             self.repository.insert_daily_signal_results(rows)
-            task = self.repository.get_daily_signal_task(task_id)
-            task_universe_count = (
-                task.universe_count
-                if task is not None and task.universe_count is not None
-                else result.universe_count
-            )
             self.repository.update_daily_signal_task_progress(
                 task_id=task_id,
-                universe_count=task_universe_count,
-                processed_count=task_universe_count,
+                universe_count=result.universe_count,
+                processed_count=len(trade_dates),
                 signal_count=result.signal_count,
             )
             elapsed = time.monotonic() - started_at
             self.repository.finish_daily_signal_task(
                 task_id=task_id,
                 status="success",
-                message=f"当日信号计算完成: signals={result.signal_count}, elapsed={elapsed:.2f}s",
+                message=f"信号计算完成: days={len(trade_dates)}, signals={result.signal_count}, elapsed={elapsed:.2f}s",
             )
         except Exception as exc:
             self.repository.finish_daily_signal_task(
                 task_id=task_id,
                 status="error",
-                message=f"当日信号计算失败: {exc}",
+                message=f"信号计算失败: {exc}",
             )
 
     def _normalize_codes(self, codes: list[str]) -> list[str]:
@@ -358,6 +370,61 @@ class SignalService:
             seen.add(item)
             normalized.append(item)
         return normalized
+
+    def _normalize_lookback_trade_days(self, value: int) -> int:
+        try:
+            days = int(value)
+        except (TypeError, ValueError):
+            raise SignalServiceError("lookback_trade_days must be an integer") from None
+        if days < 1:
+            raise SignalServiceError("lookback_trade_days must be >= 1")
+        return min(days, 120)
+
+    def _resolve_signal_trade_dates(
+        self,
+        *,
+        end_date: date,
+        lookback_trade_days: int,
+    ) -> list[date]:
+        start_probe = end_date - timedelta(days=max(lookback_trade_days * 3, 30))
+        open_dates = self.repository.get_open_trade_dates(
+            start_date=start_probe,
+            end_date=end_date,
+        )
+        selected = [day for day in open_dates if day <= end_date][-lookback_trade_days:]
+        if not selected:
+            return [end_date]
+        return selected
+
+    def _merge_daily_signal_results(
+        self,
+        *,
+        results: dict[date, DailySignalResultDTO],
+        requested_dates: list[date],
+        end_date: date,
+        strategy_name: str,
+        lookback_trade_days: int,
+    ) -> DailySignalResultDTO:
+        signals: list[DailySignalItemDTO] = []
+        universe_count = 0
+        for day in requested_dates:
+            result = results.get(day)
+            if result is None:
+                continue
+            universe_count += int(result.universe_count or 0)
+            signals.extend(result.signals)
+        signals.sort(key=lambda item: (item.trade_date, item.code), reverse=True)
+        start_date = requested_dates[0] if requested_dates else end_date
+        return DailySignalResultDTO(
+            trade_date=end_date.isoformat(),
+            strategy_name=strategy_name,
+            universe_count=universe_count,
+            signal_count=len(signals),
+            signals=signals,
+            start_trade_date=start_date.isoformat(),
+            end_trade_date=end_date.isoformat(),
+            lookback_trade_days=lookback_trade_days,
+        )
 
     def _chunked(self, values: list[str], size: int) -> list[list[str]]:
         return [

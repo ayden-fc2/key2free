@@ -14,10 +14,10 @@ from app.services.strategy_lifecycle import (
 )
 
 
-SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 10
+SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 6
 SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE = 0.10
 SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
-SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 10
+SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 6
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
@@ -80,7 +80,36 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
         signal = {
             "triggered": True,
             "signal_close": float(row.unadjusted_close),
+            "entry_trigger_price": "next_rebalance_open",
+            "sell_rules": [
+                {
+                    "name": "周频调仓卖出",
+                    "rule_type": "dynamic",
+                    "timing": "下个调仓日开盘",
+                    "trigger_price": None,
+                    "sell_price": "调仓日开盘价",
+                    "description": "调仓日开盘时，若持仓不在最新目标池内且未一字涨停，则按开盘价卖出。",
+                },
+                {
+                    "name": "强势断档收盘卖出",
+                    "rule_type": "dynamic",
+                    "timing": "收盘",
+                    "trigger_price": None,
+                    "sell_price": "当日收盘价",
+                    "description": "若上一交易日涨幅不低于7%，当日涨幅低于7%，按当日收盘价卖出。",
+                },
+            ],
             "max_watch_days": 1,
+            "display": {
+                "title": "小市值低价周频轮动",
+                "signal_date": row.trade_date.isoformat(),
+                "entry": "下一交易周期首个开市日开盘调仓买入；若开盘涨跌停、上一日涨跌停、停牌或一字板则跳过。",
+                "watch": "目标池只保留到下一次周频调仓；非调仓日不新增买入。",
+                "sell": [
+                    "调仓卖出：调仓日开盘时，不在最新目标池内且未开盘涨停的持仓按开盘价卖出。",
+                    "动量断档卖出：上一交易日涨幅不低于7%，当日涨幅低于7%，按当日收盘价卖出。",
+                ],
+            },
             "extras": {
                 "pattern": "small_float_value_weekly_rebalance",
                 "target_rank": rank,
@@ -95,7 +124,7 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                 "circ_mv": float(row.selection_circ_mv),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "unadjusted close lowest 10%; select circ_mv ranks 1-10"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-6"
                 ),
                 "entry_rule": "previous signal day target, next trading-cycle rebalance open",
                 "exit_rule": (
@@ -138,7 +167,7 @@ class SmallFloatValueLifecycle:
         trade_date: date,
         view: Any,
     ) -> list[dict[str, Any]]:
-        rows = view.to_frame(
+        rows = view.cross_section(
             columns=(
                 "name",
                 "list_date",
@@ -147,7 +176,6 @@ class SmallFloatValueLifecycle:
                 "eps",
                 "circ_mv",
             ),
-            window=0,
         )
         return _select_day(rows, trade_date=trade_date)
 
@@ -289,6 +317,7 @@ class SmallFloatValueLifecycle:
         *,
         context: StrategyContext,
         raw_signals: list[dict[str, Any]],
+        market: MarketViews | None = None,
     ) -> StrategyWatchDecision:
         if not _is_signal_day(context):
             return StrategyWatchDecision(keep=set(context.watch_pool))

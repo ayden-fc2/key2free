@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -164,6 +164,21 @@ DEFAULT_SIGNAL_COLUMNS: tuple[str, ...] = (
     "rebuilt_at",
 )
 MINUTE_DERIVED_SIGNAL_COLUMNS: frozenset[str] = frozenset({"min5_close"})
+DAILY_SIGNAL_TASK_COLUMNS = """
+    id,
+    status,
+    trade_date,
+    strategy_name,
+    coalesce(lookback_trade_days, 1) as lookback_trade_days,
+    universe_count,
+    processed_count,
+    signal_count,
+    started_at,
+    finished_at,
+    created_at,
+    updated_at,
+    logs
+"""
 
 
 class SignalRepository:
@@ -183,6 +198,7 @@ class SignalRepository:
                     status varchar not null,
                     trade_date date not null,
                     strategy_name varchar not null,
+                    lookback_trade_days integer not null default 1,
                     universe_count bigint,
                     processed_count bigint not null default 0,
                     signal_count bigint,
@@ -196,6 +212,7 @@ class SignalRepository:
             )
             for statement in (
                 "alter table meta.daily_signal_task add column if not exists universe_count bigint",
+                "alter table meta.daily_signal_task add column if not exists lookback_trade_days integer default 1",
                 "alter table meta.daily_signal_task add column if not exists processed_count bigint default 0",
                 "alter table meta.daily_signal_task add column if not exists signal_count bigint",
                 "alter table meta.daily_signal_task add column if not exists started_at timestamp",
@@ -223,6 +240,7 @@ class SignalRepository:
         *,
         trade_date: date,
         strategy_name: str,
+        lookback_trade_days: int = 1,
         initial_log: str,
     ) -> DailySignalTaskDTO:
         self.ensure_tables()
@@ -233,12 +251,25 @@ class SignalRepository:
             row = connection.execute(
                 """
                 insert into meta.daily_signal_task(
-                    id, status, trade_date, strategy_name, processed_count, started_at, logs
+                    id, status, trade_date, strategy_name, lookback_trade_days, processed_count, started_at, logs
                 )
-                values (?, 'running', ?, ?, 0, current_timestamp, ?)
-                returning *
+                values (?, 'running', ?, ?, ?, 0, current_timestamp, ?)
+                returning
+                    id,
+                    status,
+                    trade_date,
+                    strategy_name,
+                    lookback_trade_days,
+                    universe_count,
+                    processed_count,
+                    signal_count,
+                    started_at,
+                    finished_at,
+                    created_at,
+                    updated_at,
+                    logs
                 """,
-                [task_id, trade_date, strategy_name, self._format_log(initial_log)],
+                [task_id, trade_date, strategy_name, lookback_trade_days, self._format_log(initial_log)],
             ).fetchone()
         task = self._to_daily_signal_task(row)
         if task is None:
@@ -249,7 +280,7 @@ class SignalRepository:
         self.ensure_tables()
         with self.duckdb.connect(read_only=True) as connection:
             row = connection.execute(
-                "select * from meta.daily_signal_task where id = ?",
+                f"select {DAILY_SIGNAL_TASK_COLUMNS} from meta.daily_signal_task where id = ?",
                 [task_id],
             ).fetchone()
         return self._to_daily_signal_task(row)
@@ -273,7 +304,7 @@ class SignalRepository:
         with self.duckdb.connect(read_only=True) as connection:
             row = connection.execute(
                 f"""
-                select *
+                select {DAILY_SIGNAL_TASK_COLUMNS}
                 from meta.daily_signal_task
                 {where_sql}
                 order by id desc
@@ -374,6 +405,7 @@ class SignalRepository:
             task_row = connection.execute(
                 """
                 select trade_date, strategy_name, coalesce(universe_count, 0), coalesce(signal_count, 0)
+                , coalesce(lookback_trade_days, 1)
                 from meta.daily_signal_task
                 where id = ?
                 """,
@@ -386,11 +418,11 @@ class SignalRepository:
                 select code, code_name, trade_date, universe_json, signal_json
                 from meta.daily_signal_result
                 where task_id = ?
-                order by code
+                order by trade_date desc, code
                 """,
                 [task_id],
             ).fetchall()
-        trade_date, strategy_name, universe_count, signal_count = task_row
+        trade_date, strategy_name, universe_count, signal_count, lookback_trade_days = task_row
         items: list[DailySignalItemDTO] = []
         for code, code_name, row_trade_date, universe_json, signal_json in rows:
             try:
@@ -410,12 +442,20 @@ class SignalRepository:
                     signal=signal,
                 )
             )
+        start_trade_date = self._resolve_result_start_trade_date(
+            end_date=trade_date,
+            lookback_trade_days=int(lookback_trade_days or 1),
+            items=items,
+        )
         return DailySignalResultDTO(
             trade_date=str(trade_date),
             strategy_name=str(strategy_name),
             universe_count=int(universe_count or 0),
             signal_count=int(signal_count or len(items)),
             signals=items,
+            start_trade_date=start_trade_date,
+            end_trade_date=str(trade_date),
+            lookback_trade_days=int(lookback_trade_days or 1),
         )
 
     # ------------------------------------------------------------------
@@ -482,6 +522,8 @@ class SignalRepository:
         TushareRepository().ensure_tables()
         if columns is None:
             columns = self.get_default_signal_columns()
+        else:
+            columns = self._available_signal_columns(columns)
         select_columns = self._signal_selection_columns(columns)
         column_sql = "*" if select_columns is None else ", ".join(select_columns)
         with self.duckdb.connect(read_only=True) as connection:
@@ -639,16 +681,23 @@ class SignalRepository:
         return frame
 
     def get_default_signal_columns(self) -> tuple[str, ...]:
-        with self.duckdb.connect(read_only=True) as connection:
-            available = {
-                str(row[0])
-                for row in connection.execute("describe tushare.stock_daily_technical").fetchall()
-                if row
-            }
+        available = self._stock_daily_technical_columns_set()
         missing = [column for column in DEFAULT_SIGNAL_COLUMNS if column not in available]
         if missing:
             raise RuntimeError(f"missing default signal columns: {missing}")
         return DEFAULT_SIGNAL_COLUMNS
+
+    def _available_signal_columns(self, columns: tuple[str, ...]) -> tuple[str, ...]:
+        available = self._stock_daily_technical_columns_set()
+        return tuple(column for column in columns if column in available)
+
+    def _stock_daily_technical_columns_set(self) -> set[str]:
+        with self.duckdb.connect(read_only=True) as connection:
+            return {
+                str(row[0])
+                for row in connection.execute("describe tushare.stock_daily_technical").fetchall()
+                if row
+            }
 
     def _signal_selection_columns(self, columns: tuple[str, ...] | None) -> list[str] | None:
         if columns is None:
@@ -672,8 +721,9 @@ class SignalRepository:
         if not codes:
             return {}
         float_columns = list(SIGNAL_BASE_FLOAT_COLUMNS)
+        available = self._stock_daily_technical_columns_set()
         for column in extra_columns:
-            if column not in float_columns:
+            if column in available and column not in float_columns:
                 float_columns.append(column)
         select_columns = ["trade_date", "code", *float_columns, *SIGNAL_BASE_TEXT_COLUMNS]
         column_sql = ", ".join(select_columns)
@@ -814,6 +864,20 @@ class SignalRepository:
             return None
         return value
 
+    def _resolve_result_start_trade_date(
+        self,
+        *,
+        end_date: date,
+        lookback_trade_days: int,
+        items: list[DailySignalItemDTO],
+    ) -> str:
+        start_probe = end_date - timedelta(days=max(lookback_trade_days * 3, 30))
+        open_dates = self.get_open_trade_dates(start_date=start_probe, end_date=end_date)
+        selected = [day for day in open_dates if day <= end_date][-lookback_trade_days:]
+        if selected:
+            return selected[0].isoformat()
+        return min((item.trade_date for item in items), default=str(end_date))
+
     def to_json(self, value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, default=self._normalize_value)
 
@@ -835,6 +899,7 @@ class SignalRepository:
             status,
             trade_date,
             strategy_name,
+            lookback_trade_days,
             universe_count,
             processed_count,
             signal_count,
@@ -849,6 +914,7 @@ class SignalRepository:
             status=str(status),
             trade_date="" if trade_date is None else str(trade_date),
             strategy_name=str(strategy_name),
+            lookback_trade_days=int(lookback_trade_days or 1),
             universe_count=None if universe_count is None else int(universe_count),
             processed_count=int(processed_count or 0),
             signal_count=None if signal_count is None else int(signal_count),

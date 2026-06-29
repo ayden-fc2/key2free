@@ -633,8 +633,6 @@ class TushareAssetService:
             "tushare.daily",
             "tushare.daily_basic",
         ]
-        if not skip_stk_mins_5min:
-            base_assets.append("tushare.stk_mins_5min")
         target_watermark = self.repository.get_min_watermark(base_assets)
         if target_watermark is None:
             self.repository.update_watermark(
@@ -655,12 +653,11 @@ class TushareAssetService:
             task_id,
             (
                 f"{asset_table_name} rebuild snapshot target_watermark={target_watermark}, "
-                f"skip_stk_mins_5min={skip_stk_mins_5min}"
+                "source=daily assets only"
             ),
         )
         row_count = self.repository.rebuild_stock_daily_technical(
             target_watermark=target_watermark,
-            include_min5_close=not skip_stk_mins_5min,
             progress=lambda message: self._append_log(task_id, message),
         )
         if row_count <= 0:

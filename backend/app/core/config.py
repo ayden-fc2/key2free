@@ -15,8 +15,8 @@ class Settings:
         "yes",
         "on",
     }
-    auto_tushare_refresh_hour: int = int(os.getenv("AUTO_TUSHARE_REFRESH_HOUR", "3"))
-    auto_tushare_refresh_minute: int = int(os.getenv("AUTO_TUSHARE_REFRESH_MINUTE", "0"))
+    auto_tushare_refresh_hour: int = int(os.getenv("AUTO_TUSHARE_REFRESH_HOUR", "2"))
+    auto_tushare_refresh_minute: int = int(os.getenv("AUTO_TUSHARE_REFRESH_MINUTE", "30"))
 
 
 settings = Settings()

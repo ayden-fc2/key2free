@@ -67,10 +67,10 @@ class HoldingItem:
 
 class BacktestService:
     BUY_FEE_BPS = 5
-    SELL_FEE_BPS = 10
+    SELL_FEE_BPS = 5
+    MIN_TRADE_FEE = 5.0
     DEFAULT_SIMULATION_RUNS = 50
     STRATEGY_DEFAULT_SIMULATION_RUNS = {
-        "demo": 1,
         "small_float_value": 1,
     }
     SIMULATION_WORKERS = 10
@@ -214,6 +214,11 @@ class BacktestService:
                 start_date=trading_dates[0],
                 end_date=trading_dates[-1],
             )
+            index_history_wide = self.repository.load_index_history_wide(
+                start_date=trading_dates[0],
+                end_date=trading_dates[-1],
+                window=SIGNAL_WINDOW_BARS,
+            )
             history_frames = (
                 SignalRepository().load_stock_frames(
                     codes=signal_codes,
@@ -252,6 +257,7 @@ class BacktestService:
                         signals_by_date=signals_by_date,
                         prices=prices,
                         history_frames=history_frames,
+                        index_history_wide=index_history_wide,
                     ): run_no
                     for run_no in range(1, simulation_runs + 1)
                 }
@@ -389,6 +395,7 @@ class BacktestService:
         signals_by_date: dict[date, list[dict[str, Any]]],
         prices: dict[str, dict[date, Bar]],
         history_frames: dict[str, StockDailyFrame] | None = None,
+        index_history_wide: Any | None = None,
     ) -> tuple[float, dict[str, int]]:
         return self._simulate_lifecycle(
             task_id=task_id,
@@ -399,6 +406,7 @@ class BacktestService:
             signals_by_date=signals_by_date,
             prices=prices,
             history_frames=history_frames or {},
+            index_history_wide=index_history_wide,
         )
 
     def _simulate_lifecycle(
@@ -412,6 +420,7 @@ class BacktestService:
         signals_by_date: dict[date, list[dict[str, Any]]],
         prices: dict[str, dict[date, Bar]],
         history_frames: dict[str, StockDailyFrame] | None = None,
+        index_history_wide: Any | None = None,
     ) -> tuple[float, dict[str, int]]:
         lifecycle = strategy.lifecycle
         if lifecycle is None:
@@ -436,11 +445,13 @@ class BacktestService:
                 trade_date=trade_date,
                 trading_clocks=trading_clocks,
             )
+            strategy_params["run_no"] = run_no
             market = self._build_market_views(
                 prices=prices,
                 trade_date=trade_date,
                 previous_trade_date=trading_dates[trade_index - 1] if trade_index > 0 else None,
                 history_frames=history_frames or {},
+                index_history_wide=index_history_wide,
             )
             total_asset = self._mark_total_asset(
                 cash=cash,
@@ -510,7 +521,7 @@ class BacktestService:
                     if quantity <= 0:
                         continue
                     amount = decision.price * quantity
-                    fee = amount * self.BUY_FEE_BPS / 10000
+                    fee = self._trade_fee(amount=amount, bps=self.BUY_FEE_BPS)
                     if amount + fee > cash:
                         continue
                     cash -= amount + fee
@@ -530,7 +541,7 @@ class BacktestService:
                     if decision.quantity <= 0:
                         continue
                     amount = decision.price * decision.quantity
-                    fee = amount * self.BUY_FEE_BPS / 10000
+                    fee = self._trade_fee(amount=amount, bps=self.BUY_FEE_BPS)
                     if amount + fee > cash:
                         continue
                     cash -= amount + fee
@@ -561,7 +572,7 @@ class BacktestService:
                         decision.price,
                         decision.quantity,
                         decision.price * decision.quantity,
-                        decision.price * decision.quantity * self.BUY_FEE_BPS / 10000,
+                        fee,
                         cash,
                         self.repository.to_json(signal_for_order),
                     ]
@@ -587,6 +598,7 @@ class BacktestService:
             watch_decision = lifecycle.update_watch_pool(
                 context=context,
                 raw_signals=signals_by_date.get(trade_date, []),
+                market=market,
             )
             for code in watch_decision.remove:
                 watch_pool.pop(code, None)
@@ -728,7 +740,7 @@ class BacktestService:
         if sell_quantity <= 0:
             return cash
         amount = price * sell_quantity
-        fee = amount * self.SELL_FEE_BPS / 10000
+        fee = self._trade_fee(amount=amount, bps=self.SELL_FEE_BPS)
         cash += amount - fee
         portion = sell_quantity / holding.quantity
         buy_fee_part = holding.buy_fee * portion
@@ -763,6 +775,11 @@ class BacktestService:
             holding.buy_fee -= buy_fee_part
         return cash
 
+    def _trade_fee(self, *, amount: float, bps: float) -> float:
+        if amount <= 0 or not math.isfinite(amount):
+            return 0.0
+        return max(amount * bps / 10000, self.MIN_TRADE_FEE)
+
     def _build_market_views(
         self,
         *,
@@ -770,6 +787,7 @@ class BacktestService:
         trade_date: date,
         previous_trade_date: date | None = None,
         history_frames: dict[str, StockDailyFrame] | None = None,
+        index_history_wide: Any | None = None,
     ) -> MarketViews:
         today_bars: dict[str, Bar] = {}
         previous_bars: dict[str, Bar] = {}
@@ -791,7 +809,26 @@ class BacktestService:
                 history_frames=history_frames or {},
                 trade_date=trade_date,
             ),
+            index_history=self._slice_index_history_wide(
+                index_history_wide=index_history_wide,
+                trade_date=trade_date,
+            ),
         )
+
+    def _slice_index_history_wide(
+        self,
+        *,
+        index_history_wide: Any | None,
+        trade_date: date,
+    ) -> Any:
+        if index_history_wide is None or index_history_wide.empty:
+            return index_history_wide
+        trade_dates = index_history_wide["trade_date"].tolist()
+        end = bisect_left(trade_dates, trade_date)
+        if end <= 0:
+            return index_history_wide.iloc[0:0].copy()
+        start = max(0, end - SIGNAL_WINDOW_BARS)
+        return index_history_wide.iloc[start:end].copy()
 
     def _slice_history_frames(
         self,

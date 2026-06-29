@@ -9,10 +9,30 @@ export type DailySignalItem = {
 export type SignalDecision = {
   triggered: boolean;
   signal_close: number | null;
+  entry_trigger_price?: number | string | null;
+  sell_rules?: SignalRule[];
   stop_losses: number[];
   take_profits: number[];
   max_watch_days: number | null;
+  display?: SignalDisplay | null;
   extras: Record<string, unknown> | null;
+};
+
+export type SignalRule = {
+  name?: string;
+  rule_type?: "static" | "dynamic" | string;
+  timing?: string;
+  trigger_price?: number | string | null;
+  sell_price?: number | string | null;
+  description?: string;
+};
+
+export type SignalDisplay = {
+  title?: string;
+  signal_date?: string;
+  entry?: string;
+  watch?: string;
+  sell?: string[];
 };
 
 export type Bar1dQfq = {
@@ -29,6 +49,9 @@ export type Bar1dQfq = {
   turn: number | null;
   tradestatus: number | null;
   pct_chg: number | null;
+  macd_dif_12_26_9: number | null;
+  macd_dea_12_26_9: number | null;
+  macd_hist_12_26_9: number | null;
   pe_ttm: number | null;
   pb_mrq: number | null;
   ps_ttm: number | null;
@@ -50,11 +73,15 @@ export type DailySignalResult = {
   universe_count: number;
   signal_count: number;
   signals: DailySignalItem[];
+  start_trade_date?: string | null;
+  end_trade_date?: string | null;
+  lookback_trade_days?: number;
 };
 
 export type DailySignalRequest = {
   trade_date: string;
   strategy_name: string;
+  lookback_trade_days?: number;
 };
 
 export type DailySignalTask = {
@@ -62,6 +89,7 @@ export type DailySignalTask = {
   status: string;
   trade_date: string;
   strategy_name: string;
+  lookback_trade_days: number;
   universe_count: number | null;
   processed_count: number;
   signal_count: number | null;

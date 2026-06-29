@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from strategies.demo import (
-    SMALL_FLOAT_VALUE_REQUIRED_COLUMNS as DEMO_REQUIRED_COLUMNS,
-    demo_code_filter,
-    demo_lifecycle,
-)
 from strategies.small_float_value import (
     SMALL_FLOAT_VALUE_REQUIRED_COLUMNS,
     small_float_value_code_filter,
     small_float_value_lifecycle,
+)
+from strategies.sharp_rise_pullback_leader import (
+    SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS,
+    sharp_rise_pullback_leader_code_filter,
+    sharp_rise_pullback_leader_lifecycle,
 )
 
 
@@ -44,23 +44,6 @@ class StrategyRegistration:
 
 
 STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "demo": StrategyRegistration(
-        name="demo",
-        lifecycle=demo_lifecycle,
-        required_columns=DEMO_REQUIRED_COLUMNS,
-        code_filter=demo_code_filter,
-        signal_required_columns=(
-            "name",
-            "list_date",
-            "close",
-            "qfq_close",
-            "is_st",
-            "eps",
-            "total_mv",
-            "circ_mv",
-        ),
-        signal_history_window=200,
-    ),
     "small_float_value": StrategyRegistration(
         name="small_float_value",
         lifecycle=small_float_value_lifecycle,
@@ -76,6 +59,27 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         signal_history_window=0,
         trading_clock_period="W",
+    ),
+    "sharp_rise_pullback_leader": StrategyRegistration(
+        name="sharp_rise_pullback_leader",
+        lifecycle=sharp_rise_pullback_leader_lifecycle,
+        required_columns=SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS,
+        code_filter=sharp_rise_pullback_leader_code_filter,
+        signal_required_columns=(
+            "name",
+            "close",
+            "qfq_open",
+            "qfq_high",
+            "qfq_low",
+            "qfq_close",
+            "ma_10",
+            "ma_20",
+            "ma_30",
+            "pct_chg",
+            "is_st",
+            "turnover_rate",
+        ),
+        signal_history_window=200,
     ),
 }
 

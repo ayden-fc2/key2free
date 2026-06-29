@@ -48,3 +48,7 @@ data/*.bak*
 
 # Runtime logs
 *.log
+
+# Analysis and large local backups
+analysis_task*.csv
+data/backups/*.parquet

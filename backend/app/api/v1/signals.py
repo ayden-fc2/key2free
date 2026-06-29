@@ -16,6 +16,7 @@ signal_service = SignalService()
 class DailySignalRequest(BaseModel):
     trade_date: date
     strategy_name: str
+    lookback_trade_days: int = 1
 
 
 class DailySignalTaskQuery(BaseModel):
@@ -39,6 +40,7 @@ def get_daily_signals(request: DailySignalRequest) -> dict:
         result = signal_service.get_daily_signals(
             trade_date=request.trade_date,
             strategy_name=request.strategy_name,
+            lookback_trade_days=request.lookback_trade_days,
         )
     except SignalServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -51,6 +53,7 @@ def start_daily_signal_task(request: DailySignalRequest) -> dict:
         result = signal_service.request_daily_signal_task(
             trade_date=request.trade_date,
             strategy_name=request.strategy_name,
+            lookback_trade_days=request.lookback_trade_days,
         )
     except SignalServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

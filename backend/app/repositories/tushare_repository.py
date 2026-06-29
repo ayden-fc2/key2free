@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 import os
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -16,6 +17,7 @@ STOCK_DAILY_TECHNICAL_WARMUP_START_DATE = date(2016, 12, 6)
 STOCK_DAILY_TECHNICAL_LOG_ROW_STEP = 100000
 STOCK_DAILY_TECHNICAL_WORKERS = int(os.getenv("STOCK_DAILY_TECHNICAL_WORKERS", "4"))
 STOCK_DAILY_TECHNICAL_BATCH_SIZE = int(os.getenv("STOCK_DAILY_TECHNICAL_BATCH_SIZE", "40"))
+STOCK_DAILY_TECHNICAL_BACKUP_DIR = "backups"
 RSRS_WINDOWS = (5, 10, 20, 30)
 INDEX_BASIC_WATERMARK = date(2014, 1, 2)
 INDEX_BASIC_MARKETS = ("SSE", "SZSE", "OTH", "CSI")
@@ -329,7 +331,6 @@ class TushareRepository:
                     qfq_low double,
                     qfq_close double,
                     qfq_pre_close double,
-                    min5_close double,
                     name varchar,
                     industry varchar,
                     area varchar,
@@ -464,7 +465,6 @@ class TushareRepository:
                 "turnover_rate",
                 "turnover_rate_f",
                 "daily_basic_volume_ratio",
-                "min5_close",
                 "avg_amount_5",
                 "avg_amount_10",
                 "avg_amount_20",
@@ -1310,13 +1310,11 @@ class TushareRepository:
         self,
         *,
         target_watermark: date,
-        include_min5_close: bool = True,
         progress: Callable[[str], None] | None = None,
     ) -> int:
         self.ensure_tables()
         columns = self._stock_daily_technical_columns()
         total_rows = 0
-        staging_table = "tushare.stock_daily_technical_rebuild"
         with self.duckdb.connect(read_only=False) as connection:
             codes = [
                 row[0]
@@ -1336,87 +1334,105 @@ class TushareRepository:
             ]
             if not codes:
                 return 0
-            connection.execute(f"drop table if exists {staging_table}")
-            connection.execute(
-                f"""
-                create table {staging_table} as
-                select *
-                from tushare.stock_daily_technical
-                where 1 = 0
-                """
-            )
+            backup_path = self._backup_stock_daily_technical_before_rebuild(connection)
+            if progress is not None and backup_path is not None:
+                progress(
+                    "tushare.stock_daily_technical backup before rebuild: "
+                    f"{backup_path}"
+                )
+            connection.execute("delete from tushare.stock_daily_technical")
+            if progress is not None:
+                progress("tushare.stock_daily_technical cleared before rebuild")
         batch_size = STOCK_DAILY_TECHNICAL_BATCH_SIZE
         next_log_rows = STOCK_DAILY_TECHNICAL_LOG_ROW_STEP
-        try:
-            for start in range(0, len(codes), batch_size):
-                batch_codes = codes[start : start + batch_size]
-                with self.duckdb.connect(read_only=False) as connection:
-                    base_frame = self._load_stock_daily_technical_base(
-                        connection=connection,
-                        target_watermark=target_watermark,
-                        ts_codes=batch_codes,
-                        include_min5_close=include_min5_close,
-                    )
-                if base_frame.empty:
-                    continue
-                groups = [
-                    frame.copy()
-                    for _ts_code, frame in base_frame.groupby("ts_code", sort=True, group_keys=False)
-                ]
-                enriched_frames: list[pd.DataFrame] = []
-                with ThreadPoolExecutor(max_workers=STOCK_DAILY_TECHNICAL_WORKERS) as executor:
-                    futures = [
-                        executor.submit(self._calculate_stock_daily_technical, frame)
-                        for frame in groups
-                    ]
-                    for future in as_completed(futures):
-                        frame = future.result()
-                        if not frame.empty:
-                            enriched_frames.append(frame)
-                if not enriched_frames:
-                    continue
-                enriched = pd.concat(enriched_frames, ignore_index=True)
-                enriched = enriched[enriched["trade_date"] >= pd.Timestamp(STOCK_DAILY_TECHNICAL_START_DATE)]
-                if enriched.empty:
-                    continue
-                enriched = enriched[columns].replace({np.nan: None})
-                with self.duckdb.connect(read_only=False) as connection:
-                    connection.register("stock_daily_technical_rebuild_frame", enriched)
-                    try:
-                        connection.execute(
-                            f"""
-                            insert into {staging_table}({', '.join(columns)})
-                            select {', '.join(columns)}
-                            from stock_daily_technical_rebuild_frame
-                            """
-                        )
-                    finally:
-                        connection.unregister("stock_daily_technical_rebuild_frame")
-                total_rows += len(enriched)
-                if progress is not None and total_rows >= next_log_rows:
-                    progress(
-                        "tushare.stock_daily_technical rebuilt "
-                        f"rows={total_rows} codes={min(start + batch_size, len(codes))}/{len(codes)}"
-                    )
-                    while next_log_rows <= total_rows:
-                        next_log_rows += STOCK_DAILY_TECHNICAL_LOG_ROW_STEP
-            if total_rows <= 0:
-                return 0
+        for start in range(0, len(codes), batch_size):
+            batch_codes = codes[start : start + batch_size]
             with self.duckdb.connect(read_only=False) as connection:
-                connection.execute("delete from tushare.stock_daily_technical")
-                connection.execute(
-                    f"""
-                    insert into tushare.stock_daily_technical({', '.join(columns)})
-                    select {', '.join(columns)}
-                    from {staging_table}
-                    """
+                base_frame = self._load_stock_daily_technical_base(
+                    connection=connection,
+                    target_watermark=target_watermark,
+                    ts_codes=batch_codes,
                 )
-                if progress is not None:
-                    progress(f"tushare.stock_daily_technical replace completed rows={total_rows}")
-        finally:
+            if base_frame.empty:
+                continue
+            groups = [
+                frame.copy()
+                for _ts_code, frame in base_frame.groupby("ts_code", sort=True, group_keys=False)
+            ]
+            enriched_frames: list[pd.DataFrame] = []
+            with ThreadPoolExecutor(max_workers=STOCK_DAILY_TECHNICAL_WORKERS) as executor:
+                futures = [
+                    executor.submit(self._calculate_stock_daily_technical, frame)
+                    for frame in groups
+                ]
+                for future in as_completed(futures):
+                    frame = future.result()
+                    if not frame.empty:
+                        enriched_frames.append(frame)
+            if not enriched_frames:
+                continue
+            enriched = pd.concat(enriched_frames, ignore_index=True)
+            enriched = enriched[enriched["trade_date"] >= pd.Timestamp(STOCK_DAILY_TECHNICAL_START_DATE)]
+            if enriched.empty:
+                continue
+            enriched = enriched[columns].replace({np.nan: None})
             with self.duckdb.connect(read_only=False) as connection:
-                connection.execute(f"drop table if exists {staging_table}")
+                connection.register("stock_daily_technical_rebuild_frame", enriched)
+                try:
+                    connection.execute(
+                        f"""
+                        insert into tushare.stock_daily_technical({', '.join(columns)})
+                        select {', '.join(columns)}
+                        from stock_daily_technical_rebuild_frame
+                        """
+                    )
+                finally:
+                    connection.unregister("stock_daily_technical_rebuild_frame")
+            total_rows += len(enriched)
+            if progress is not None and total_rows >= next_log_rows:
+                progress(
+                    "tushare.stock_daily_technical rebuilt "
+                    f"rows={total_rows} codes={min(start + batch_size, len(codes))}/{len(codes)}"
+                )
+                while next_log_rows <= total_rows:
+                    next_log_rows += STOCK_DAILY_TECHNICAL_LOG_ROW_STEP
+        if total_rows <= 0:
+            return 0
+        if progress is not None:
+            progress(f"tushare.stock_daily_technical rebuild completed rows={total_rows}")
         return total_rows
+
+    def _backup_stock_daily_technical_before_rebuild(self, connection: Any) -> Path | None:
+        row_count = connection.execute(
+            "select count(*) from tushare.stock_daily_technical"
+        ).fetchone()[0]
+        if row_count <= 0:
+            return None
+        backup_dir = self.duckdb.db_path.parent / STOCK_DAILY_TECHNICAL_BACKUP_DIR
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = backup_dir / f"stock_daily_technical_before_rebuild_{timestamp}.parquet"
+        backup_sql_path = self._duckdb_string_literal(backup_path.as_posix())
+
+        # Manual recovery if a rebuild fails after the table has been cleared:
+        #   delete from tushare.stock_daily_technical;
+        #   insert into tushare.stock_daily_technical
+        #   select * from read_parquet('data/backups/<backup-file>.parquet');
+        # Keep this backup step before the delete so an interrupted rebuild never
+        # leaves the workflow without a restorable copy of the previous wide table.
+        connection.execute(
+            f"""
+            copy (
+                select *
+                from tushare.stock_daily_technical
+                order by code, trade_date
+            ) to {backup_sql_path} (format parquet, compression zstd)
+            """
+        )
+        return backup_path
+
+    def _duckdb_string_literal(self, value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
 
     def get_open_trade_dates_after(self, trusted_watermark: date, end_date: date) -> list[date]:
         self.ensure_tables()
@@ -1634,44 +1650,11 @@ class TushareRepository:
         connection: Any,
         target_watermark: date,
         ts_codes: list[str],
-        include_min5_close: bool,
     ) -> pd.DataFrame:
-        min5_daily_close_cte = ""
-        min5_close_select = "cast(null as double) as min5_close"
-        min5_daily_close_join = ""
         parameters: list[Any] = [target_watermark]
-        if include_min5_close:
-            min5_daily_close_cte = """
-            ,
-            min5_daily_close as (
-                select ts_code, trade_date, close as min5_close
-                from (
-                    select
-                        ts_code,
-                        trade_date,
-                        close,
-                        row_number() over (
-                            partition by ts_code, trade_date
-                            order by trade_time desc
-                        ) as rn
-                    from tushare.stk_mins_5min
-                    where trade_date >= ?
-                      and trade_date <= ?
-                      and ts_code in (select unnest(?))
-                ) ranked_min5
-                where rn = 1
-            )
-            """
-            min5_close_select = "min5_daily_close.min5_close"
-            min5_daily_close_join = """
-            left join min5_daily_close
-              on min5_daily_close.ts_code = daily.ts_code
-             and min5_daily_close.trade_date = daily.trade_date
-            """
-            parameters.extend([STOCK_DAILY_TECHNICAL_WARMUP_START_DATE, target_watermark, ts_codes])
         parameters.extend([STOCK_DAILY_TECHNICAL_WARMUP_START_DATE, target_watermark, ts_codes])
         result = connection.execute(
-            f"""
+            """
             with latest_factor as (
                 select ts_code, adj_factor as latest_adj_factor
                 from (
@@ -1689,7 +1672,6 @@ class TushareRepository:
                 ) ranked
                 where rn = 1
             )
-            {min5_daily_close_cte}
             select
                 daily.ts_code,
                 lower(split_part(daily.ts_code, '.', 2)) || '.' || split_part(daily.ts_code, '.', 1) as code,
@@ -1710,7 +1692,6 @@ class TushareRepository:
                 daily.low * factor.adj_factor / latest_factor.latest_adj_factor as qfq_low,
                 daily.close * factor.adj_factor / latest_factor.latest_adj_factor as qfq_close,
                 daily.pre_close * factor.adj_factor / latest_factor.latest_adj_factor as qfq_pre_close,
-                {min5_close_select},
                 basic.name,
                 basic.industry,
                 basic.area,
@@ -1764,7 +1745,6 @@ class TushareRepository:
             left join tushare.daily_basic daily_basic
               on daily_basic.ts_code = daily.ts_code
              and daily_basic.trade_date = daily.trade_date
-            {min5_daily_close_join}
             where daily.trade_date >= ?
               and daily.trade_date <= ?
               and daily.ts_code in (select unnest(?))
@@ -2117,7 +2097,6 @@ class TushareRepository:
             "qfq_low",
             "qfq_close",
             "qfq_pre_close",
-            "min5_close",
             "name",
             "industry",
             "area",

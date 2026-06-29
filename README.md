@@ -34,6 +34,8 @@
 2. 买入
 3. 收盘后更新观望池
 
+成交费用由回测框架统一计算，买入和卖出双边费率均为 `0.05%`，每笔成交最低手续费 `5` 元。费用会从现金中扣除，并记录在买入单、卖出单的 `fee` 字段。
+
 ### 3. 卖出阶段
 
 调用时点：T 日交易阶段，买入前。
@@ -114,6 +116,18 @@
 
 信号系统和回测系统共享同一条信号预计算路径。回测在撮合前调用 `SignalService.get_signals_for_dates_by_stock()` 得到原始信号；启用交易时钟的策略默认只在对应周期末产生信号，也可以通过注册项指定周期内第 N 个开市日产生信号，非信号日返回空信号。指数环境过滤会同时作用于单日信号查询和回测信号池；不会在买入或卖出阶段重新查询指数，也不会把 T 日之后的指数表现带入交易判断。
 
+## 宽表重建备份
+
+`tushare.stock_daily_technical` 重建耗时较长。重建逻辑在清空旧宽表前，会先把当前宽表导出到 `data/backups/stock_daily_technical_before_rebuild_*.parquet`。如果重建中途失败，可以先停后端释放 DuckDB 文件锁，再用 DuckDB 执行：
+
+```sql
+delete from tushare.stock_daily_technical;
+insert into tushare.stock_daily_technical
+select * from read_parquet('data/backups/<backup-file>.parquet');
+```
+
+手动恢复后再重启后端即可继续信号/回测流程。
+
 `today_bars` 字段顺序：
 
 ```text
@@ -137,7 +151,7 @@
 - `required_columns`：买卖阶段 `history_by_code` 额外需要的宽表字段，不影响信号阶段字段。买卖阶段固定只提供截至 T-1 的最近 10 个交易日窗口。
 - `code_filter`：框架加载数据后用于过滤股票代码范围。
 
-默认信号字段来自 `tushare.stock_daily_technical` 的日频宽表，不默认传入分钟线明细或分钟线派生字段。宽表内置的趋势/波动指标包括 MA、ER、BOLL、MACD、RSI、ROC、KDJ、ATR，滚动成交量均值 `avg_volume_5/10/20`、滚动成交额均值 `avg_amount_5/10/20/30`，以及基于前复权高低价滚动回归斜率的 `rsrs_5`、`rsrs_10`、`rsrs_20`、`rsrs_30`。所有滚动指标只使用当前 T 日及以前的数据，窗口不足时保持空值。默认排除 `min5_close`。策略确实需要分钟线或分钟线派生字段时，应在策略注册中显式声明字段，或者由策略自己查询分钟线数据。
+默认信号字段来自 `tushare.stock_daily_technical` 的日频宽表，不包含分钟线明细或分钟线派生字段。宽表内置的趋势/波动指标包括 MA、ER、BOLL、MACD、RSI、ROC、KDJ、ATR，滚动成交量均值 `avg_volume_5/10/20`、滚动成交额均值 `avg_amount_5/10/20/30`，以及基于前复权高低价滚动回归斜率的 `rsrs_5`、`rsrs_10`、`rsrs_20`、`rsrs_30`。所有滚动指标只使用当前 T 日及以前的数据，窗口不足时保持空值。策略确实需要分钟线或分钟线派生字段时，应由策略自己查询分钟线数据，不应假设 `tushare.stock_daily_technical` 提供 `min5_close`。
 
 注意：`SignalDataView` 在按 `columns` 取字段时会自动忽略不存在的字段，不会因为缺字段立刻报错。策略开发时必须确认 `signal_required_columns` 已声明所有需要字段，否则可能得到缺列后的结果、空结果或 NaN，导致信号异常但不一定显式失败。
 
@@ -174,7 +188,22 @@
 - `code_name`：股票名称，可为空。
 - `trade_date`：信号日期，通常为 T 日。
 - `universe`：用于展示和记录的选股上下文。
-- `signal`：策略信号载荷，建议包含 `triggered`, `signal_close`, `max_watch_days`, `extras`。
+- `signal`：策略信号载荷，建议包含 `triggered`, `signal_close`, `entry_trigger_price`, `max_watch_days`, `sell_rules`, `display`, `extras`。
+
+### 信号面板兼容输出
+
+前端信号面板支持在结束交易日前向前选择最近 N 个开市日运行策略信号函数；默认 `lookback_trade_days = 1`，即只看选中交易日。后端会按交易日列表逐日调用同一套 `select_signals`，合并返回每个信号自己的 `trade_date`，不改变回测预计算路径。
+
+为方便实盘操作，新策略应尽量在 `signal` 中维护以下字段：
+
+- `signal_close`：信号日 T 的参考收盘价。
+- `entry_trigger_price`：买入触发价；如果不是固定价格，可以写中文或枚举字符串，例如 `next_rebalance_open`。
+- `max_watch_days`：最长观察交易日数；组合调仓类策略可填 `1` 或策略自身含义。
+- `sell_rules`：卖出触发规则列表。每条规则建议包含 `name`, `rule_type`, `timing`, `trigger_price`, `sell_price`, `description`。`rule_type` 可用 `static` 或 `dynamic` 区分静态价位和依赖持仓过程的规则。
+- `display`：给前端直接展示的中文操作计划，建议包含 `title`, `signal_date`, `entry`, `watch`, `sell`。
+- `extras`：用于审计和分桶分析的结构化字段，仍保持英文 key，避免影响历史统计脚本。
+
+前端只展示策略返回的中文说明，不在页面硬编码具体策略规则。策略维护者修改买入、观察或卖出逻辑时，应同步更新 `display` 和 `sell_rules`，确保信号面板、回测记录和策略文档一致。
 
 ### `decide_sells`
 
@@ -190,6 +219,9 @@
 - `market.today_bars`
 - `market.previous_bars`
 - `market.history_by_code`
+- `market.index_history`
+
+`market.index_history` 是交易阶段通用指数宽表，默认合并后端白名单指数最近 200 个可见交易日的日线数据。列名格式为 `<ts_code>__<field>`，例如 `000905.SH__close`、`000905.SH__open`。买入和卖出阶段在交易日 T 只能看到 `< T` 的指数历史，不包含 T 日收盘，也不包含 T+1 或更晚数据。
 
 输出：`list[StrategySellDecision]`，字段为：
 
@@ -247,20 +279,20 @@ backend/strategies/<strategy_name>/strategy.py
 
 ## 小市值低价轮动策略
 
-当前 `small_float_value` 策略不启用中证500市场环境过滤、指数 MA20、Top500 牛熊指标、金叉死叉或 20 日低点过滤；保留周频交易时钟和 7/7 日常卖出：
+当前 `small_float_value` 策略不启用中证500市场环境过滤、指数 MA20、Top500 牛熊指标、金叉死叉或 20 日低点过滤；保留周频交易时钟、top6 目标池和 7/7 日常卖出：
 
 - 每个交易周最后一个开市日 T 收盘后使用截至 T 日的宽表横截面计算目标池，并刷新观望池；周五遇节假日时自动使用该交易周实际最后一个开市日。
 - 下一交易周第一个开市日开盘执行买入和周频调仓；周一遇节假日时自动顺延到该交易周实际第一个开市日。
 - 基础约束为普通主板非 ST、上市满 250 日、EPS 非负、价格和流通市值有效。
-- 在基础池中使用不复权收盘价 `close` 筛选全市场最低价 10% 股票，再按 `circ_mv` 从小到大排序，选取第 1-10 名作为目标池。
+- 在基础池中使用不复权收盘价 `close` 筛选全市场最低价 10% 股票，再按 `circ_mv` 从小到大排序，选取第 1-6 名作为目标池。
 - 日常卖出规则仍每天执行：上一交易日涨幅不低于 7%，T 日收盘涨幅低于 7% 时按 T 日收盘价卖出。
 
-该策略当前不声明 `signal_index_codes`，因此信号阶段不会加载指数日线或指数每日指标。策略启用周频交易时钟，但不指定 `signal_period_day` 或 `rebalance_period_day`，因此使用默认节奏：周期最后一个开市日收盘后出信号，下一周期第一个开市日开盘调仓。整个流程只使用截至信号日 T 的宽表信号数据、买卖阶段 T-1 历史宽表和 T 日交易可观察价格；除公开交易日历用于定位周频周期外，不读取 T+1 或更晚的股票、指数、财务或宽表数据。
+该策略当前不声明 `signal_index_codes`，因此信号阶段不会加载指数日线或指数每日指标。策略启用周频交易时钟，但不指定 `signal_period_day` 或 `rebalance_period_day`，因此使用默认节奏：周期最后一个开市日收盘后出信号，下一周期第一个开市日开盘调仓。整个流程只使用截至信号日 T 的宽表信号数据、买卖阶段 T-1 股票历史宽表和 T 日交易可观察价格；除公开交易日历用于定位周频周期外，不读取 T+1 或更晚的股票、指数、财务或宽表数据。
 
 正式 `small_float_value` 已移除压测探针参数，信号阶段只加载选股必要字段，`signal_history_window = 0`，只使用信号日 T 的横截面；不再把 `qfq_close`、`total_mv`、`buy_history_probe` 写入信号载荷。
 
-`demo` 策略是小市值基准的带探针副本，保留 200 日信号历史窗口、`qfq_close`/`total_mv` 展示字段、买入阶段的 `buy_history_probe`，以及旧基准的“上一交易日涨停、T 日未继续涨停则收盘卖出”规则。它用于压测、调试和对照，不作为正式小市值策略的轻量实现。
-
 后端只维护当前库中日线和每日指标都能覆盖 2014 年起回测窗口的核心指数：上证指数 `000001.SH`、深证成指 `399001.SZ`、创业板指 `399006.SZ`、中证500 `000905.SH`。北证50、科创综指、中证2000、巨潮小盘等不同时具备 2014 年起日线和每日指标覆盖的指数不进入自动维护池，避免长周期回测因指数历史不足而产生大段空信号。新增维护指数时，刷新链路会检测维护池缺失代码，并从其可用起点补齐指数日线和每日指标，而不是只按全局水位增量刷新。
+
+Tushare 数据资产默认每日 `02:30` 自动刷新，自动任务会同步更新 `tushare.stk_mins_5min` 分钟线水位；只有手动调用刷新接口并显式传入 `skip_stk_mins_5min=true` 时才跳过分钟线。日频技术宽表 `tushare.stock_daily_technical` 不依赖分钟线水位。
 
 最高原则：每个策略的信号函数、买入函数、卖出函数都只能看到其交易时点应当可见的信息。T 日完整宽表只允许在收盘后选信号阶段使用；买卖阶段只能使用 T-1 历史宽表和 T 日交易可观察价格。交易日历属于公开可预知信息，框架允许用 T 前后一段开市日排列定位交易周期开始/结束；除此之外，股票、指数、财务、宽表指标都不得读取 T+1 或更晚数据。

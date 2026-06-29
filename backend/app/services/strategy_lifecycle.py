@@ -14,12 +14,14 @@ class MarketViews:
     """Strategy data view for one trading day.
 
     `history_by_code` is reserved for the T-1 10-bar wide-table window.
+    `index_history` is a wide index daily frame ending before T.
     `today_bars` only carries T-day observable market fields used by order rules.
     """
 
     today_bars: dict[str, Bar]
     previous_bars: dict[str, Bar] = field(default_factory=dict)
     history_by_code: dict[str, Any] = field(default_factory=dict)
+    index_history: Any = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +67,7 @@ class StrategyLifecycle(Protocol):
     daily wide-table window, including T, and default to daily fields only.
     Minute-derived fields are opt-in via strategy registration or strategy-owned
     queries. decide_sells and decide_buys run during T and must only use today's
-    observable market fields plus T-1 history.
+    observable market fields plus T-1 stock/index history.
     """
 
     def select_signals(
@@ -97,5 +99,6 @@ class StrategyLifecycle(Protocol):
         *,
         context: StrategyContext,
         raw_signals: list[dict[str, Any]],
+        market: MarketViews | None = None,
     ) -> StrategyWatchDecision:
         ...

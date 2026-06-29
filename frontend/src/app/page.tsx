@@ -140,6 +140,36 @@ function formatSignalMetricList(values: number[] | null | undefined) {
   return values.map((value) => formatSignalMetric(value)).join(" / ");
 }
 
+function formatSignalValue(value: unknown) {
+  if (typeof value === "number") {
+    return formatSignalMetric(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return formatSignalExtra(value);
+}
+
+function signalRowKey(item: DailySignalItem) {
+  return `${item.trade_date}:${item.code}`;
+}
+
+function formatSellRules(item: DailySignalItem) {
+  const rules = item.signal?.sell_rules;
+  if (rules && rules.length > 0) {
+    return rules.map((rule) => rule.name ?? rule.description ?? "-").join(" / ");
+  }
+  const stopLosses = formatSignalMetricList(item.signal?.stop_losses);
+  const takeProfits = formatSignalMetricList(item.signal?.take_profits);
+  if (stopLosses !== "-" || takeProfits !== "-") {
+    return `止损 ${stopLosses} / 止盈 ${takeProfits}`;
+  }
+  return "-";
+}
+
 function formatSignalExtra(value: unknown) {
   if (value === null || value === undefined) {
     return "-";
@@ -183,6 +213,7 @@ export default function Home() {
   const [tushareRefreshEndDate, setTushareRefreshEndDate] = useState(resolveDefaultTushareEndDate);
   const [skipStkMins5min, setSkipStkMins5min] = useState(true);
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
+  const [dailySignalLookbackDays, setDailySignalLookbackDays] = useState(1);
   const [dailySignalStrategy, setDailySignalStrategy] = useState("small_float_value");
   const [dailySignalLoading, setDailySignalLoading] = useState(false);
   const [dailySignalTask, setDailySignalTask] = useState<DailySignalTask | null>(null);
@@ -190,7 +221,7 @@ export default function Home() {
   const [dailySignalResult, setDailySignalResult] = useState<DailySignalResult | null>(null);
   const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>({});
   const [stockContextsLoading, setStockContextsLoading] = useState(false);
-  const [selectedSignalCode, setSelectedSignalCode] = useState<string | null>(null);
+  const [selectedSignalKey, setSelectedSignalKey] = useState<string | null>(null);
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
   const [backtestInitialCash, setBacktestInitialCash] = useState(10000000);
@@ -309,7 +340,7 @@ export default function Home() {
     if (codes.length === 0) {
       return;
     }
-    setSelectedSignalCode((current) => current ?? codes[0]);
+    setSelectedSignalKey((current) => current ?? signalRowKey(data.signals[0]));
     setStockContextsLoading(true);
     try {
       const contextResult = await getStockDataContexts({ codes });
@@ -328,12 +359,13 @@ export default function Home() {
     }
     setDailySignalLoading(true);
     setStockContexts({});
-    setSelectedSignalCode(null);
+    setSelectedSignalKey(null);
     setDailySignalResult(null);
     try {
       const data = await startDailySignalTask({
         strategy_name: dailySignalStrategy,
         trade_date: dailySignalDate,
+        lookback_trade_days: dailySignalLookbackDays,
       });
       setDailySignalTask(data.task);
       setDailySignalTaskModalOpen(true);
@@ -675,6 +707,7 @@ export default function Home() {
   ];
 
   const dailySignalColumns: ColumnsType<DailySignalItem> = [
+    { dataIndex: "trade_date", title: "日期", width: 115 },
     { dataIndex: "code", title: "代码", width: 120 },
     { dataIndex: "code_name", title: "名称", width: 120 },
     {
@@ -683,32 +716,34 @@ export default function Home() {
       width: 120,
     },
     {
-      render: (_value, record) => formatSignalMetricList(record.signal?.stop_losses),
-      title: "止损",
-      width: 180,
-    },
-    {
-      render: (_value, record) => formatSignalMetricList(record.signal?.take_profits),
-      title: "止盈",
-      width: 180,
+      render: (_value, record) => formatSignalValue(record.signal?.entry_trigger_price ?? record.signal?.extras?.entry_trigger_price),
+      title: "买入触发",
+      width: 150,
     },
     {
       render: (_value, record) => formatSignalMetric(record.signal?.max_watch_days),
-      title: "最长持仓",
+      title: "观察期",
       width: 100,
+    },
+    {
+      ellipsis: true,
+      render: (_value, record) => formatSellRules(record),
+      title: "卖出规则",
+      width: 260,
     },
   ];
 
-  const selectedSignal = dailySignalResult?.signals.find((item) => item.code === selectedSignalCode) ?? null;
-  const selectedStockContext = selectedSignalCode === null ? null : stockContexts[selectedSignalCode] ?? null;
+  const selectedSignal = dailySignalResult?.signals.find((item) => signalRowKey(item) === selectedSignalKey) ?? null;
+  const selectedStockContext = selectedSignal === null ? null : stockContexts[selectedSignal.code] ?? null;
+  const selectedDisplay = selectedSignal?.signal?.display ?? null;
   const selectedSignalMetrics: [string, unknown][] =
     selectedSignal === null
       ? []
       : [
+          ["信号日期", selectedSignal.trade_date],
           ["T日收盘", selectedSignal.signal?.signal_close],
-          ["止损位", formatSignalMetricList(selectedSignal.signal?.stop_losses)],
-          ["止盈位", formatSignalMetricList(selectedSignal.signal?.take_profits)],
-          ["最长持仓", selectedSignal.signal?.max_watch_days],
+          ["买入触发价", selectedSignal.signal?.entry_trigger_price ?? selectedSignal.signal?.extras?.entry_trigger_price],
+          ["最长观察期", selectedSignal.signal?.max_watch_days],
           ...Object.entries(selectedSignal.signal?.extras ?? {}),
         ];
 
@@ -910,7 +945,8 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">当日信号</div>
                   <div className="panel-subtitle">
-                    task: {dailySignalTask?.id ?? "-"} / status: {dailySignalTask?.status ?? "-"} / processed:{" "}
+                    task: {dailySignalTask?.id ?? "-"} / status: {dailySignalTask?.status ?? "-"} / days:{" "}
+                    {dailySignalResult?.start_trade_date ?? "-"}~{dailySignalResult?.end_trade_date ?? dailySignalResult?.trade_date ?? "-"} / processed:{" "}
                     {dailySignalTask?.processed_count ?? "-"} / universe:{" "}
                     {dailySignalTask?.universe_count ?? dailySignalResult?.universe_count ?? "-"} / signals:{" "}
                     {dailySignalTask?.signal_count ?? dailySignalResult?.signal_count ?? "-"} / contexts: {Object.keys(stockContexts).length || "-"}
@@ -918,6 +954,16 @@ export default function Home() {
                 </div>
                 <Space>
                   <DatePicker onChange={(_, dateString) => setDailySignalDate(typeof dateString === "string" && dateString.length > 0 ? dateString : null)} placeholder="选择交易日" />
+                  <InputNumber
+                    min={1}
+                    max={120}
+                    onChange={(value) => setDailySignalLookbackDays(typeof value === "number" ? value : 1)}
+                    precision={0}
+                    style={{ width: 120 }}
+                    value={dailySignalLookbackDays}
+                    addonBefore="过去"
+                    addonAfter="日"
+                  />
                   <Select options={strategyOptions} value={dailySignalStrategy} onChange={setDailySignalStrategy} style={{ width: 140 }} />
                   <Button disabled={dailySignalTask === null} onClick={() => setDailySignalTaskModalOpen(true)}>
                     查看任务
@@ -933,19 +979,29 @@ export default function Home() {
                     columns={dailySignalColumns}
                     dataSource={dailySignalResult?.signals ?? []}
                     loading={dailySignalLoading || dailySignalRunning || stockContextsLoading}
-                    onRow={(record) => ({ onClick: () => setSelectedSignalCode(record.code) })}
+                    onRow={(record) => ({ onClick: () => setSelectedSignalKey(signalRowKey(record)) })}
                     pagination={{ pageSize: 30, showSizeChanger: true }}
-                    rowClassName={(record) => (record.code === selectedSignalCode ? "selected-row" : "")}
-                    rowKey="code"
-                    scroll={{ x: 700, y: 560 }}
+                    rowClassName={(record) => (signalRowKey(record) === selectedSignalKey ? "selected-row" : "")}
+                    rowKey={signalRowKey}
+                    scroll={{ x: 865, y: 560 }}
                     size="small"
                   />
                 </div>
                 <div className="signal-charts">
                   <div className="chart-header">
-                    <div className="placeholder-title">{selectedSignalCode ?? "未选择股票"}</div>
+                    <div className="placeholder-title">{selectedSignal?.code ?? "未选择股票"}</div>
                     <div className="panel-subtitle">{selectedSignal?.code_name ?? "从左侧列表选择一只股票"}</div>
                   </div>
+                  {selectedDisplay !== null ? (
+                    <div className="signal-plan">
+                      <div className="signal-plan-title">{selectedDisplay.title ?? "操作计划"}</div>
+                      {selectedDisplay.entry ? <div>{selectedDisplay.entry}</div> : null}
+                      {selectedDisplay.watch ? <div>{selectedDisplay.watch}</div> : null}
+                      {(selectedDisplay.sell ?? []).map((item) => (
+                        <div key={item}>{item}</div>
+                      ))}
+                    </div>
+                  ) : null}
                   {selectedSignalMetrics.length > 0 ? (
                     <div className="signal-metrics">
                       {selectedSignalMetrics.map(([label, value]) => (

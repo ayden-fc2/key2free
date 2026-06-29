@@ -5,8 +5,11 @@ import math
 from datetime import date, datetime
 from typing import Any
 
+import pandas as pd
+
 from app.dtos.backtest_dto import BacktestTaskDTO
 from app.repositories.duckdb_repository import DuckDBRepository
+from app.repositories.tushare_repository import INDEX_KEEP_TS_CODES
 
 
 class BacktestRepository:
@@ -508,6 +511,125 @@ class BacktestRepository:
                 float(qfq_pre_closes[index]) if qfq_pre_closes[index] is not None else nan,
             )
         return prices
+
+    def load_index_history_wide(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        window: int,
+        ts_codes: tuple[str, ...] = INDEX_KEEP_TS_CODES,
+    ) -> pd.DataFrame:
+        if not ts_codes:
+            return pd.DataFrame(columns=["trade_date"])
+        with self.duckdb.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                with before_window as (
+                    select *
+                    from (
+                        select
+                            ts_code,
+                            trade_date,
+                            open,
+                            high,
+                            low,
+                            close,
+                            pre_close,
+                            change,
+                            pct_chg,
+                            vol,
+                            amount,
+                            row_number() over (
+                                partition by ts_code
+                                order by trade_date desc
+                            ) as rn
+                        from tushare.index_daily
+                        where ts_code in (select unnest(?))
+                          and trade_date < ?
+                    ) ranked
+                    where rn <= ?
+                ),
+                in_range as (
+                    select
+                        ts_code,
+                        trade_date,
+                        open,
+                        high,
+                        low,
+                        close,
+                        pre_close,
+                        change,
+                        pct_chg,
+                        vol,
+                        amount
+                    from tushare.index_daily
+                    where ts_code in (select unnest(?))
+                      and trade_date between ? and ?
+                )
+                select
+                    ts_code,
+                    trade_date,
+                    open,
+                    high,
+                    low,
+                    close,
+                    pre_close,
+                    change,
+                    pct_chg,
+                    vol,
+                    amount
+                from before_window
+                union all
+                select
+                    ts_code,
+                    trade_date,
+                    open,
+                    high,
+                    low,
+                    close,
+                    pre_close,
+                    change,
+                    pct_chg,
+                    vol,
+                    amount
+                from in_range
+                order by trade_date, ts_code
+                """,
+                [
+                    list(ts_codes),
+                    start_date,
+                    int(window),
+                    list(ts_codes),
+                    start_date,
+                    end_date,
+                ],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=["trade_date"])
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
+        value_columns = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "pre_close",
+            "change",
+            "pct_chg",
+            "vol",
+            "amount",
+        ]
+        wide = frame.pivot_table(
+            index="trade_date",
+            columns="ts_code",
+            values=value_columns,
+            aggfunc="last",
+        )
+        wide.columns = [
+            f"{ts_code}__{field}"
+            for field, ts_code in wide.columns.to_flat_index()
+        ]
+        return wide.reset_index().sort_values("trade_date").reset_index(drop=True)
 
     def get_task_detail(
         self,

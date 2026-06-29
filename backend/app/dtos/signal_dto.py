@@ -8,6 +8,7 @@ from typing import Any
 class DailySignalRequestDTO:
     trade_date: str
     strategy_name: str
+    lookback_trade_days: int = 1
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,9 @@ class DailySignalResultDTO:
     universe_count: int
     signal_count: int
     signals: list[DailySignalItemDTO]
+    start_trade_date: str | None = None
+    end_trade_date: str | None = None
+    lookback_trade_days: int = 1
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,7 @@ class DailySignalTaskDTO:
     created_at: str | None
     updated_at: str | None
     logs: str
+    lookback_trade_days: int = 1
 
 
 @dataclass(frozen=True)
