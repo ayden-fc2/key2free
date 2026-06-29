@@ -31,8 +31,8 @@ HIGH_TO_CLOSE_PULLBACK_MIN = 0.03
 HIGH_TO_CLOSE_PULLBACK_MAX = 0.16
 PULLBACK_MA20_LOW = 0.98
 PULLBACK_MA10_HIGH = 1.05
-ENTRY_CLOSE_MULTIPLE = 1.03
-ENTRY_MA10_MULTIPLE = 1.03
+ENTRY_CLOSE_MULTIPLE = 1.025
+ENTRY_MA10_MULTIPLE = 1.025
 WATCH_MAX_DAYS = 5
 TRAILING_PROFIT_ENABLE = 1.08
 TRAILING_CLOSE_DRAWDOWN = 0.96
@@ -243,7 +243,7 @@ class SharpRisePullbackLeaderLifecycle:
             "watch_max_days": WATCH_MAX_DAYS,
             "turnover_rate": float(turnover_rate),
             "close": float(close),
-            "entry_rule": "within 5 trading days, buy when intraday high reaches min(T close*1.03, T MA10*1.03)",
+            "entry_rule": "within 5 trading days, buy when intraday high reaches min(T close*1.025, T MA10*1.025)",
             "exit_rule": (
                 "intraday low below signal low; "
                 "max intraday profit since buy>=8% and close drawdown from max high>=4%"
