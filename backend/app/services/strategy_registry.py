@@ -13,6 +13,10 @@ from strategies.sharp_rise_pullback_leader import (
     sharp_rise_pullback_leader_code_filter,
     sharp_rise_pullback_leader_lifecycle,
 )
+from strategies.sharp_rise_pullback_leader_v2 import (
+    sharp_rise_pullback_leader_v2_code_filter,
+    sharp_rise_pullback_leader_v2_lifecycle,
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,33 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ma_10",
             "ma_20",
             "ma_30",
+            "pct_chg",
+            "is_st",
+            "turnover_rate",
+        ),
+        signal_history_window=200,
+    ),
+    "sharp_rise_pullback_leader_v2": StrategyRegistration(
+        name="sharp_rise_pullback_leader_v2",
+        lifecycle=sharp_rise_pullback_leader_v2_lifecycle,
+        required_columns=SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS,
+        code_filter=sharp_rise_pullback_leader_v2_code_filter,
+        signal_required_columns=(
+            "name",
+            "close",
+            "qfq_open",
+            "qfq_high",
+            "qfq_low",
+            "qfq_close",
+            "ma_10",
+            "ma_20",
+            "ma_30",
+            "ma_slope_30",
+            "rsi_14",
+            "vol",
+            "avg_volume_10",
+            "volume_ratio_10",
+            "avg_amount_20",
             "pct_chg",
             "is_st",
             "turnover_rate",
