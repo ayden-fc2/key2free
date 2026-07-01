@@ -19,6 +19,7 @@ MAX_CALL_ATTEMPTS = len(RETRY_DELAYS_SECONDS) + 1
 STK_MINS_CALL_INTERVAL_SECONDS = float(os.getenv("TUSHARE_STK_MINS_CALL_INTERVAL_SECONDS", "0.2"))
 TUSHARE_STK_MINS_MAX_ROWS = int(os.getenv("TUSHARE_STK_MINS_MAX_ROWS", "8000"))
 BAOSTOCK_STK_MINS_MAX_ROWS = int(os.getenv("BAOSTOCK_STK_MINS_MAX_ROWS", "200000"))
+RUNNING_TASK_STALE_AFTER_SECONDS = int(os.getenv("TUSHARE_RUNNING_TASK_STALE_AFTER_SECONDS", "1800"))
 
 
 @dataclass(frozen=True)
@@ -45,8 +46,19 @@ class TushareAssetService:
     def finish_running_tasks(self, message: str) -> int:
         return self.repository.finish_running_refresh_tasks(message)
 
+    def finish_stale_running_tasks(self, message: str) -> int:
+        stale_task_ids = [
+            task["id"]
+            for task in self.repository.get_running_refresh_tasks()
+            if self._is_stale_running_task(task)
+        ]
+        return self.repository.finish_refresh_tasks(stale_task_ids, message)
+
     def start_refresh(self, *, end_date: date, skip_stk_mins_5min: bool = False) -> TushareRefreshStartResult:
         self.repository.ensure_tables()
+        self.finish_stale_running_tasks(
+            "found a stale running Tushare refresh task and marked it as error.",
+        )
         with self._lock:
             running = self.repository.get_running_refresh_task()
             if running is not None:
@@ -55,7 +67,7 @@ class TushareAssetService:
                     task_id=running["id"],
                     message="tushare refresh task is already running",
                 )
-            task_id = self.repository.create_refresh_task()
+            task_id = self.repository.create_refresh_task(owner_pid=os.getpid())
             thread = threading.Thread(
                 target=self._run_refresh_task,
                 kwargs={
@@ -146,7 +158,7 @@ class TushareAssetService:
 
     def refresh_index_dailybasic_only(self, *, end_date: date) -> int:
         self.repository.ensure_tables()
-        task_id = self.repository.create_refresh_task()
+        task_id = self.repository.create_refresh_task(owner_pid=os.getpid())
         try:
             self._append_log(task_id, f"start Tushare index_dailybasic refresh only, end_date={end_date}")
             ok = self._refresh_index_dailybasic(task_id=task_id, end_date=end_date)
@@ -1138,6 +1150,31 @@ class TushareAssetService:
     def _fail_task(self, task_id: int, message: str) -> None:
         self._append_log(task_id, message)
         self.repository.update_refresh_task(task_id=task_id, status="error", finished=True)
+
+    def _is_stale_running_task(self, task: dict[str, Any]) -> bool:
+        owner_pid = task.get("owner_pid")
+        if owner_pid is not None:
+            return not self._is_process_alive(int(owner_pid))
+
+        updated_at_text = task.get("updated_at")
+        if not updated_at_text:
+            return True
+        try:
+            updated_at = datetime.fromisoformat(str(updated_at_text))
+        except ValueError:
+            return True
+        return (datetime.now() - updated_at).total_seconds() > RUNNING_TASK_STALE_AFTER_SECONDS
+
+    def _is_process_alive(self, pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
 
     def _append_log(self, task_id: int, message: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

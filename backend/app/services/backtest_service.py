@@ -73,7 +73,7 @@ class BacktestService:
     STRATEGY_DEFAULT_SIMULATION_RUNS = {
         "small_float_value": 1,
     }
-    SIMULATION_WORKERS = 10
+    SIMULATION_WORKERS = 5
 
     def __init__(self) -> None:
         self.repository = BacktestRepository()

@@ -19,7 +19,7 @@ def clear_stale_running_tasks() -> None:
     BacktestRepository().finish_running_tasks(
         "backend startup found a stale running backtest task and marked it as error.",
     )
-    TushareAssetService().finish_running_tasks(
+    TushareAssetService().finish_stale_running_tasks(
         "backend startup found a stale running Tushare refresh task and marked it as error.",
     )
     TushareAutoRefreshScheduler.start()

@@ -144,12 +144,14 @@ class TushareRepository:
                     started_at timestamp not null default current_timestamp,
                     updated_at timestamp not null default current_timestamp,
                     finished_at timestamp,
+                    owner_pid bigint,
                     current_asset_table_name varchar,
                     current_watermark date,
                     logs varchar not null default ''
                 )
                 """
             )
+            connection.execute("alter table meta.tushare_refresh_task add column if not exists owner_pid bigint")
             connection.execute(
                 """
                 create table if not exists tushare.trade_cal (
@@ -1883,7 +1885,7 @@ class TushareRepository:
         slope = self._safe_divide_series(covariance, variance)
         return slope.where(variance.abs() > 1e-12)
 
-    def create_refresh_task(self) -> int:
+    def create_refresh_task(self, *, owner_pid: int | None = None) -> int:
         self.ensure_tables()
         with self.duckdb.connect(read_only=False) as connection:
             task_id = connection.execute(
@@ -1894,10 +1896,10 @@ class TushareRepository:
             ).fetchone()[0]
             connection.execute(
                 """
-                insert into meta.tushare_refresh_task(id, status, logs)
-                values (?, 'running', '')
+                insert into meta.tushare_refresh_task(id, status, owner_pid, logs)
+                values (?, 'running', ?, '')
                 """,
-                [task_id],
+                [task_id, owner_pid],
             )
         return int(task_id)
 
@@ -1908,7 +1910,7 @@ class TushareRepository:
         with self.duckdb.connect(read_only=True) as connection:
             row = connection.execute(
                 f"""
-                select id, status, started_at, updated_at, finished_at,
+                select id, status, started_at, updated_at, finished_at, owner_pid,
                        current_asset_table_name, current_watermark, logs
                 from meta.tushare_refresh_task
                 {where_sql}
@@ -1924,7 +1926,7 @@ class TushareRepository:
         with self.duckdb.connect(read_only=True) as connection:
             row = connection.execute(
                 """
-                select id, status, started_at, updated_at, finished_at,
+                select id, status, started_at, updated_at, finished_at, owner_pid,
                        current_asset_table_name, current_watermark, logs
                 from meta.tushare_refresh_task
                 where status = 'running'
@@ -1933,6 +1935,24 @@ class TushareRepository:
                 """
             ).fetchone()
         return self._refresh_task_row_to_dict(row)
+
+    def get_running_refresh_tasks(self) -> list[dict[str, Any]]:
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                select id, status, started_at, updated_at, finished_at, owner_pid,
+                       current_asset_table_name, current_watermark, logs
+                from meta.tushare_refresh_task
+                where status = 'running'
+                order by id
+                """
+            ).fetchall()
+        return [
+            task
+            for row in rows
+            if (task := self._refresh_task_row_to_dict(row)) is not None
+        ]
 
     def update_refresh_task(
         self,
@@ -1996,6 +2016,38 @@ class TushareRepository:
                 )
         return len(rows)
 
+    def finish_refresh_tasks(self, task_ids: list[int], message: str) -> int:
+        if not task_ids:
+            return 0
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=False) as connection:
+            rows = connection.execute(
+                """
+                select id, logs
+                from meta.tushare_refresh_task
+                where status = 'running'
+                  and id in (select unnest(?))
+                order by id
+                """,
+                [task_ids],
+            ).fetchall()
+            for task_id, logs in rows:
+                connection.execute(
+                    """
+                    update meta.tushare_refresh_task
+                    set status = 'error',
+                        logs = ?,
+                        finished_at = current_timestamp,
+                        updated_at = current_timestamp
+                    where id = ?
+                    """,
+                    [
+                        (logs or "") + self._format_refresh_log(message),
+                        task_id,
+                    ],
+                )
+        return len(rows)
+
     def _refresh_task_row_to_dict(self, row: tuple[Any, ...] | None) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -2005,9 +2057,10 @@ class TushareRepository:
             "started_at": None if row[2] is None else str(row[2]),
             "updated_at": None if row[3] is None else str(row[3]),
             "finished_at": None if row[4] is None else str(row[4]),
-            "current_asset_table_name": row[5],
-            "current_watermark": None if row[6] is None else str(row[6]),
-            "logs": row[7] or "",
+            "owner_pid": None if row[5] is None else int(row[5]),
+            "current_asset_table_name": row[6],
+            "current_watermark": None if row[7] is None else str(row[7]),
+            "logs": row[8] or "",
         }
 
     def _parse_yyyymmdd(self, value: Any) -> date | None:

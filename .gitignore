@@ -52,3 +52,6 @@ data/*.bak*
 # Analysis and large local backups
 analysis_task*.csv
 data/backups/*.parquet
+
+# Local strategy implementations
+backend/strategies/*/
