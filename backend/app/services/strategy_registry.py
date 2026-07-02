@@ -102,8 +102,6 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ma_30",
             "ma_slope_30",
             "rsi_14",
-            "vol",
-            "avg_volume_10",
             "volume_ratio_10",
             "avg_amount_20",
             "pct_chg",
