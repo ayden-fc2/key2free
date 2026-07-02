@@ -954,16 +954,18 @@ export default function Home() {
                 </div>
                 <Space>
                   <DatePicker onChange={(_, dateString) => setDailySignalDate(typeof dateString === "string" && dateString.length > 0 ? dateString : null)} placeholder="选择交易日" />
-                  <InputNumber
-                    min={1}
-                    max={120}
-                    onChange={(value) => setDailySignalLookbackDays(typeof value === "number" ? value : 1)}
-                    precision={0}
-                    style={{ width: 120 }}
-                    value={dailySignalLookbackDays}
-                    addonBefore="过去"
-                    addonAfter="日"
-                  />
+                  <Space.Compact>
+                    <Button disabled>过去</Button>
+                    <InputNumber
+                      min={1}
+                      max={120}
+                      onChange={(value) => setDailySignalLookbackDays(typeof value === "number" ? value : 1)}
+                      precision={0}
+                      style={{ width: 120 }}
+                      value={dailySignalLookbackDays}
+                    />
+                    <Button disabled>日</Button>
+                  </Space.Compact>
                   <Select options={strategyOptions} value={dailySignalStrategy} onChange={setDailySignalStrategy} style={{ width: 140 }} />
                   <Button disabled={dailySignalTask === null} onClick={() => setDailySignalTaskModalOpen(true)}>
                     查看任务
