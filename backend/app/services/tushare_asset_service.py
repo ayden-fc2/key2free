@@ -328,16 +328,14 @@ class TushareAssetService:
                 )
 
         if total_rows <= 0:
-            issue_message = (
-                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
+            self._append_log(
+                task_id,
+                (
+                    f"{asset_table_name} {start_text}->{end_text} all codes failed "
+                    f"failed_codes={failed_count}/{len(ts_codes)}; "
+                    "watermark not advanced, will retry on next refresh"
+                ),
             )
-            self.repository.update_watermark(
-                asset_table_name,
-                end_uncovered_date,
-                issue_scope=f"{start_text}->{end_text}",
-                issue_message=issue_message,
-            )
-            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
             return True
 
         for trade_day in uncovered_dates:
@@ -443,16 +441,14 @@ class TushareAssetService:
         if total_rows <= 0:
             start_text = self._format_tushare_date(start_date)
             end_text = self._format_tushare_date(end_uncovered_date)
-            issue_message = (
-                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
+            self._append_log(
+                task_id,
+                (
+                    f"{asset_table_name} {start_text}->{end_text} all codes failed "
+                    f"failed_codes={failed_count}/{len(ts_codes)}; "
+                    "watermark not advanced, will retry on next refresh"
+                ),
             )
-            self.repository.update_watermark(
-                asset_table_name,
-                end_uncovered_date,
-                issue_scope=f"{start_text}->{end_text}",
-                issue_message=issue_message,
-            )
-            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
             return True
 
         for trade_day in uncovered_dates:
@@ -527,28 +523,18 @@ class TushareAssetService:
                 ),
             )
             if frame is None:
-                issue_message = f"{start_text}->{end_text} retries exhausted"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    window_end,
-                    issue_scope=f"{start_text}->{end_text}",
-                    issue_message=issue_message,
+                self._append_log(
+                    task_id,
+                    f"{asset_table_name} {start_text}->{end_text} retries exhausted; watermark not advanced, will retry on next refresh",
                 )
-                watermark = window_end
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-                continue
+                break
             row_count = self.repository.upsert_trade_cal(frame)
             if row_count <= 0:
-                issue_message = f"{start_text}->{end_text} returned 0 rows"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    window_end,
-                    issue_scope=f"{start_text}->{end_text}",
-                    issue_message=issue_message,
+                self._append_log(
+                    task_id,
+                    f"{asset_table_name} {start_text}->{end_text} returned 0 rows; watermark not advanced, will retry on next refresh",
                 )
-                watermark = window_end
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-                continue
+                break
             self.repository.update_watermark(asset_table_name, window_end)
             watermark = window_end
             self._append_log(task_id, f"{asset_table_name} {start_text}->{end_text} success rows={row_count}")
@@ -594,28 +580,18 @@ class TushareAssetService:
                 fetcher=lambda day=trade_day: fetcher(day),
             )
             if frame is None:
-                issue_message = f"{trade_date_text} retries exhausted"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    trade_day,
-                    issue_scope=trade_date_text,
-                    issue_message=issue_message,
+                self._append_log(
+                    task_id,
+                    f"{asset_table_name} {trade_date_text} retries exhausted; watermark not advanced, will retry on next refresh",
                 )
-                watermark = trade_day
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-                continue
+                break
             row_count = writer(frame)
             if row_count <= 0:
-                issue_message = f"{trade_date_text} returned 0 rows"
-                self.repository.update_watermark(
-                    asset_table_name,
-                    trade_day,
-                    issue_scope=trade_date_text,
-                    issue_message=issue_message,
+                self._append_log(
+                    task_id,
+                    f"{asset_table_name} {trade_date_text} returned 0 rows; watermark not advanced, will retry on next refresh",
                 )
-                watermark = trade_day
-                self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
-                continue
+                break
             self.repository.update_watermark(asset_table_name, trade_day)
             watermark = trade_day
             self._append_log(task_id, f"{asset_table_name} {trade_date_text} success rows={row_count}")
@@ -876,16 +852,14 @@ class TushareAssetService:
             self._logout_baostock()
 
         if total_rows <= 0:
-            issue_message = (
-                f"{start_text}->{end_text} returned 0 rows, failed_codes={failed_count}/{len(ts_codes)}"
+            self._append_log(
+                task_id,
+                (
+                    f"{asset_table_name} {start_text}->{end_text} all codes failed "
+                    f"failed_codes={failed_count}/{len(ts_codes)}; "
+                    "watermark not advanced, will retry on next refresh"
+                ),
             )
-            self.repository.update_watermark(
-                asset_table_name,
-                end_uncovered_date,
-                issue_scope=f"{start_text}->{end_text}",
-                issue_message=issue_message,
-            )
-            self._append_log(task_id, f"{asset_table_name} {issue_message}; watermark advanced with issue")
             return True
 
         for trade_day in uncovered_dates:
