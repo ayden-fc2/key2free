@@ -19,27 +19,31 @@ from app.services.strategy_lifecycle import (
 
 SIGNAL_LOOKBACK_BARS = 30
 CONSOLIDATION_START_OFFSET = 15
-CONSOLIDATION_END_OFFSET = 2
+CONSOLIDATION_END_OFFSET = 1
 MAX_BODY_RANGE_PCT = 0.07
+MAX_PREVIOUS_ATR_PCT_14 = 0.025
 VOLUME_LOOKBACK_BARS = 5
 VOLUME_MULTIPLE = 1.5
 MIN_RSI_5 = 60.0
 BREAKOUT_CLOSE_MULTIPLE = 1.01
-BREAKOUT_CLOSE_MAX_MULTIPLE = 1.04
-ENTRY_TRIGGER_MULTIPLE = 1.02
-WATCH_MAX_DAYS = 3
+BREAKOUT_CLOSE_MAX_MULTIPLE = 1.05
+ENTRY_TRIGGER_SIGNAL_CLOSE_MULTIPLE = 1.03
+WATCH_MAX_DAYS = 7
 POSITION_FRACTION = 0.25
-TRAILING_PROFIT_ENABLE = 1.06
+TRAILING_PROFIT_ENABLE = 1.04
 TRAILING_DRAWDOWN = 0.96
+EARLY_EXIT_CHECK_HOLD_DAYS = 3
+EARLY_EXIT_MIN_CLOSE_RETURN = 0.04
+TRIGGERED_WATCH_CODES_KEY = "volume_breakout_macd_triggered_watch_codes"
 
 SIGNAL_COLUMNS = (
     "name",
     "qfq_open",
-    "qfq_high",
     "qfq_low",
     "qfq_close",
     "vol",
     "turnover_rate",
+    "atr_pct_14",
     "ma_20",
     "macd_dea_12_26_9",
     "rsi_5",
@@ -139,22 +143,37 @@ class VolumeBreakoutMacdLifecycle:
                 continue
 
             today_high = _bar_high(bar)
-            today_low = _bar_low(bar)
             today_close = _bar_close(bar)
-            if today_high is None or today_low is None or today_close is None:
+            if today_high is None or today_close is None:
                 continue
 
             known_high = _to_positive_float(getattr(holding, "max_high_since_buy", None)) or holding.buy_price
             running_high = max(known_high, today_high)
             holding.max_high_since_buy = running_high
-            trailing_price = running_high * TRAILING_DRAWDOWN
-            if running_high >= holding.buy_price * TRAILING_PROFIT_ENABLE and today_low <= trailing_price:
+
+            holding_days = context.trade_index - getattr(holding, "buy_trade_index", context.trade_index) + 1
+            if (
+                holding_days == EARLY_EXIT_CHECK_HOLD_DAYS
+                and today_close / holding.buy_price - 1.0 < EARLY_EXIT_MIN_CLOSE_RETURN
+            ):
                 decisions.append(
                     StrategySellDecision(
                         code=code,
-                        price=trailing_price,
+                        price=today_close,
                         quantity=int(holding.quantity),
-                        reason="max_profit_intraday_drawdown_4pct",
+                        reason="day3_close_gain_below_4pct",
+                    )
+                )
+                continue
+
+            trailing_price = running_high * TRAILING_DRAWDOWN
+            if running_high >= holding.buy_price * TRAILING_PROFIT_ENABLE and today_close <= trailing_price:
+                decisions.append(
+                    StrategySellDecision(
+                        code=code,
+                        price=today_close,
+                        quantity=int(holding.quantity),
+                        reason="max_profit_close_drawdown_4pct",
                     )
                 )
                 continue
@@ -180,6 +199,7 @@ class VolumeBreakoutMacdLifecycle:
         market: MarketViews,
     ) -> list[StrategyBuyDecision]:
         candidates: list[tuple[Any, float]] = []
+        triggered_watch_codes = _triggered_watch_codes(context)
         for item in context.watch_pool.values():
             if item.code in context.holdings:
                 continue
@@ -196,9 +216,14 @@ class VolumeBreakoutMacdLifecycle:
             today_high = _bar_high(bar)
             if today_open is None or today_high is None:
                 continue
+            close_stop_price = _signal_extra_float(item.signal, "close_stop_price")
+            if close_stop_price is not None and today_open < close_stop_price:
+                continue
             if today_open >= trigger_price:
+                triggered_watch_codes.add(item.code)
                 candidates.append((item, today_open))
             elif today_high >= trigger_price:
+                triggered_watch_codes.add(item.code)
                 candidates.append((item, trigger_price))
 
         decisions: list[StrategyBuyDecision] = []
@@ -234,17 +259,35 @@ class VolumeBreakoutMacdLifecycle:
         raw_signals: list[dict[str, Any]],
         market: MarketViews | None = None,
     ) -> StrategyWatchDecision:
-        del market
         held = set(context.holdings)
+        triggered_watch_codes = _triggered_watch_codes(context)
         keep: set[str] = set()
         remove: set[str] = set()
         for code, item in context.watch_pool.items():
             if code in held:
                 remove.add(code)
                 continue
-            if context.trade_index - item.added_trade_index >= WATCH_MAX_DAYS:
+            if code in triggered_watch_codes:
                 remove.add(code)
                 continue
+            age = context.trade_index - item.added_trade_index
+            if age >= WATCH_MAX_DAYS:
+                remove.add(code)
+                continue
+            if age >= 1 and market is not None:
+                bar = market.today_bars.get(code)
+                today_open = _bar_open(bar)
+                today_close = _bar_close(bar)
+                close_stop_price = _signal_extra_float(item.signal, "close_stop_price")
+                if (
+                    close_stop_price is not None
+                    and (
+                        (today_open is not None and today_open < close_stop_price)
+                        or (today_close is not None and today_close < close_stop_price)
+                    )
+                ):
+                    remove.add(code)
+                    continue
             keep.add(code)
         return StrategyWatchDecision(
             add=[signal for signal in raw_signals if str(signal.get("code")) not in held],
@@ -335,6 +378,11 @@ def _select_signal_for_frame(*, code: str, frame: Any, trade_date: date) -> dict
     body_high_h, body_low_l = body_range
     if body_low_l <= 0 or (body_high_h - body_low_l) / body_low_l > MAX_BODY_RANGE_PCT:
         return None
+    previous_atr_pct_14 = _frame_float(frame, "atr_pct_14", previous_index)
+    if previous_atr_pct_14 is None or previous_atr_pct_14 <= 0:
+        return None
+    if previous_atr_pct_14 > MAX_PREVIOUS_ATR_PCT_14:
+        return None
 
     avg_volume_5 = _avg_frame_float(frame, "vol", today_index - VOLUME_LOOKBACK_BARS, today_index)
     if avg_volume_5 is None or avg_volume_5 <= 0 or today_volume < avg_volume_5 * VOLUME_MULTIPLE:
@@ -358,7 +406,7 @@ def _select_signal_for_frame(*, code: str, frame: Any, trade_date: date) -> dict
         return None
 
     code_name = _frame_text(frame, "name", today_index)
-    entry_trigger_price = body_high_h * ENTRY_TRIGGER_MULTIPLE
+    entry_trigger_price = today_close * ENTRY_TRIGGER_SIGNAL_CLOSE_MULTIPLE
     close_stop_price = (body_high_h + body_low_l) / 2.0
     signal = {
         "triggered": True,
@@ -367,20 +415,28 @@ def _select_signal_for_frame(*, code: str, frame: Any, trade_date: date) -> dict
         "max_watch_days": WATCH_MAX_DAYS,
         "sell_rules": [
             {
+                "name": "第3日未启动退出",
+                "rule_type": "time_stop",
+                "timing": "close",
+                "trigger_price": f"holding_day == {EARLY_EXIT_CHECK_HOLD_DAYS} and close / buy_price - 1 < {EARLY_EXIT_MIN_CLOSE_RETURN:.2%}",
+                "sell_price": "current_close",
+                "description": "买入后第 3 个交易日收盘涨幅未达到 4% 时，按收盘价卖出。",
+            },
+            {
                 "name": "实体中线收盘止损",
                 "rule_type": "static",
                 "timing": "close",
                 "trigger_price": float(close_stop_price),
                 "sell_price": "current_close",
-                "description": "持仓期间收盘价跌破 T-15 至 T-2 实体震荡区间中线时按收盘价卖出。",
+                "description": "持仓期间收盘价跌破 T-15 至 T-1 实体震荡区间中线时按收盘价卖出。",
             },
             {
                 "name": "最大浮盈回撤止盈",
                 "rule_type": "dynamic",
-                "timing": "intraday",
-                "trigger_price": "highest_since_buy * 0.96 after highest_since_buy >= buy_price * 1.06",
-                "sell_price": "highest_since_buy * 0.96",
-                "description": "买入后最高价相对买入价涨幅超过 6%，随后盘中跌破最高价的 96% 时卖出。",
+                "timing": "close",
+                "trigger_price": "close <= highest_since_buy * 0.96 after highest_since_buy >= buy_price * 1.04",
+                "sell_price": "current_close",
+                "description": "买入后最高价相对买入价涨幅超过 4%，随后收盘价跌破最高价的 96% 时按收盘价卖出。",
             },
         ],
         "display": {
@@ -389,10 +445,10 @@ def _select_signal_for_frame(*, code: str, frame: Any, trade_date: date) -> dict
             "entry": f"T+1 起最多观察 {WATCH_MAX_DAYS} 个交易日，盘中触及 {entry_trigger_price:.3f} 买入；若开盘已达到则按开盘价买入。",
             "watch": (
                 f"实体震荡区间 H={body_high_h:.3f}, L={body_low_l:.3f}，"
-                f"T 收盘价需位于 H*{BREAKOUT_CLOSE_MULTIPLE:.2f} 到 "
-                f"H*{BREAKOUT_CLOSE_MAX_MULTIPLE:.2f}，且 RSI5 不低于 {MIN_RSI_5:.0f}。"
+                f"T 收盘价需位于 H*{BREAKOUT_CLOSE_MULTIPLE:.2f} 到 H*{BREAKOUT_CLOSE_MAX_MULTIPLE:.2f}，"
+                f"且 RSI5 不低于 {MIN_RSI_5:.0f}。"
             ),
-            "sell": f"收盘跌破 {(close_stop_price):.3f} 卖出；浮盈超过 6% 后按最高价回撤 4% 止盈。",
+            "sell": f"第 3 个交易日收盘未涨 4% 卖出；收盘跌破 {(close_stop_price):.3f} 卖出；浮盈超过 4% 后收盘回撤 4% 止盈。",
         },
         "extras": {
             "pattern": "volume_breakout_macd",
@@ -401,10 +457,13 @@ def _select_signal_for_frame(*, code: str, frame: Any, trade_date: date) -> dict
             "body_high_h": float(body_high_h),
             "body_low_l": float(body_low_l),
             "body_range_pct": float((body_high_h - body_low_l) / body_low_l),
+            "t_minus_1_atr_pct_14": float(previous_atr_pct_14),
+            "max_t_minus_1_atr_pct_14": MAX_PREVIOUS_ATR_PCT_14,
             "breakout_close_multiple": float(today_close / body_high_h),
             "breakout_close_min_multiple": BREAKOUT_CLOSE_MULTIPLE,
             "breakout_close_max_multiple": BREAKOUT_CLOSE_MAX_MULTIPLE,
             "entry_trigger_price": float(entry_trigger_price),
+            "entry_trigger_signal_close_multiple": ENTRY_TRIGGER_SIGNAL_CLOSE_MULTIPLE,
             "close_stop_price": float(close_stop_price),
             "volume_multiple_5": float(today_volume / avg_volume_5),
             "turnover_multiple_5": float(today_turnover_rate / avg_turnover_5),
@@ -477,6 +536,18 @@ def _ordered_candidates(
     seed = f"volume_breakout_macd:{context.params.get('run_no', 1)}:{context.trade_date.isoformat()}"
     random.Random(seed).shuffle(shuffled)
     return shuffled
+
+
+def _triggered_watch_codes(context: StrategyContext) -> set[str]:
+    existing = context.trade_records.get(TRIGGERED_WATCH_CODES_KEY)
+    if isinstance(existing, set):
+        return existing
+    if isinstance(existing, list):
+        codes = {str(code) for code in existing}
+    else:
+        codes = set()
+    context.trade_records[TRIGGERED_WATCH_CODES_KEY] = codes
+    return codes
 
 
 def _buy_quantity(*, cash: float, price: float, max_amount: float) -> int:

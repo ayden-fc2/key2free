@@ -151,11 +151,11 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_required_columns=(
             "name",
             "qfq_open",
-            "qfq_high",
             "qfq_low",
             "qfq_close",
             "vol",
             "turnover_rate",
+            "atr_pct_14",
             "ma_20",
             "macd_dea_12_26_9",
             "rsi_5",
