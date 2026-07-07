@@ -45,6 +45,7 @@ data/*.ipynb
 data/.DS_Store
 data/*.cfg
 data/*.bak*
+data/wal_backup/*
 
 # Runtime logs
 *.log

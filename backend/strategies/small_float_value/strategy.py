@@ -14,10 +14,10 @@ from app.services.strategy_lifecycle import (
 )
 
 
-SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 6
+SMALL_FLOAT_VALUE_TARGET_HOLDINGS = 3
 SMALL_FLOAT_VALUE_LOW_PRICE_QUANTILE = 0.10
 SMALL_FLOAT_VALUE_CIRC_MV_RANK_START = 1
-SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 6
+SMALL_FLOAT_VALUE_CIRC_MV_RANK_END = 3
 SMALL_FLOAT_VALUE_MIN_LIST_DAYS = 250
 SMALL_FLOAT_VALUE_REQUIRED_COLUMNS: tuple[str, ...] = ()
 SMALL_FLOAT_VALUE_REBALANCE_WEEKDAY = 0
@@ -124,7 +124,7 @@ def _select_day(group: pd.DataFrame, *, trade_date: date | None = None) -> list[
                 "circ_mv": float(row.selection_circ_mv),
                 "selection_rule": (
                     "main-board non-ST; listed>=250d; eps>=0; "
-                    "unadjusted close lowest 10%; select circ_mv ranks 1-6"
+                    "unadjusted close lowest 10%; select circ_mv ranks 1-3"
                 ),
                 "entry_rule": "previous signal day target, next trading-cycle rebalance open",
                 "exit_rule": (

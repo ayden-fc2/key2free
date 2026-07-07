@@ -17,6 +17,16 @@ from strategies.sharp_rise_pullback_leader_v2 import (
     sharp_rise_pullback_leader_v2_code_filter,
     sharp_rise_pullback_leader_v2_lifecycle,
 )
+from strategies.sqx_oversold_repair import (
+    SQX_OVERSOLD_REPAIR_REQUIRED_COLUMNS,
+    sqx_oversold_repair_code_filter,
+    sqx_oversold_repair_lifecycle,
+)
+from strategies.volume_breakout_macd import (
+    VOLUME_BREAKOUT_MACD_REQUIRED_COLUMNS,
+    volume_breakout_macd_code_filter,
+    volume_breakout_macd_lifecycle,
+)
 
 
 @dataclass(frozen=True)
@@ -109,6 +119,49 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "turnover_rate",
         ),
         signal_history_window=200,
+    ),
+    "sqx_oversold_repair": StrategyRegistration(
+        name="sqx_oversold_repair",
+        lifecycle=sqx_oversold_repair_lifecycle,
+        required_columns=SQX_OVERSOLD_REPAIR_REQUIRED_COLUMNS,
+        code_filter=sqx_oversold_repair_code_filter,
+        signal_required_columns=(
+            "name",
+            "close",
+            "qfq_open",
+            "qfq_high",
+            "qfq_low",
+            "qfq_close",
+            "ma_10",
+            "ma_20",
+            "ma_30",
+            "vol",
+            "eps",
+            "total_mv",
+            "circ_mv",
+            "is_st",
+        ),
+        signal_history_window=260,
+    ),
+    "volume_breakout_macd": StrategyRegistration(
+        name="volume_breakout_macd",
+        lifecycle=volume_breakout_macd_lifecycle,
+        required_columns=VOLUME_BREAKOUT_MACD_REQUIRED_COLUMNS,
+        code_filter=volume_breakout_macd_code_filter,
+        signal_required_columns=(
+            "name",
+            "qfq_open",
+            "qfq_high",
+            "qfq_low",
+            "qfq_close",
+            "vol",
+            "turnover_rate",
+            "ma_20",
+            "macd_dea_12_26_9",
+            "rsi_5",
+            "is_st",
+        ),
+        signal_history_window=30,
     ),
 }
 

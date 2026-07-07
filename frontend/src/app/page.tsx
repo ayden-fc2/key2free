@@ -39,7 +39,13 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
   "backtest-stats": [{ key: "run", label: "回测任务" }],
 };
 
-const DEFAULT_STRATEGY_OPTIONS = [{ label: "small_float_value", value: "small_float_value" }];
+const DEFAULT_STRATEGY_OPTIONS = [
+  { label: "small_float_value", value: "small_float_value" },
+  { label: "sharp_rise_pullback_leader", value: "sharp_rise_pullback_leader" },
+  { label: "sharp_rise_pullback_leader_v2", value: "sharp_rise_pullback_leader_v2" },
+  { label: "sqx_oversold_repair", value: "sqx_oversold_repair" },
+  { label: "volume_breakout_macd", value: "volume_breakout_macd" },
+];
 
 const TUSHARE_ASSET_META: Record<
   string,

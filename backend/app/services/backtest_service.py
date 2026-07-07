@@ -330,6 +330,10 @@ class BacktestService:
         strategy_name: str,
     ) -> dict[date, list[dict[str, Any]]]:
         self.repository.append_task_log(task_id, f"开始按交易日预计算信号: {strategy_name}")
+        self.repository.append_task_log(
+            task_id,
+            f"信号预计算配置: batch_workers={SignalService.SIGNAL_BATCH_WORKERS}",
+        )
         daily_results = SignalService().get_signals_for_dates_by_stock(
             trade_dates=trading_dates,
             strategy_name=strategy_name,

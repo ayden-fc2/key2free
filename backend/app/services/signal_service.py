@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Any
 
@@ -29,6 +30,7 @@ class SignalService:
     SIGNAL_BATCH_DAYS_WITH_HISTORY = 10
     SIGNAL_BATCH_DAYS_WITH_NARROW_HISTORY = 40
     SIGNAL_BATCH_DAYS_NO_HISTORY = 120
+    SIGNAL_BATCH_WORKERS = 6
 
     def __init__(self) -> None:
         self.repository = SignalRepository()
@@ -193,20 +195,113 @@ class SignalService:
 
         signal_items_by_date: dict[date, list[DailySignalItemDTO]] = {}
         processed_days = 0
-        for batch_dates in self._date_batches(normalized_dates, batch_size):
-            batch_rows = self.repository.load_signal_selection_rows(
-                start_date=batch_dates[0],
-                end_date=batch_dates[-1],
-                window=window,
-                code_filter=strategy.code_filter,
-                columns=strategy.signal_required_columns,
+        batches = self._date_batches(normalized_dates, batch_size)
+        worker_count = min(self.SIGNAL_BATCH_WORKERS, len(batches))
+        if worker_count <= 1:
+            for batch_dates in batches:
+                batch_items = self._process_signal_batch(
+                    batch_dates=batch_dates,
+                    strategy_name=strategy_name,
+                    window=window,
+                    trading_clocks=trading_clocks,
+                )
+                signal_items_by_date.update(batch_items)
+                processed_days = self._report_batch_progress(
+                    progress_callback=progress_callback,
+                    processed_days=processed_days,
+                    batch_dates=batch_dates,
+                    total_days=len(normalized_dates),
+                    progress_interval=progress_interval,
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                future_by_index = {
+                    executor.submit(
+                        self._process_signal_batch,
+                        batch_dates=batch_dates,
+                        strategy_name=strategy_name,
+                        window=window,
+                        trading_clocks=trading_clocks,
+                    ): index
+                    for index, batch_dates in enumerate(batches)
+                }
+                completed_batches: dict[int, dict[date, list[DailySignalItemDTO]]] = {}
+                next_report_index = 0
+                for future in as_completed(future_by_index):
+                    index = future_by_index[future]
+                    completed_batches[index] = future.result()
+                    while next_report_index in completed_batches:
+                        batch_items = completed_batches.pop(next_report_index)
+                        signal_items_by_date.update(batch_items)
+                        processed_days = self._report_batch_progress(
+                            progress_callback=progress_callback,
+                            processed_days=processed_days,
+                            batch_dates=batches[next_report_index],
+                            total_days=len(normalized_dates),
+                            progress_interval=progress_interval,
+                        )
+                        next_report_index += 1
+        return {
+            day: DailySignalResultDTO(
+                trade_date=day.isoformat(),
+                strategy_name=strategy.name,
+                universe_count=universe_counts.get(day, 0),
+                signal_count=len(signal_items_by_date.get(day, [])),
+                signals=signal_items_by_date.get(day, []),
             )
-            batch_index_rows = self.repository.load_signal_index_rows(
-                ts_codes=strategy.signal_index_codes,
-                start_date=batch_dates[0],
-                end_date=batch_dates[-1],
+            for day in requested_dates
+        }
+
+    def _process_signal_batch(
+        self,
+        *,
+        batch_dates: list[date],
+        strategy_name: str,
+        window: int,
+        trading_clocks: dict[date, Any],
+    ) -> dict[date, list[DailySignalItemDTO]]:
+        """Load and evaluate one signal date batch.
+
+        This worker only performs read-only data loading and in-memory signal
+        calculation. Backtest/task table writes remain in the caller thread.
+        """
+        strategy = get_strategy(strategy_name)
+        if strategy is None:
+            raise SignalServiceError(f"unknown strategy: {strategy_name}")
+        repository = SignalRepository()
+        batch_rows = repository.load_signal_selection_rows(
+            start_date=batch_dates[0],
+            end_date=batch_dates[-1],
+            window=window,
+            code_filter=strategy.code_filter,
+            columns=strategy.signal_required_columns,
+        )
+        batch_index_rows = repository.load_signal_index_rows(
+            ts_codes=strategy.signal_index_codes,
+            start_date=batch_dates[0],
+            end_date=batch_dates[-1],
+        )
+        batch_raw_items_by_date: dict[date, list[dict[str, Any]]] | None = None
+        batch_selector = getattr(strategy.lifecycle, "select_signals_for_dates", None)
+        if callable(batch_selector):
+            batch_raw_items_by_date = batch_selector(
+                trade_dates=batch_dates,
+                source=batch_rows,
+                max_window=window if window > 0 else SIGNAL_WINDOW_BARS,
+                index_source=batch_index_rows,
+                params_by_date={
+                    day: self._strategy_params_for_date(
+                        strategy=strategy,
+                        trade_date=day,
+                        trading_clocks=trading_clocks,
+                    )
+                    for day in batch_dates
+                },
             )
-            for day in batch_dates:
+
+        batch_items: dict[date, list[DailySignalItemDTO]] = {}
+        for day in batch_dates:
+            if batch_raw_items_by_date is None:
                 view = SignalDataView(
                     trade_date=day,
                     source=batch_rows,
@@ -222,33 +317,19 @@ class SignalService:
                     trade_date=day,
                     view=view,
                 )
-                signal_items_by_date[day] = [
-                    DailySignalItemDTO(
-                        code=str(item["code"]),
-                        code_name=item.get("code_name"),
-                        trade_date=str(item.get("trade_date") or day.isoformat()),
-                        universe=item.get("universe") or {},
-                        signal=item.get("signal"),
-                    )
-                    for item in raw_items
-                ]
-                processed_days += 1
-                self._report_progress(
-                    progress_callback=progress_callback,
-                    processed_codes=processed_days,
-                    total_codes=len(normalized_dates),
-                    progress_interval=max(progress_interval, 1),
+            else:
+                raw_items = batch_raw_items_by_date.get(day, [])
+            batch_items[day] = [
+                DailySignalItemDTO(
+                    code=str(item["code"]),
+                    code_name=item.get("code_name"),
+                    trade_date=str(item.get("trade_date") or day.isoformat()),
+                    universe=item.get("universe") or {},
+                    signal=item.get("signal"),
                 )
-        return {
-            day: DailySignalResultDTO(
-                trade_date=day.isoformat(),
-                strategy_name=strategy.name,
-                universe_count=universe_counts.get(day, 0),
-                signal_count=len(signal_items_by_date.get(day, [])),
-                signals=signal_items_by_date.get(day, []),
-            )
-            for day in requested_dates
-        }
+                for item in raw_items
+            ]
+        return batch_items
 
     def get_stock_data_contexts(
         self,
@@ -297,7 +378,7 @@ class SignalService:
             self.repository.clear_daily_signal_results(task_id)
             self.repository.append_daily_signal_task_log(
                 task_id,
-                "开始计算信号: 按交易日切片加载策略可见宽表窗口",
+                f"开始计算信号: 按交易日切片加载策略可见宽表窗口, batch_workers={self.SIGNAL_BATCH_WORKERS}",
             )
             trade_dates = self._resolve_signal_trade_dates(
                 end_date=trade_date,
@@ -481,8 +562,27 @@ class SignalService:
             processed_codes == 1
             or processed_codes % progress_interval == 0
             or processed_codes == total_codes
-        ):
+            ):
             progress_callback(processed_codes, total_codes)
+
+    def _report_batch_progress(
+        self,
+        *,
+        progress_callback: Any | None,
+        processed_days: int,
+        batch_dates: list[date],
+        total_days: int,
+        progress_interval: int,
+    ) -> int:
+        for _day in batch_dates:
+            processed_days += 1
+            self._report_progress(
+                progress_callback=progress_callback,
+                processed_codes=processed_days,
+                total_codes=total_days,
+                progress_interval=max(progress_interval, 1),
+            )
+        return processed_days
 
     def _resolve_context_trade_date(self, bars: list[dict[str, Any]]) -> str:
         if not bars:
