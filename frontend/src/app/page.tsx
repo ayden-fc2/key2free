@@ -12,6 +12,7 @@ import { getHealth } from "@/lib/api/health";
 import {
   getDailySignalTask,
   getDailySignalTaskResult,
+  getSignalReplay,
   getSignalStrategies,
   getStockDataContexts,
   startDailySignalTask,
@@ -23,7 +24,14 @@ import {
 } from "@/lib/api/tushareAssets";
 import type { BacktestTask } from "@/types/backtest";
 import type { HealthState } from "@/types/health";
-import type { DailySignalItem, DailySignalResult, DailySignalTask, StockDataContext } from "@/types/signal";
+import type {
+  DailySignalItem,
+  DailySignalResult,
+  DailySignalTask,
+  SignalReplayPoolItem,
+  SignalReplayResult,
+  StockDataContext,
+} from "@/types/signal";
 import type { TushareAssetWatermark, TushareRefreshTask } from "@/types/tushareAsset";
 import { formatDateTime } from "@/utils/format";
 
@@ -42,9 +50,6 @@ const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string
 const DEFAULT_STRATEGY_OPTIONS = [
   { label: "small_float_value", value: "small_float_value" },
   { label: "sharp_rise_pullback_leader", value: "sharp_rise_pullback_leader" },
-  { label: "sharp_rise_pullback_leader_v2", value: "sharp_rise_pullback_leader_v2" },
-  { label: "sqx_oversold_repair", value: "sqx_oversold_repair" },
-  { label: "volume_breakout_macd", value: "volume_breakout_macd" },
 ];
 
 const TUSHARE_ASSET_META: Record<
@@ -163,7 +168,11 @@ function signalRowKey(item: DailySignalItem) {
   return `${item.trade_date}:${item.code}`;
 }
 
-function formatSellRules(item: DailySignalItem) {
+function replayRowKey(item: SignalReplayPoolItem) {
+  return `${item.pool_type}:${item.code}:${item.added_date ?? item.buy_date ?? item.signal_date ?? ""}`;
+}
+
+function formatSellRules(item: Pick<DailySignalItem | SignalReplayPoolItem, "signal">) {
   const rules = item.signal?.sell_rules;
   if (rules && rules.length > 0) {
     return rules.map((rule) => rule.name ?? rule.description ?? "-").join(" / ");
@@ -225,9 +234,12 @@ export default function Home() {
   const [dailySignalTask, setDailySignalTask] = useState<DailySignalTask | null>(null);
   const [dailySignalTaskModalOpen, setDailySignalTaskModalOpen] = useState(false);
   const [dailySignalResult, setDailySignalResult] = useState<DailySignalResult | null>(null);
+  const [signalReplayLoading, setSignalReplayLoading] = useState(false);
+  const [signalReplayResult, setSignalReplayResult] = useState<SignalReplayResult | null>(null);
   const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>({});
   const [stockContextsLoading, setStockContextsLoading] = useState(false);
   const [selectedSignalKey, setSelectedSignalKey] = useState<string | null>(null);
+  const [selectedReplayKey, setSelectedReplayKey] = useState<string | null>(null);
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
   const [backtestInitialCash, setBacktestInitialCash] = useState(10000000);
@@ -339,6 +351,22 @@ export default function Home() {
     };
   }, []);
 
+  async function loadStockContexts(codes: string[]) {
+    if (codes.length === 0) {
+      return;
+    }
+    setStockContextsLoading(true);
+    try {
+      const uniqueCodes = Array.from(new Set(codes));
+      const contextResult = await getStockDataContexts({ codes: uniqueCodes });
+      setStockContexts(Object.fromEntries(contextResult.contexts.map((context) => [context.code, context])));
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "股票上下文加载失败");
+    } finally {
+      setStockContextsLoading(false);
+    }
+  }
+
   async function loadDailySignalResult(taskId: number) {
     const data = await getDailySignalTaskResult(taskId);
     setDailySignalResult(data);
@@ -347,15 +375,7 @@ export default function Home() {
       return;
     }
     setSelectedSignalKey((current) => current ?? signalRowKey(data.signals[0]));
-    setStockContextsLoading(true);
-    try {
-      const contextResult = await getStockDataContexts({ codes });
-      setStockContexts(Object.fromEntries(contextResult.contexts.map((context) => [context.code, context])));
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "股票上下文加载失败");
-    } finally {
-      setStockContextsLoading(false);
-    }
+    await loadStockContexts(codes);
   }
 
   async function fetchDailySignals() {
@@ -366,7 +386,9 @@ export default function Home() {
     setDailySignalLoading(true);
     setStockContexts({});
     setSelectedSignalKey(null);
+    setSelectedReplayKey(null);
     setDailySignalResult(null);
+    setSignalReplayResult(null);
     try {
       const data = await startDailySignalTask({
         strategy_name: dailySignalStrategy,
@@ -384,6 +406,35 @@ export default function Home() {
       messageApi.error(error instanceof Error ? error.message : "信号任务创建失败");
     } finally {
       setDailySignalLoading(false);
+    }
+  }
+
+  async function fetchSignalReplay() {
+    if (dailySignalDate === null) {
+      messageApi.warning("请选择交易日期");
+      return;
+    }
+    setSignalReplayLoading(true);
+    setStockContexts({});
+    setSelectedReplayKey(null);
+    setSignalReplayResult(null);
+    try {
+      const data = await getSignalReplay({
+        strategy_name: dailySignalStrategy,
+        trade_date: dailySignalDate,
+        replay_trade_days: 10,
+      });
+      setSignalReplayResult(data);
+      const rows = [...data.holdings, ...data.watch_pool];
+      if (rows.length > 0) {
+        setSelectedReplayKey(replayRowKey(rows[0]));
+        await loadStockContexts(rows.map((item) => item.code));
+      }
+      messageApi.success(`回放完成，观察池 ${data.watch_count} 只，持仓池 ${data.holding_count} 只`);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "信号回放失败");
+    } finally {
+      setSignalReplayLoading(false);
     }
   }
 
@@ -739,18 +790,54 @@ export default function Home() {
     },
   ];
 
+  const replayColumns: ColumnsType<SignalReplayPoolItem> = [
+    { dataIndex: "code", title: "代码", width: 115 },
+    { dataIndex: "code_name", title: "名称", width: 115 },
+    { dataIndex: "signal_date", title: "信号日", width: 110 },
+    { dataIndex: "added_date", title: "入观察", width: 110 },
+    { dataIndex: "buy_date", title: "买入日", width: 110 },
+    {
+      render: (_value, record) => formatSignalMetric(record.buy_price),
+      title: "买入价",
+      width: 95,
+    },
+    {
+      render: (_value, record) => formatSignalValue(record.signal?.entry_trigger_price ?? record.signal?.extras?.entry_trigger_price),
+      title: "买入规则",
+      width: 135,
+    },
+    {
+      ellipsis: true,
+      render: (_value, record) => formatSellRules(record),
+      title: "卖出规则",
+      width: 220,
+    },
+  ];
+
   const selectedSignal = dailySignalResult?.signals.find((item) => signalRowKey(item) === selectedSignalKey) ?? null;
-  const selectedStockContext = selectedSignal === null ? null : stockContexts[selectedSignal.code] ?? null;
-  const selectedDisplay = selectedSignal?.signal?.display ?? null;
+  const selectedReplayItem =
+    [...(signalReplayResult?.holdings ?? []), ...(signalReplayResult?.watch_pool ?? [])].find(
+      (item) => replayRowKey(item) === selectedReplayKey,
+    ) ?? null;
+  const selectedCode = selectedReplayItem?.code ?? selectedSignal?.code ?? null;
+  const selectedName = selectedReplayItem?.code_name ?? selectedSignal?.code_name ?? null;
+  const selectedStockContext = selectedCode === null ? null : stockContexts[selectedCode] ?? null;
+  const selectedSignalLike = selectedReplayItem ?? selectedSignal;
+  const selectedDisplay = selectedSignalLike?.signal?.display ?? null;
   const selectedSignalMetrics: [string, unknown][] =
-    selectedSignal === null
+    selectedSignalLike === null
       ? []
       : [
-          ["信号日期", selectedSignal.trade_date],
-          ["T日收盘", selectedSignal.signal?.signal_close],
-          ["买入触发价", selectedSignal.signal?.entry_trigger_price ?? selectedSignal.signal?.extras?.entry_trigger_price],
-          ["最长观察期", selectedSignal.signal?.max_watch_days],
-          ...Object.entries(selectedSignal.signal?.extras ?? {}),
+          ["池子", selectedReplayItem?.pool_type ?? "signal"],
+          ["信号日期", selectedReplayItem?.signal_date ?? selectedSignal?.trade_date],
+          ["观察入池日", selectedReplayItem?.added_date],
+          ["买入日期", selectedReplayItem?.buy_date],
+          ["买入价格", selectedReplayItem?.buy_price],
+          ["数量", selectedReplayItem?.quantity],
+          ["T日收盘", selectedSignalLike.signal?.signal_close],
+          ["买入触发价", selectedSignalLike.signal?.entry_trigger_price ?? selectedSignalLike.signal?.extras?.entry_trigger_price],
+          ["最长观察期", selectedSignalLike.signal?.max_watch_days],
+          ...Object.entries(selectedSignalLike.signal?.extras ?? {}),
         ];
 
   return (
@@ -976,6 +1063,9 @@ export default function Home() {
                   <Button disabled={dailySignalTask === null} onClick={() => setDailySignalTaskModalOpen(true)}>
                     查看任务
                   </Button>
+                  <Button loading={signalReplayLoading || stockContextsLoading} onClick={fetchSignalReplay}>
+                    回放观察/持仓
+                  </Button>
                   <Button loading={dailySignalLoading || dailySignalRunning || stockContextsLoading} onClick={fetchDailySignals} type="primary">
                     启动/加载信号
                   </Button>
@@ -994,11 +1084,59 @@ export default function Home() {
                     scroll={{ x: 865, y: 560 }}
                     size="small"
                   />
+                  {signalReplayResult !== null ? (
+                    <div className="replay-panel">
+                      <div className="panel-subtitle">
+                        回放区间: {signalReplayResult.start_trade_date}~{signalReplayResult.end_trade_date} / 信号:{" "}
+                        {signalReplayResult.signal_count} / 观察池: {signalReplayResult.watch_count} / 持仓池:{" "}
+                        {signalReplayResult.holding_count}
+                      </div>
+                      <Tabs
+                        items={[
+                          {
+                            key: "holdings",
+                            label: `持仓池 ${signalReplayResult.holding_count}`,
+                            children: (
+                              <Table
+                                columns={replayColumns}
+                                dataSource={signalReplayResult.holdings}
+                                loading={signalReplayLoading || stockContextsLoading}
+                                onRow={(record) => ({ onClick: () => setSelectedReplayKey(replayRowKey(record)) })}
+                                pagination={false}
+                                rowClassName={(record) => (replayRowKey(record) === selectedReplayKey ? "selected-row" : "")}
+                                rowKey={replayRowKey}
+                                scroll={{ x: 1010, y: 220 }}
+                                size="small"
+                              />
+                            ),
+                          },
+                          {
+                            key: "watch",
+                            label: `观察池 ${signalReplayResult.watch_count}`,
+                            children: (
+                              <Table
+                                columns={replayColumns}
+                                dataSource={signalReplayResult.watch_pool}
+                                loading={signalReplayLoading || stockContextsLoading}
+                                onRow={(record) => ({ onClick: () => setSelectedReplayKey(replayRowKey(record)) })}
+                                pagination={false}
+                                rowClassName={(record) => (replayRowKey(record) === selectedReplayKey ? "selected-row" : "")}
+                                rowKey={replayRowKey}
+                                scroll={{ x: 1010, y: 220 }}
+                                size="small"
+                              />
+                            ),
+                          },
+                        ]}
+                        size="small"
+                      />
+                    </div>
+                  ) : null}
                 </div>
                 <div className="signal-charts">
                   <div className="chart-header">
-                    <div className="placeholder-title">{selectedSignal?.code ?? "未选择股票"}</div>
-                    <div className="panel-subtitle">{selectedSignal?.code_name ?? "从左侧列表选择一只股票"}</div>
+                    <div className="placeholder-title">{selectedCode ?? "未选择股票"}</div>
+                    <div className="panel-subtitle">{selectedName ?? "从左侧列表选择一只股票"}</div>
                   </div>
                   {selectedDisplay !== null ? (
                     <div className="signal-plan">

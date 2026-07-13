@@ -41,6 +41,33 @@ class DailySignalResultDTO:
 
 
 @dataclass(frozen=True)
+class SignalReplayPoolItemDTO:
+    code: str
+    code_name: str | None
+    pool_type: str
+    signal_date: str | None
+    added_date: str | None
+    buy_date: str | None
+    buy_price: float | None
+    quantity: int | None
+    signal: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SignalReplayResultDTO:
+    trade_date: str
+    strategy_name: str
+    start_trade_date: str
+    end_trade_date: str
+    replay_trade_days: int
+    signal_count: int
+    watch_count: int
+    holding_count: int
+    watch_pool: list[SignalReplayPoolItemDTO]
+    holdings: list[SignalReplayPoolItemDTO]
+
+
+@dataclass(frozen=True)
 class DailySignalTaskDTO:
     id: int | None
     status: str

@@ -19,6 +19,12 @@ class DailySignalRequest(BaseModel):
     lookback_trade_days: int = 1
 
 
+class SignalReplayRequest(BaseModel):
+    trade_date: date
+    strategy_name: str
+    replay_trade_days: int = 10
+
+
 class DailySignalTaskQuery(BaseModel):
     task_id: int | None = None
     trade_date: date | None = None
@@ -41,6 +47,19 @@ def get_daily_signals(request: DailySignalRequest) -> dict:
             trade_date=request.trade_date,
             strategy_name=request.strategy_name,
             lookback_trade_days=request.lookback_trade_days,
+        )
+    except SignalServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return asdict(result)
+
+
+@router.post("/replay")
+def get_signal_replay(request: SignalReplayRequest) -> dict:
+    try:
+        result = signal_service.get_signal_replay(
+            trade_date=request.trade_date,
+            strategy_name=request.strategy_name,
+            replay_trade_days=request.replay_trade_days,
         )
     except SignalServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

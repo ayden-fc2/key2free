@@ -5,6 +5,8 @@ import type {
   DailySignalTask,
   DailySignalTaskQuery,
   DailySignalTaskStart,
+  SignalReplayRequest,
+  SignalReplayResult,
   StockDataContextRequest,
   StockDataContextResult,
 } from "@/types/signal";
@@ -33,6 +35,12 @@ export function getDailySignalTask(
 
 export function getDailySignalTaskResult(taskId: number): Promise<DailySignalResult> {
   return apiGet<DailySignalResult>(`/api/v1/signals/daily-task/${taskId}/result`);
+}
+
+export function getSignalReplay(
+  request: SignalReplayRequest,
+): Promise<SignalReplayResult> {
+  return apiPost<SignalReplayResult>("/api/v1/signals/replay", request);
 }
 
 export function getStockDataContexts(

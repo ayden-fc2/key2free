@@ -78,10 +78,41 @@ export type DailySignalResult = {
   lookback_trade_days?: number;
 };
 
+export type SignalReplayPoolItem = {
+  code: string;
+  code_name: string | null;
+  pool_type: "watch" | "holding" | string;
+  signal_date: string | null;
+  added_date: string | null;
+  buy_date: string | null;
+  buy_price: number | null;
+  quantity: number | null;
+  signal?: SignalDecision | null;
+};
+
+export type SignalReplayResult = {
+  trade_date: string;
+  strategy_name: string;
+  start_trade_date: string;
+  end_trade_date: string;
+  replay_trade_days: number;
+  signal_count: number;
+  watch_count: number;
+  holding_count: number;
+  watch_pool: SignalReplayPoolItem[];
+  holdings: SignalReplayPoolItem[];
+};
+
 export type DailySignalRequest = {
   trade_date: string;
   strategy_name: string;
   lookback_trade_days?: number;
+};
+
+export type SignalReplayRequest = {
+  trade_date: string;
+  strategy_name: string;
+  replay_trade_days?: number;
 };
 
 export type DailySignalTask = {
