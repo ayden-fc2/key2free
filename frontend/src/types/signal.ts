@@ -97,6 +97,7 @@ export type SignalReplayResult = {
   end_trade_date: string;
   replay_trade_days: number;
   signal_count: number;
+  end_trade_date_signal_count: number;
   watch_count: number;
   holding_count: number;
   watch_pool: SignalReplayPoolItem[];

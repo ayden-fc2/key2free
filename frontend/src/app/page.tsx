@@ -10,12 +10,9 @@ import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
 import { getHealth } from "@/lib/api/health";
 import {
-  getDailySignalTask,
-  getDailySignalTaskResult,
   getSignalReplay,
   getSignalStrategies,
   getStockDataContexts,
-  startDailySignalTask,
 } from "@/lib/api/signals";
 import {
   getTushareRefreshTask,
@@ -25,9 +22,6 @@ import {
 import type { BacktestTask } from "@/types/backtest";
 import type { HealthState } from "@/types/health";
 import type {
-  DailySignalItem,
-  DailySignalResult,
-  DailySignalTask,
   SignalReplayPoolItem,
   SignalReplayResult,
   StockDataContext,
@@ -164,15 +158,11 @@ function formatSignalValue(value: unknown) {
   return formatSignalExtra(value);
 }
 
-function signalRowKey(item: DailySignalItem) {
-  return `${item.trade_date}:${item.code}`;
-}
-
 function replayRowKey(item: SignalReplayPoolItem) {
   return `${item.pool_type}:${item.code}:${item.added_date ?? item.buy_date ?? item.signal_date ?? ""}`;
 }
 
-function formatSellRules(item: Pick<DailySignalItem | SignalReplayPoolItem, "signal">) {
+function formatSellRules(item: Pick<SignalReplayPoolItem, "signal">) {
   const rules = item.signal?.sell_rules;
   if (rules && rules.length > 0) {
     return rules.map((rule) => rule.name ?? rule.description ?? "-").join(" / ");
@@ -228,17 +218,11 @@ export default function Home() {
   const [tushareRefreshEndDate, setTushareRefreshEndDate] = useState(resolveDefaultTushareEndDate);
   const [skipStkMins5min, setSkipStkMins5min] = useState(true);
   const [dailySignalDate, setDailySignalDate] = useState<string | null>(null);
-  const [dailySignalLookbackDays, setDailySignalLookbackDays] = useState(1);
-  const [dailySignalStrategy, setDailySignalStrategy] = useState("small_float_value");
-  const [dailySignalLoading, setDailySignalLoading] = useState(false);
-  const [dailySignalTask, setDailySignalTask] = useState<DailySignalTask | null>(null);
-  const [dailySignalTaskModalOpen, setDailySignalTaskModalOpen] = useState(false);
-  const [dailySignalResult, setDailySignalResult] = useState<DailySignalResult | null>(null);
+  const [dailySignalStrategy, setDailySignalStrategy] = useState("sharp_rise_pullback_leader");
   const [signalReplayLoading, setSignalReplayLoading] = useState(false);
   const [signalReplayResult, setSignalReplayResult] = useState<SignalReplayResult | null>(null);
   const [stockContexts, setStockContexts] = useState<Record<string, StockDataContext>>({});
   const [stockContextsLoading, setStockContextsLoading] = useState(false);
-  const [selectedSignalKey, setSelectedSignalKey] = useState<string | null>(null);
   const [selectedReplayKey, setSelectedReplayKey] = useState<string | null>(null);
   const [backtestStartDate, setBacktestStartDate] = useState("2018-01-01");
   const [backtestEndDate, setBacktestEndDate] = useState("2026-06-08");
@@ -266,7 +250,6 @@ export default function Home() {
   }, []);
   const [messageApi, contextHolder] = message.useMessage();
   const backtestRunning = backtestTask?.status === "running";
-  const dailySignalRunning = dailySignalTask?.status === "running";
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -367,48 +350,6 @@ export default function Home() {
     }
   }
 
-  async function loadDailySignalResult(taskId: number) {
-    const data = await getDailySignalTaskResult(taskId);
-    setDailySignalResult(data);
-    const codes = data.signals.map((item) => item.code);
-    if (codes.length === 0) {
-      return;
-    }
-    setSelectedSignalKey((current) => current ?? signalRowKey(data.signals[0]));
-    await loadStockContexts(codes);
-  }
-
-  async function fetchDailySignals() {
-    if (dailySignalDate === null) {
-      messageApi.warning("请选择交易日期");
-      return;
-    }
-    setDailySignalLoading(true);
-    setStockContexts({});
-    setSelectedSignalKey(null);
-    setSelectedReplayKey(null);
-    setDailySignalResult(null);
-    setSignalReplayResult(null);
-    try {
-      const data = await startDailySignalTask({
-        strategy_name: dailySignalStrategy,
-        trade_date: dailySignalDate,
-        lookback_trade_days: dailySignalLookbackDays,
-      });
-      setDailySignalTask(data.task);
-      setDailySignalTaskModalOpen(true);
-      messageApi.info(data.message);
-      if (data.task.status === "success" && data.task.id !== null) {
-        await loadDailySignalResult(data.task.id);
-        messageApi.success(`当日信号已加载，共 ${data.task.signal_count ?? 0} 只`);
-      }
-    } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : "信号任务创建失败");
-    } finally {
-      setDailySignalLoading(false);
-    }
-  }
-
   async function fetchSignalReplay() {
     if (dailySignalDate === null) {
       messageApi.warning("请选择交易日期");
@@ -430,7 +371,7 @@ export default function Home() {
         setSelectedReplayKey(replayRowKey(rows[0]));
         await loadStockContexts(rows.map((item) => item.code));
       }
-      messageApi.success(`回放完成，观察池 ${data.watch_count} 只，持仓池 ${data.holding_count} 只`);
+      messageApi.success(`10日回放完成，信号观察池 ${data.watch_count} 只，持仓池 ${data.holding_count} 只`);
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "信号回放失败");
     } finally {
@@ -551,39 +492,6 @@ export default function Home() {
       window.clearInterval(timer);
     };
   }, [backtestModalOpen, backtestRunning, backtestTask?.id, messageApi]);
-
-  useEffect(() => {
-    if (dailySignalTask?.id == null || dailySignalTask.status !== "running") {
-      return undefined;
-    }
-    let cancelled = false;
-    const taskId = dailySignalTask.id;
-    async function pollDailySignalTask() {
-      try {
-        const task = await getDailySignalTask({ task_id: taskId });
-        if (cancelled) {
-          return;
-        }
-        setDailySignalTask(task);
-        if (task.status === "success") {
-          await loadDailySignalResult(taskId);
-          messageApi.success(`当日信号已加载，共 ${task.signal_count ?? 0} 只`);
-        } else if (task.status === "error") {
-          messageApi.error("当日信号任务失败");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          messageApi.error(error instanceof Error ? error.message : "当日信号任务查询失败");
-        }
-      }
-    }
-    const timer = window.setInterval(pollDailySignalTask, 2000);
-    pollDailySignalTask();
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [dailySignalTask?.id, dailySignalTask?.status, messageApi]);
 
   const activeSubTabs = useMemo(() => subTabs[activeTab], [activeTab]);
 
@@ -763,33 +671,6 @@ export default function Home() {
     },
   ];
 
-  const dailySignalColumns: ColumnsType<DailySignalItem> = [
-    { dataIndex: "trade_date", title: "日期", width: 115 },
-    { dataIndex: "code", title: "代码", width: 120 },
-    { dataIndex: "code_name", title: "名称", width: 120 },
-    {
-      render: (_value, record) => formatSignalMetric(record.signal?.signal_close),
-      title: "T日收盘",
-      width: 120,
-    },
-    {
-      render: (_value, record) => formatSignalValue(record.signal?.entry_trigger_price ?? record.signal?.extras?.entry_trigger_price),
-      title: "买入触发",
-      width: 150,
-    },
-    {
-      render: (_value, record) => formatSignalMetric(record.signal?.max_watch_days),
-      title: "观察期",
-      width: 100,
-    },
-    {
-      ellipsis: true,
-      render: (_value, record) => formatSellRules(record),
-      title: "卖出规则",
-      width: 260,
-    },
-  ];
-
   const replayColumns: ColumnsType<SignalReplayPoolItem> = [
     { dataIndex: "code", title: "代码", width: 115 },
     { dataIndex: "code_name", title: "名称", width: 115 },
@@ -814,30 +695,28 @@ export default function Home() {
     },
   ];
 
-  const selectedSignal = dailySignalResult?.signals.find((item) => signalRowKey(item) === selectedSignalKey) ?? null;
   const selectedReplayItem =
     [...(signalReplayResult?.holdings ?? []), ...(signalReplayResult?.watch_pool ?? [])].find(
       (item) => replayRowKey(item) === selectedReplayKey,
     ) ?? null;
-  const selectedCode = selectedReplayItem?.code ?? selectedSignal?.code ?? null;
-  const selectedName = selectedReplayItem?.code_name ?? selectedSignal?.code_name ?? null;
+  const selectedCode = selectedReplayItem?.code ?? null;
+  const selectedName = selectedReplayItem?.code_name ?? null;
   const selectedStockContext = selectedCode === null ? null : stockContexts[selectedCode] ?? null;
-  const selectedSignalLike = selectedReplayItem ?? selectedSignal;
-  const selectedDisplay = selectedSignalLike?.signal?.display ?? null;
+  const selectedDisplay = selectedReplayItem?.signal?.display ?? null;
   const selectedSignalMetrics: [string, unknown][] =
-    selectedSignalLike === null
+    selectedReplayItem === null
       ? []
       : [
-          ["池子", selectedReplayItem?.pool_type ?? "signal"],
-          ["信号日期", selectedReplayItem?.signal_date ?? selectedSignal?.trade_date],
-          ["观察入池日", selectedReplayItem?.added_date],
-          ["买入日期", selectedReplayItem?.buy_date],
-          ["买入价格", selectedReplayItem?.buy_price],
-          ["数量", selectedReplayItem?.quantity],
-          ["T日收盘", selectedSignalLike.signal?.signal_close],
-          ["买入触发价", selectedSignalLike.signal?.entry_trigger_price ?? selectedSignalLike.signal?.extras?.entry_trigger_price],
-          ["最长观察期", selectedSignalLike.signal?.max_watch_days],
-          ...Object.entries(selectedSignalLike.signal?.extras ?? {}),
+          ["池子", selectedReplayItem.pool_type === "holding" ? "持仓池" : "信号观察池"],
+          ["信号日期", selectedReplayItem.signal_date],
+          ["观察入池日", selectedReplayItem.added_date],
+          ["买入日期", selectedReplayItem.buy_date],
+          ["买入价格", selectedReplayItem.buy_price],
+          ["数量", selectedReplayItem.quantity],
+          ["T日收盘", selectedReplayItem.signal?.signal_close],
+          ["买入触发价", selectedReplayItem.signal?.entry_trigger_price ?? selectedReplayItem.signal?.extras?.entry_trigger_price],
+          ["最长观察期", selectedReplayItem.signal?.max_watch_days],
+          ...Object.entries(selectedReplayItem.signal?.extras ?? {}),
         ];
 
   return (
@@ -864,23 +743,6 @@ export default function Home() {
           {statusTag(backtestTask?.status ?? "unknown")}
         </div>
         <pre className="task-log">{backtestTask?.logs || "等待任务日志..."}</pre>
-      </Modal>
-      <Modal
-        footer={[
-          <Button key="close" onClick={() => setDailySignalTaskModalOpen(false)} type="primary">
-            关闭
-          </Button>,
-        ]}
-        open={dailySignalTaskModalOpen}
-        title="当日信号任务"
-        width={760}
-        onCancel={() => setDailySignalTaskModalOpen(false)}
-      >
-        <div className="task-modal-header">
-          <span>任务 ID: {dailySignalTask?.id ?? "-"}</span>
-          {statusTag(dailySignalTask?.status ?? "unknown")}
-        </div>
-        <pre className="task-log">{dailySignalTask?.logs || "等待任务日志..."}</pre>
       </Modal>
       <Modal
         confirmLoading={backtestLoading}
@@ -1038,59 +900,29 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">当日信号</div>
                   <div className="panel-subtitle">
-                    task: {dailySignalTask?.id ?? "-"} / status: {dailySignalTask?.status ?? "-"} / days:{" "}
-                    {dailySignalResult?.start_trade_date ?? "-"}~{dailySignalResult?.end_trade_date ?? dailySignalResult?.trade_date ?? "-"} / processed:{" "}
-                    {dailySignalTask?.processed_count ?? "-"} / universe:{" "}
-                    {dailySignalTask?.universe_count ?? dailySignalResult?.universe_count ?? "-"} / signals:{" "}
-                    {dailySignalTask?.signal_count ?? dailySignalResult?.signal_count ?? "-"} / contexts: {Object.keys(stockContexts).length || "-"}
+                    选择策略和交易日后，固定执行最近10个交易日生命周期回放；只展示T日收盘后的可操作池子。
+                    {signalReplayResult !== null ? (
+                      <>
+                        {" "}
+                        / 回放区间: {signalReplayResult.start_trade_date}~{signalReplayResult.end_trade_date} / T+1待观察有效信号:{" "}
+                        {signalReplayResult.watch_count} / T日收盘后持仓: {signalReplayResult.holding_count} / contexts:{" "}
+                        {Object.keys(stockContexts).length || "-"}
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 <Space>
                   <DatePicker onChange={(_, dateString) => setDailySignalDate(typeof dateString === "string" && dateString.length > 0 ? dateString : null)} placeholder="选择交易日" />
-                  <Space.Compact>
-                    <Button disabled>过去</Button>
-                    <InputNumber
-                      min={1}
-                      max={120}
-                      onChange={(value) => setDailySignalLookbackDays(typeof value === "number" ? value : 1)}
-                      precision={0}
-                      style={{ width: 120 }}
-                      value={dailySignalLookbackDays}
-                    />
-                    <Button disabled>日</Button>
-                  </Space.Compact>
                   <Select options={strategyOptions} value={dailySignalStrategy} onChange={setDailySignalStrategy} style={{ width: 140 }} />
-                  <Button disabled={dailySignalTask === null} onClick={() => setDailySignalTaskModalOpen(true)}>
-                    查看任务
-                  </Button>
-                  <Button loading={signalReplayLoading || stockContextsLoading} onClick={fetchSignalReplay}>
-                    回放观察/持仓
-                  </Button>
-                  <Button loading={dailySignalLoading || dailySignalRunning || stockContextsLoading} onClick={fetchDailySignals} type="primary">
-                    启动/加载信号
+                  <Button loading={signalReplayLoading || stockContextsLoading} onClick={fetchSignalReplay} type="primary">
+                    执行10日回放
                   </Button>
                 </Space>
               </div>
               <div className="signal-layout">
                 <div className="signal-list">
-                  <Table
-                    columns={dailySignalColumns}
-                    dataSource={dailySignalResult?.signals ?? []}
-                    loading={dailySignalLoading || dailySignalRunning || stockContextsLoading}
-                    onRow={(record) => ({ onClick: () => setSelectedSignalKey(signalRowKey(record)) })}
-                    pagination={{ pageSize: 30, showSizeChanger: true }}
-                    rowClassName={(record) => (signalRowKey(record) === selectedSignalKey ? "selected-row" : "")}
-                    rowKey={signalRowKey}
-                    scroll={{ x: 865, y: 560 }}
-                    size="small"
-                  />
                   {signalReplayResult !== null ? (
                     <div className="replay-panel">
-                      <div className="panel-subtitle">
-                        回放区间: {signalReplayResult.start_trade_date}~{signalReplayResult.end_trade_date} / 信号:{" "}
-                        {signalReplayResult.signal_count} / 观察池: {signalReplayResult.watch_count} / 持仓池:{" "}
-                        {signalReplayResult.holding_count}
-                      </div>
                       <Tabs
                         items={[
                           {
@@ -1112,7 +944,7 @@ export default function Home() {
                           },
                           {
                             key: "watch",
-                            label: `观察池 ${signalReplayResult.watch_count}`,
+                            label: `信号观察池 ${signalReplayResult.watch_count}`,
                             children: (
                               <Table
                                 columns={replayColumns}
@@ -1131,7 +963,9 @@ export default function Home() {
                         size="small"
                       />
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="empty-chart">请选择策略和交易日期，然后执行10日回放。</div>
+                  )}
                 </div>
                 <div className="signal-charts">
                   <div className="chart-header">

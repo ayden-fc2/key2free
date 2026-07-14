@@ -61,6 +61,7 @@ class SignalReplayResultDTO:
     end_trade_date: str
     replay_trade_days: int
     signal_count: int
+    end_trade_date_signal_count: int
     watch_count: int
     holding_count: int
     watch_pool: list[SignalReplayPoolItemDTO]

@@ -214,6 +214,7 @@ class SignalService:
             signals_by_date[day] = signals
             signal_count += len(signals)
             signal_codes.update(str(item["code"]) for item in signals)
+        end_trade_date_signal_count = len(signals_by_date.get(trade_dates[-1], []))
 
         if not signal_codes:
             return SignalReplayResultDTO(
@@ -223,6 +224,7 @@ class SignalService:
                 end_trade_date=trade_dates[-1].isoformat(),
                 replay_trade_days=len(trade_dates),
                 signal_count=0,
+                end_trade_date_signal_count=0,
                 watch_count=0,
                 holding_count=0,
                 watch_pool=[],
@@ -415,6 +417,7 @@ class SignalService:
             end_trade_date=trade_dates[-1].isoformat(),
             replay_trade_days=len(trade_dates),
             signal_count=signal_count,
+            end_trade_date_signal_count=end_trade_date_signal_count,
             watch_count=len(watch_items),
             holding_count=len(holding_items),
             watch_pool=watch_items,

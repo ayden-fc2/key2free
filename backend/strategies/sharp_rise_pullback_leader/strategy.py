@@ -33,6 +33,7 @@ PULLBACK_MA10_HIGH = 1.02
 ENTRY_CLOSE_MULTIPLE = 1.025
 WATCH_MAX_DAYS = 5
 WEAK_CLOSE_PREV_CLOSE_GAIN_MAX = 0.03
+WEAK_CLOSE_MIN_GAIN_FROM_BUY = 0.08
 POSITION_FRACTION = 0.33
 
 SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS: tuple[str, ...] = ()
@@ -252,13 +253,15 @@ class SharpRisePullbackLeaderLifecycle:
             "entry_close_multiple": ENTRY_CLOSE_MULTIPLE,
             "entry_trigger_price": float(entry_trigger_price),
             "watch_max_days": WATCH_MAX_DAYS,
+            "weak_close_min_gain_from_buy": WEAK_CLOSE_MIN_GAIN_FROM_BUY,
+            "weak_close_prev_close_gain_max": WEAK_CLOSE_PREV_CLOSE_GAIN_MAX,
             "turnover_rate": float(turnover_rate),
             "close": float(close),
             "entry_rule": (
                 "within 3 trading days, buy at T close*1.025 when intraday high reaches that trigger; "
                 "buy only when the observation-day range covers the trigger; continuous gap above the trigger is not bought"
             ),
-            "exit_rule": "close below pattern floor low; day close gain from previous close<=3%",
+            "exit_rule": "close below pattern floor low; after close gain from buy>=8%, day close gain from previous close<=3%",
         }
         signal_payload = {
             "triggered": True,
@@ -277,9 +280,9 @@ class SharpRisePullbackLeaderLifecycle:
                     "name": "收盘走弱退出",
                     "rule_type": "dynamic",
                     "timing": "收盘",
-                    "trigger_price": None,
+                    "trigger_price": "累计涨幅>=8% 且 当日涨幅<=3%",
                     "sell_price": "当日前复权收盘价",
-                    "description": "若当日前复权收盘价相对前一交易日前复权收盘价涨幅不超过3%，按收盘价卖出。",
+                    "description": "若当前收盘价相对买入价累计涨幅达到8%，且当日收盘价相对前一交易日收盘价涨幅不超过3%，按收盘价卖出。",
                 },
             ],
             "max_watch_days": WATCH_MAX_DAYS,
@@ -296,7 +299,7 @@ class SharpRisePullbackLeaderLifecycle:
                 ),
                 "sell": [
                     f"结构止损：收盘跌破前高到T区间低点 {pattern_floor_low:.3f}，按收盘价卖出。",
-                    "收盘走弱：当日收盘相对昨收涨幅不超过3%，按收盘价卖出。",
+                    "收盘走弱：累计涨幅达到8%后，当日收盘相对昨收涨幅不超过3%，按收盘价卖出。",
                 ],
             },
             "extras": extras,
@@ -348,7 +351,13 @@ class SharpRisePullbackLeaderLifecycle:
                 continue
 
             day_gain_from_pre_close = today_close / today_pre_close - 1
-            if day_gain_from_pre_close <= WEAK_CLOSE_PREV_CLOSE_GAIN_MAX:
+            buy_price = _to_positive_float(getattr(holding, "buy_price", None))
+            gain_from_buy = today_close / buy_price - 1 if buy_price is not None else None
+            if (
+                gain_from_buy is not None
+                and gain_from_buy >= WEAK_CLOSE_MIN_GAIN_FROM_BUY
+                and day_gain_from_pre_close <= WEAK_CLOSE_PREV_CLOSE_GAIN_MAX
+            ):
                 decisions.append(
                     StrategySellDecision(
                         code=code,
