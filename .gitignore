@@ -49,6 +49,10 @@ data/wal_backup/*
 
 # Runtime logs
 *.log
+*.pid
+nas/data_asset_service/runtime/
+nas/data_asset_service/.env
+data/nas_sync/nas_connection.json
 
 # Analysis and large local backups
 analysis_task*.csv

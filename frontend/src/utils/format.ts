@@ -6,11 +6,9 @@ type FormatDateTimeOptions = {
 };
 
 const DATE_TIME_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
-function pad2(value: number) {
-  return String(value).padStart(2, "0");
-}
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
 
 function formatDateParts(
   year: string,
@@ -30,6 +28,36 @@ function formatDateParts(
   return `${dateText} ${hour}:${minute}:${second}`;
 }
 
+function formatInBeijing(value: Date, includeTime: boolean) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    hour: includeTime ? "2-digit" : undefined,
+    hour12: false,
+    hourCycle: "h23",
+    minute: includeTime ? "2-digit" : undefined,
+    month: "2-digit",
+    second: includeTime ? "2-digit" : undefined,
+    timeZone: BEIJING_TIME_ZONE,
+    year: "numeric",
+  });
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return formatDateParts(
+    parts.year,
+    parts.month,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    includeTime,
+  );
+}
+
 export function formatDateTime(
   value: DateLike,
   options: FormatDateTimeOptions = {},
@@ -45,15 +73,14 @@ export function formatDateTime(
       return fallback;
     }
 
-    return formatDateParts(
-      String(value.getFullYear()),
-      pad2(value.getMonth() + 1),
-      pad2(value.getDate()),
-      pad2(value.getHours()),
-      pad2(value.getMinutes()),
-      pad2(value.getSeconds()),
-      includeTime,
-    );
+    return formatInBeijing(value, includeTime);
+  }
+
+  if (typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime())
+      ? fallback
+      : formatInBeijing(parsed, includeTime);
   }
 
   const text = String(value).trim();
@@ -63,7 +90,13 @@ export function formatDateTime(
 
   const dateTimeMatch = text.match(DATE_TIME_PATTERN);
   if (dateTimeMatch) {
-    const [, year, month, day, hour, minute, second] = dateTimeMatch;
+    const [, year, month, day, hour, minute, second, timeZone] = dateTimeMatch;
+    if (timeZone) {
+      const parsed = new Date(text);
+      return Number.isNaN(parsed.getTime())
+        ? fallback
+        : formatInBeijing(parsed, includeTime);
+    }
     return formatDateParts(
       year,
       month,
@@ -77,7 +110,7 @@ export function formatDateTime(
 
   const parsed = new Date(text);
   if (!Number.isNaN(parsed.getTime())) {
-    return formatDateTime(parsed, options);
+    return formatInBeijing(parsed, includeTime);
   }
 
   return text;

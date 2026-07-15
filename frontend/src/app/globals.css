@@ -256,6 +256,59 @@ button {
   gap: 12px;
 }
 
+.nas-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.nas-config-grid {
+  border-top: 1px solid var(--panel-border);
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(360px, 0.8fr) minmax(560px, 1.2fr);
+  padding-top: 18px;
+}
+
+.nas-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.nas-section-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.nas-form-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 100px minmax(180px, 1fr) 120px auto;
+}
+
+.nas-form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.nas-action-row {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+}
+
+.nas-runtime-section {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 18px;
+}
+
+.nas-task-log {
+  max-height: 180px;
+}
+
 .signal-plan {
   background: #f7fafc;
   border: 1px solid var(--panel-border);
@@ -484,6 +537,12 @@ button {
   }
 
   .backtest-form {
+    grid-template-columns: 1fr;
+  }
+
+  .nas-config-grid,
+  .nas-form-grid,
+  .nas-form-row {
     grid-template-columns: 1fr;
   }
 

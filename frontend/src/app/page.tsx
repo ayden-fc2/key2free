@@ -6,6 +6,7 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined } from "@ant-design/icons";
 
 import { BacktestDetailModal } from "@/components/backtests/BacktestDetailModal";
+import { NasDataAssetsPanel } from "@/components/nas/NasDataAssetsPanel";
 import { StockContextCharts } from "@/components/signals/StockContextCharts";
 import { getBacktestTask, listBacktestTasks, runBacktest } from "@/lib/api/backtests";
 import { getHealth } from "@/lib/api/health";
@@ -31,12 +32,14 @@ import { formatDateTime } from "@/utils/format";
 
 const tabs = [
   { key: "data-assets", label: "数据资产维护" },
+  { key: "nas-data-assets", label: "NAS 数据服务" },
   { key: "daily-signals", label: "当日信号" },
   { key: "backtest-stats", label: "回测统计" },
 ] as const;
 
 const subTabs: Record<(typeof tabs)[number]["key"], { key: string; label: string }[]> = {
   "data-assets": [{ key: "tushare", label: "Tushare 资产" }],
+  "nas-data-assets": [{ key: "nas", label: "NAS 数据服务" }],
   "daily-signals": [{ key: "daily", label: "当日信号" }],
   "backtest-stats": [{ key: "run", label: "回测任务" }],
 };
@@ -845,7 +848,7 @@ export default function Home() {
                 <div>
                   <div className="placeholder-title">Tushare 数据资产</div>
                   <div className="panel-subtitle">
-                    当前资产刷新按水位顺序轮转；后端运行时每天 03:00 自动刷新到昨日，自动任务包含 5 分钟线。
+                    本地保留手动维护能力；每日 02:30 自动更新已迁移到 NAS 数据服务。
                   </div>
                 </div>
                 <Space>
@@ -893,6 +896,8 @@ export default function Home() {
               <pre className="task-log">{tushareRefreshTask?.logs || "暂无刷新日志"}</pre>
             </div>
           </section>
+        ) : activeTab === "nas-data-assets" ? (
+          <NasDataAssetsPanel />
         ) : activeTab === "daily-signals" ? (
           <section className="content-panel">
             <div className="signal-workbench">

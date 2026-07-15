@@ -10,7 +10,6 @@ from strategies.small_float_value import (
 )
 from strategies.sharp_rise_pullback_leader import (
     SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS,
-    sharp_rise_pullback_leader_code_filter,
     sharp_rise_pullback_leader_lifecycle,
 )
 
@@ -64,18 +63,15 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         name="sharp_rise_pullback_leader",
         lifecycle=sharp_rise_pullback_leader_lifecycle,
         required_columns=SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS,
-        code_filter=sharp_rise_pullback_leader_code_filter,
         signal_required_columns=(
             "name",
             "close",
-            "qfq_open",
             "qfq_high",
             "qfq_low",
             "qfq_close",
             "ma_10",
             "ma_20",
             "ma_30",
-            "pct_chg",
             "is_st",
             "turnover_rate",
         ),

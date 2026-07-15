@@ -1,0 +1,47 @@
+name: key2free-data-asset
+
+services:
+  data-asset-service:
+    build:
+      context: ../..
+      dockerfile: nas/data_asset_service/Dockerfile
+      args:
+        PYTHON_IMAGE: "${PYTHON_IMAGE:-python:3.12-slim}"
+    image: key2free-data-asset-service:local
+    container_name: key2free-data-asset-service
+    restart: unless-stopped
+    init: true
+    user: "${PUID:-1000}:${PGID:-10}"
+    ports:
+      - "${DATA_ASSET_PORT:-18080}:8080"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      DUCKDB_PATH: /app/data/data.duckdb
+      DUCKDB_THREADS: "${DUCKDB_THREADS:-2}"
+      DUCKDB_MEMORY_LIMIT: "${DUCKDB_MEMORY_LIMIT:-1500MB}"
+      STOCK_DAILY_TECHNICAL_WORKERS: "${STOCK_DAILY_TECHNICAL_WORKERS:-2}"
+      STOCK_DAILY_TECHNICAL_BATCH_SIZE: "${STOCK_DAILY_TECHNICAL_BATCH_SIZE:-10}"
+      STOCK_DAILY_TECHNICAL_LOAD_BATCH_SIZE: "${STOCK_DAILY_TECHNICAL_LOAD_BATCH_SIZE:-80}"
+      SERVICE_CONFIG_PATH: /app/data/config/service_config.json
+      OPERATION_LOG_PATH: /app/logs/operations.jsonl
+      EXPORT_ROOT: /app/data/exports
+      NAS_ADVERTISED_HOST: "${NAS_ADVERTISED_HOST:-192.168.1.62}"
+      NAS_ADVERTISED_PORT: "${DATA_ASSET_PORT:-18080}"
+    volumes:
+      - "${RUNTIME_ROOT:-./runtime}/data:/app/data"
+      - "${RUNTIME_ROOT:-./runtime}/logs:/app/logs"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

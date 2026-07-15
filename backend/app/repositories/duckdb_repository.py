@@ -16,7 +16,9 @@ class DuckDBRepository:
 
     def __init__(self, db_path: Path | None = None) -> None:
         root_dir = Path(__file__).resolve().parents[3]
-        self.db_path = (db_path or root_dir / "data" / "data.duckdb").resolve()
+        configured_path = os.getenv("DUCKDB_PATH")
+        default_path = Path(configured_path) if configured_path else root_dir / "data" / "data.duckdb"
+        self.db_path = (db_path or default_path).resolve()
 
     @contextmanager
     def connect(self, *, read_only: bool = True) -> Iterator[duckdb.DuckDBPyConnection]:

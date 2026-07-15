@@ -1,0 +1,15 @@
+.git/
+.venv/
+.claude/
+data/
+frontend/
+tmp/
+*.csv
+*.duckdb
+*.duckdb.*
+*.log
+__pycache__/
+**/__pycache__/
+*.py[cod]
+nas/data_asset_service/runtime/
+nas/data_asset_service/.env

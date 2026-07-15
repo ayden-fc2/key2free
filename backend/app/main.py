@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.backtests import router as backtests_router
 from app.api.v1.health import router as health_router
+from app.api.v1.nas_data_assets import router as nas_data_assets_router
 from app.api.v1.signals import router as signals_router
 from app.api.v1.tushare_assets import router as tushare_assets_router
 from app.core.config import settings
@@ -35,6 +36,7 @@ def stop_auto_refresh_scheduler() -> None:
 
 
 fastapi_app.include_router(health_router, prefix="/api/v1")
+fastapi_app.include_router(nas_data_assets_router, prefix="/api/v1")
 fastapi_app.include_router(tushare_assets_router, prefix="/api/v1")
 fastapi_app.include_router(signals_router, prefix="/api/v1")
 fastapi_app.include_router(backtests_router, prefix="/api/v1")

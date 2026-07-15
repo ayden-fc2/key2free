@@ -658,6 +658,11 @@ class TushareAssetService:
             self._append_log(task_id, f"{asset_table_name} returned 0 rows; watermark advanced with issue")
             return True
         self.repository.update_watermark(asset_table_name, target_watermark)
+        self.repository.update_refresh_task(
+            task_id=task_id,
+            current_asset_table_name=asset_table_name,
+            current_watermark=target_watermark,
+        )
         self._append_log(task_id, f"{asset_table_name} success rows={row_count}")
         return True
 
