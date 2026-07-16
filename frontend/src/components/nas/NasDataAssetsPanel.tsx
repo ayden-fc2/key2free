@@ -231,11 +231,15 @@ export function NasDataAssetsPanel() {
       { dataIndex: "local_trusted_watermark", title: "本地水位", width: 120 },
       { dataIndex: "nas_trusted_watermark", title: "NAS 水位", width: 120 },
       {
-        dataIndex: "pending",
-        render: (pending: boolean) => <Tag color={pending ? "gold" : "green"}>{pending ? "待同步" : "一致"}</Tag>,
+        key: "sync_status",
+        render: (_, row) => {
+          const pending = row.pending || row.metadata_pending;
+          return <Tag color={pending ? "gold" : "green"}>{pending ? "待同步" : "一致"}</Tag>;
+        },
         title: "同步状态",
         width: 100,
       },
+      { dataIndex: "local_issue_count", title: "本地异常", width: 90 },
       { dataIndex: "nas_issue_count", title: "NAS 异常", width: 90 },
       { dataIndex: "nas_last_issue_message", ellipsis: true, title: "最近异常" },
     ],

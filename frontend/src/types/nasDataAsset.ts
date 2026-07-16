@@ -56,8 +56,17 @@ export type NasWatermarkComparison = {
   nas_earliest_trusted_watermark: string | null;
   nas_trusted_watermark: string | null;
   pending: boolean;
+  metadata_pending: boolean;
+  local_issue_count: number;
+  local_last_issue_at: string | null;
+  local_last_issue_scope: string | null;
+  local_last_issue_message: string | null;
+  local_issue_log: string;
   nas_issue_count: number;
+  nas_last_issue_at: string | null;
+  nas_last_issue_scope: string | null;
   nas_last_issue_message: string | null;
+  nas_issue_log: string;
 };
 
 export type NasOperationLog = {

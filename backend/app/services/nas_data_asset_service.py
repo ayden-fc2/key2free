@@ -208,6 +208,17 @@ class NasIncrementalSyncService:
             local = local_by_name.get(name, {})
             local_watermark = local.get("trusted_watermark")
             remote_watermark = remote.get("trusted_watermark")
+            local_issue_count = int(local.get("issue_count") or 0)
+            remote_issue_count = int(remote.get("issue_count") or 0)
+            metadata_pending = any(
+                (
+                    local_issue_count != remote_issue_count,
+                    local.get("last_issue_at") != remote.get("last_issue_at"),
+                    local.get("last_issue_scope") != remote.get("last_issue_scope"),
+                    local.get("last_issue_message") != remote.get("last_issue_message"),
+                    (local.get("issue_log") or "") != (remote.get("issue_log") or ""),
+                )
+            )
             rows.append(
                 {
                     "asset_table_name": name,
@@ -219,8 +230,17 @@ class NasIncrementalSyncService:
                         remote_watermark
                         and (local_watermark is None or local_watermark < remote_watermark)
                     ),
-                    "nas_issue_count": int(remote.get("issue_count") or 0),
+                    "metadata_pending": metadata_pending,
+                    "local_issue_count": local_issue_count,
+                    "local_last_issue_at": local.get("last_issue_at"),
+                    "local_last_issue_scope": local.get("last_issue_scope"),
+                    "local_last_issue_message": local.get("last_issue_message"),
+                    "local_issue_log": local.get("issue_log") or "",
+                    "nas_issue_count": remote_issue_count,
+                    "nas_last_issue_at": remote.get("last_issue_at"),
+                    "nas_last_issue_scope": remote.get("last_issue_scope"),
                     "nas_last_issue_message": remote.get("last_issue_message"),
+                    "nas_issue_log": remote.get("issue_log") or "",
                 }
             )
         return rows
@@ -241,10 +261,15 @@ class NasIncrementalSyncService:
                     self._complete_asset()
                     continue
                 if not comparison["pending"] and ASSET_DATE_COLUMNS[asset_table_name] is not None:
-                    self._append_log(f"{asset_table_name}: local watermark already current")
+                    self._synchronize_watermark_metadata(asset_table_name, comparison)
+                    self._append_log(
+                        f"{asset_table_name}: local data watermark already current; "
+                        "NAS issue metadata synchronized"
+                    )
                     self._complete_asset()
                     continue
                 self._sync_asset(asset_table_name, comparison, task_root)
+                self._synchronize_watermark_metadata(asset_table_name, comparison)
                 self._complete_asset()
             self._finish("success")
         except Exception as exc:
@@ -302,6 +327,24 @@ class NasIncrementalSyncService:
                     earliest_trusted_watermark=remote_earliest,
                 )
             cursor = chunk_end + timedelta(days=1)
+
+    def _synchronize_watermark_metadata(
+        self,
+        asset_table_name: str,
+        comparison: dict[str, Any],
+    ) -> None:
+        self.repository.synchronize_watermark(
+            asset_table_name,
+            earliest_trusted_watermark=self._parse_date(
+                comparison["nas_earliest_trusted_watermark"]
+            ),
+            trusted_watermark=self._parse_date(comparison["nas_trusted_watermark"]),
+            issue_count=int(comparison.get("nas_issue_count") or 0),
+            last_issue_at=self._parse_datetime(comparison.get("nas_last_issue_at")),
+            last_issue_scope=comparison.get("nas_last_issue_scope"),
+            last_issue_message=comparison.get("nas_last_issue_message"),
+            issue_log=comparison.get("nas_issue_log") or "",
+        )
 
     def _sync_slice(
         self,
@@ -453,6 +496,13 @@ class NasIncrementalSyncService:
         if not value:
             raise ValueError("watermark date is missing")
         return date.fromisoformat(str(value))
+
+    @staticmethod
+    def _parse_datetime(value: str | datetime | None) -> datetime | None:
+        if isinstance(value, datetime) or value is None:
+            return value
+        normalized = str(value).strip().replace("Z", "+00:00")
+        return None if not normalized else datetime.fromisoformat(normalized)
 
 
 nas_connection_store = NasConnectionStore()

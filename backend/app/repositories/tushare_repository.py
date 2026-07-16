@@ -655,6 +655,55 @@ class TushareRepository:
                 [message, issue_line, asset_table_name],
             )
 
+    def synchronize_watermark(
+        self,
+        asset_table_name: str,
+        *,
+        earliest_trusted_watermark: date,
+        trusted_watermark: date,
+        issue_count: int,
+        last_issue_at: datetime | None,
+        last_issue_scope: str | None,
+        last_issue_message: str | None,
+        issue_log: str,
+    ) -> None:
+        """Replace a local watermark with an authoritative remote snapshot."""
+        self.ensure_tables()
+        with self.duckdb.connect(read_only=False) as connection:
+            connection.execute(
+                """
+                insert into meta.tushare_asset_watermark(
+                    asset_table_name,
+                    earliest_trusted_watermark,
+                    trusted_watermark,
+                    issue_count,
+                    last_issue_at,
+                    last_issue_scope,
+                    last_issue_message,
+                    issue_log
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (asset_table_name) do update
+                set earliest_trusted_watermark = excluded.earliest_trusted_watermark,
+                    trusted_watermark = excluded.trusted_watermark,
+                    issue_count = excluded.issue_count,
+                    last_issue_at = excluded.last_issue_at,
+                    last_issue_scope = excluded.last_issue_scope,
+                    last_issue_message = excluded.last_issue_message,
+                    issue_log = excluded.issue_log
+                """,
+                [
+                    asset_table_name,
+                    earliest_trusted_watermark,
+                    trusted_watermark,
+                    max(0, int(issue_count)),
+                    last_issue_at,
+                    last_issue_scope,
+                    last_issue_message,
+                    issue_log or "",
+                ],
+            )
+
     def upsert_trade_cal(self, frame: pd.DataFrame) -> int:
         if frame.empty:
             return 0
