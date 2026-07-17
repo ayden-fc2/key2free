@@ -27,12 +27,16 @@ HIGH_TO_T_MAX_BARS = 10
 MIN_HIGH_TO_LOW_DRAWDOWN = 0.07
 L_MA20_MIN_MULTIPLE = 0.95
 L_MA10_MAX_MULTIPLE = 1.02
-BUY_L_MA20_BOUNDARY = 1.01
-BUY_L_MA10_BOUNDARY = 0.99
-T_CLOSE_MA10_MAX_MULTIPLE = 1.05
+T_CLOSE_MA10_MIN_MULTIPLE = 0.95
+T_CLOSE_MA10_MAX_MULTIPLE = 1.02
+BUY_T_CLOSE_CONFIRMATION_MULTIPLE = 1.02
+T_CLOSE_STOP_MULTIPLE = 0.90
 WATCH_MAX_DAYS = 5
-TRAILING_ACTIVATION_GAIN = 0.08
-TRAILING_ACTIVATION_MULTIPLE = 1.0 + TRAILING_ACTIVATION_GAIN
+PROFIT_ACTIVATION_GAIN = 0.06
+PROFIT_ACTIVATION_MULTIPLE = 1.0 + PROFIT_ACTIVATION_GAIN
+ENABLE_TRAILING_EXIT = True
+ENABLE_CLOSE_WEAKNESS_EXIT = False
+CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
 MAX_BUY_AMOUNT = 2_000.0
@@ -106,6 +110,7 @@ class SharpRisePullbackLeaderLifecycle:
             & (latest["turnover_rate"] >= MIN_TURNOVER_RATE)
             & (latest["ma_10"] > latest["ma_20"])
             & (latest["ma_20"] > latest["ma_30"])
+            & (latest["qfq_close"] >= latest["ma_10"] * T_CLOSE_MA10_MIN_MULTIPLE)
             & (latest["qfq_close"] <= latest["ma_10"] * T_CLOSE_MA10_MAX_MULTIPLE)
             & latest[
                 ["qfq_high", "qfq_low", "qfq_close", "ma_10", "ma_20", "ma_30"]
@@ -170,7 +175,11 @@ class SharpRisePullbackLeaderLifecycle:
         assert turnover_rate is not None
         if unadjusted_close < MIN_UNADJUSTED_CLOSE or turnover_rate < MIN_TURNOVER_RATE:
             return None
-        if t_close > t_ma10 * T_CLOSE_MA10_MAX_MULTIPLE:
+        if not (
+            t_ma10 * T_CLOSE_MA10_MIN_MULTIPLE
+            <= t_close
+            <= t_ma10 * T_CLOSE_MA10_MAX_MULTIPLE
+        ):
             return None
 
         s_position = _current_ma_stack_start(frame, t_position)
@@ -217,14 +226,11 @@ class SharpRisePullbackLeaderLifecycle:
         if high_to_low_drawdown < MIN_HIGH_TO_LOW_DRAWDOWN:
             return None
 
-        raw_buy_price, buy_price_branch = _calculate_raw_buy_price(
-            l_low=l_low,
-            l_ma10=l_ma10,
-            l_ma20=l_ma20,
+        bug_price = _calculate_buy_price(
+            t_close=t_close,
             t_ma10=t_ma10,
-            t_ma20=t_ma20,
         )
-        bug_price = max(raw_buy_price, t_close)
+        stop_loss_price = _calculate_stop_loss_price(l_low=l_low, t_close=t_close)
 
         s_date = _as_date(frame.trade_dates[s_position])
         h_date = _as_date(frame.trade_dates[h_position])
@@ -252,22 +258,27 @@ class SharpRisePullbackLeaderLifecycle:
             "l_ma10": float(l_ma10),
             "l_ma20": float(l_ma20),
             "h_to_l_drawdown": float(high_to_low_drawdown),
-            "buy_price_branch": buy_price_branch,
-            "raw_buy_price": float(raw_buy_price),
+            "buy_price_branch": "max_t_ma10_or_t_close_1_02",
+            "raw_buy_price": float(bug_price),
             "buy_price": float(bug_price),
             "bug_price": float(bug_price),
             "entry_trigger_price": float(bug_price),
+            "stop_loss_price": float(stop_loss_price),
             "watch_max_days": WATCH_MAX_DAYS,
-            "trailing_activation_gain": TRAILING_ACTIVATION_GAIN,
+            "profit_activation_gain": PROFIT_ACTIVATION_GAIN,
+            "trailing_activation_gain": PROFIT_ACTIVATION_GAIN,
             "trailing_drawdown": TRAILING_DRAWDOWN,
+            "close_weakness_max_daily_return": CLOSE_WEAKNESS_MAX_DAILY_RETURN,
+            "enable_trailing_exit": ENABLE_TRAILING_EXIT,
+            "enable_close_weakness_exit": ENABLE_CLOSE_WEAKNESS_EXIT,
             "max_buy_amount": MAX_BUY_AMOUNT,
             "entry_rule": (
                 "observe T+1 through T+5; invalidate if low<=L low; buy at bug_price only when the "
                 "observation-day range covers it; remove a full-day gap above bug_price"
             ),
             "exit_rule": (
-                "close<=L low at close; otherwise, after confirmed holding high reaches 108% of "
-                "buy price, sell on a 4% drawdown from the confirmed holding high"
+                "close<=max(L low, T close*0.90) at close; otherwise, after confirmed holding high "
+                "reaches 106% of buy price, sell on a 4% drawdown from the confirmed holding high"
             ),
         }
         signal_payload = {
@@ -276,20 +287,20 @@ class SharpRisePullbackLeaderLifecycle:
             "entry_trigger_price": float(bug_price),
             "sell_rules": [
                 {
-                    "name": "结构低点收盘止损",
+                    "name": "结构与T日价格约束收盘止损",
                     "rule_type": "static",
                     "timing": "收盘",
-                    "trigger_price": float(l_low),
+                    "trigger_price": float(stop_loss_price),
                     "sell_price": "当日前复权收盘价",
-                    "description": "持仓日收盘价小于等于 L 日前复权最低价时，按当日收盘价卖出。",
+                    "description": "持仓日收盘价小于等于 max(L_low, T_close × 0.90) 时，按当日收盘价卖出。",
                 },
                 {
-                    "name": "浮盈 8% 后最高价回撤止盈",
+                    "name": "浮盈 6% 后最高价回撤止盈",
                     "rule_type": "dynamic",
                     "timing": "盘中",
-                    "trigger_price": "已确认最高价达到买入价 × 1.08 后，最高价 × 0.96",
+                    "trigger_price": "已确认最高价达到买入价 × 1.06 后，最高价 × 0.96",
                     "sell_price": "回撤 4% 触发价；跳空低于触发价时按当时开盘价",
-                    "description": "买入后已确认最高价达到买入价的 108% 才激活；此后回撤达到 4% 时卖出。",
+                    "description": "买入后已确认最高价达到买入价的 106% 才激活；此后回撤达到 4% 时卖出。",
                 },
             ],
             "max_watch_days": WATCH_MAX_DAYS,
@@ -304,8 +315,9 @@ class SharpRisePullbackLeaderLifecycle:
                     "则收盘后移出观察池。"
                 ),
                 "sell": [
-                    f"结构止损：持仓日收盘价小于等于 L_low {l_low:.3f}，按收盘价卖出。",
-                    "动态止盈：买入后已确认最高价累计上涨达到 8% 后，冲高回落 4% 时卖出。",
+                    f"收盘止损：持仓日收盘价小于等于 {stop_loss_price:.3f}"
+                    "（L_low 与 T_close × 0.90 取高），按收盘价卖出。",
+                    "动态止盈：买入后已确认最高价累计上涨达到 6% 后，冲高回落 4% 时卖出。",
                 ],
             },
             "extras": extras,
@@ -338,8 +350,8 @@ class SharpRisePullbackLeaderLifecycle:
                 continue
 
             today_close = _bar_close(bar)
-            l_low = _signal_extra_float(getattr(holding, "signal", {}), "l_low")
-            if today_close is None or l_low is None:
+            stop_loss_price = _signal_stop_loss_price(getattr(holding, "signal", {}))
+            if today_close is None or stop_loss_price is None:
                 continue
 
             known_high = _signal_extra_float(
@@ -358,6 +370,7 @@ class SharpRisePullbackLeaderLifecycle:
                 buy_price=buy_price,
                 known_high=known_high,
                 daily_bar=bar,
+                trailing_enabled=ENABLE_TRAILING_EXIT,
             )
             if trailing_price is not None:
                 decisions.append(
@@ -365,21 +378,40 @@ class SharpRisePullbackLeaderLifecycle:
                         code=code,
                         price=trailing_price,
                         quantity=int(holding.quantity),
-                        reason="profit_8pct_then_high_drawdown_4pct",
+                        reason="profit_6pct_then_high_drawdown_4pct",
                     )
                 )
                 continue
 
-            if today_close <= l_low:
+            if today_close <= stop_loss_price:
                 decisions.append(
                     StrategySellDecision(
                         code=code,
                         price=today_close,
                         quantity=int(holding.quantity),
-                        reason="close_at_or_below_l_low",
+                        reason="close_at_or_below_stop_loss_price",
                     )
                 )
                 continue
+
+            if ENABLE_CLOSE_WEAKNESS_EXIT:
+                previous_close = _bar_previous_close(bar)
+                if previous_close is None:
+                    previous_close = _bar_close(market.previous_bars.get(code))
+                if (
+                    updated_high >= buy_price * PROFIT_ACTIVATION_MULTIPLE
+                    and previous_close is not None
+                    and today_close / previous_close - 1.0 <= CLOSE_WEAKNESS_MAX_DAILY_RETURN
+                ):
+                    decisions.append(
+                        StrategySellDecision(
+                            code=code,
+                            price=today_close,
+                            quantity=int(holding.quantity),
+                            reason="profit_6pct_then_daily_return_at_or_below_1_5pct",
+                        )
+                    )
+                    continue
 
             _set_signal_extra(
                 getattr(holding, "signal", {}),
@@ -531,19 +563,25 @@ def _latest_extreme_index(
     return best_index
 
 
-def _calculate_raw_buy_price(
-    *,
-    l_low: float,
-    l_ma10: float,
-    l_ma20: float,
-    t_ma10: float,
-    t_ma20: float,
-) -> tuple[float, str]:
-    if l_low <= l_ma20 * BUY_L_MA20_BOUNDARY:
-        return (t_ma20 * 1.05, "l_low_at_or_below_l_ma20_1_01")
-    if l_low <= l_ma10 * BUY_L_MA10_BOUNDARY:
-        return (t_ma10, "l_low_between_ma20_1_01_and_ma10_0_99")
-    return (t_ma10 * 1.05, "l_low_above_l_ma10_0_99")
+def _calculate_buy_price(*, t_close: float, t_ma10: float) -> float:
+    return max(t_ma10, t_close * BUY_T_CLOSE_CONFIRMATION_MULTIPLE)
+
+
+def _calculate_stop_loss_price(*, l_low: float, t_close: float) -> float:
+    return max(l_low, t_close * T_CLOSE_STOP_MULTIPLE)
+
+
+def _signal_stop_loss_price(signal: dict[str, Any]) -> float | None:
+    frozen_price = _signal_extra_float(signal, "stop_loss_price")
+    if frozen_price is not None:
+        return frozen_price
+    l_low = _signal_extra_float(signal, "l_low")
+    if l_low is None:
+        return None
+    t_close = _to_positive_float(signal.get("signal_close"))
+    if t_close is None:
+        return l_low
+    return _calculate_stop_loss_price(l_low=l_low, t_close=t_close)
 
 
 def _watch_breaks_l_low(*, code: str, item: Any, market: MarketViews | None) -> bool:
@@ -609,18 +647,19 @@ def _trailing_exit_for_day(
     buy_price: float,
     known_high: float,
     daily_bar: tuple[float, ...],
+    trailing_enabled: bool = True,
 ) -> tuple[float | None, float]:
-    activation_price = buy_price * TRAILING_ACTIVATION_MULTIPLE
+    activation_price = buy_price * PROFIT_ACTIVATION_MULTIPLE
     minute_bars = _load_qfq_5min_bars(code, trade_date)
     if minute_bars:
         running_high = known_high
         for open_price, high, low, _ in minute_bars:
-            if running_high >= activation_price:
+            if trailing_enabled and running_high >= activation_price:
                 stop_price = running_high * TRAILING_REMAINING_MULTIPLE
                 if open_price <= stop_price:
                     return (open_price, running_high)
             running_high = max(running_high, open_price)
-            if running_high >= activation_price:
+            if trailing_enabled and running_high >= activation_price:
                 stop_price = running_high * TRAILING_REMAINING_MULTIPLE
                 if low <= stop_price:
                     return (stop_price, running_high)
@@ -632,12 +671,12 @@ def _trailing_exit_for_day(
     today_low = _bar_low(daily_bar)
     if today_open is None or today_high is None or today_low is None:
         return (None, known_high)
-    if known_high >= activation_price:
+    if trailing_enabled and known_high >= activation_price:
         stop_price = known_high * TRAILING_REMAINING_MULTIPLE
         if today_open <= stop_price:
             return (today_open, known_high)
     running_high = max(known_high, today_open)
-    if running_high >= activation_price:
+    if trailing_enabled and running_high >= activation_price:
         stop_price = running_high * TRAILING_REMAINING_MULTIPLE
         if today_low <= stop_price:
             return (stop_price, running_high)
@@ -762,6 +801,10 @@ def _bar_low(bar: tuple[float, ...] | None) -> float | None:
 
 def _bar_close(bar: tuple[float, ...] | None) -> float | None:
     return _bar_field(bar, 3)
+
+
+def _bar_previous_close(bar: tuple[float, ...] | None) -> float | None:
+    return _bar_field(bar, 7)
 
 
 def _is_tradeable_bar(bar: tuple[float, ...] | None) -> bool:

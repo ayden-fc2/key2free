@@ -12,7 +12,8 @@ from app.services.strategy_lifecycle import MarketViews, StrategyContext
 from strategies.sharp_rise_pullback_leader.strategy import (
     SharpRisePullbackLeaderLifecycle,
     _buy_quantity,
-    _calculate_raw_buy_price,
+    _calculate_buy_price,
+    _calculate_stop_loss_price,
     _trailing_exit_for_day,
 )
 
@@ -41,8 +42,26 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         self.assertAlmostEqual(extras["h_high"], 120.0)
         self.assertAlmostEqual(extras["l_low"], 108.0)
         self.assertAlmostEqual(extras["h_to_l_drawdown"], 0.10)
-        self.assertAlmostEqual(extras["bug_price"], 117.6)
+        self.assertAlmostEqual(extras["bug_price"], 114.0)
+        self.assertAlmostEqual(extras["stop_loss_price"], 108.0)
         self.assertEqual(result["signal"]["max_watch_days"], 5)
+
+    def test_rejects_t_close_outside_ma10_pullback_band(self) -> None:
+        for t_close in (108.0, 117.0):
+            with self.subTest(t_close=t_close):
+                frame = self._valid_frame()
+                closes = list(frame.columns["qfq_close"])
+                closes[-1] = t_close
+                frame.columns["qfq_close"] = closes
+
+                result = self.lifecycle._select_signal_from_frame(
+                    code="sh.600000",
+                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+                    frame=frame,
+                    trade_date=frame.trade_dates[-1],
+                )
+
+                self.assertIsNone(result)
 
     def test_rejects_high_outside_three_to_ten_bars(self) -> None:
         frame = self._valid_frame()
@@ -102,35 +121,13 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         signals = self.lifecycle.select_signals(trade_date=trade_date, view=FakeView())
         self.assertEqual([signal["code"] for signal in signals], ["sz.000001"])
 
-    def test_three_buy_price_branches(self) -> None:
-        first, first_branch = _calculate_raw_buy_price(
-            l_low=100.0,
-            l_ma10=110.0,
-            l_ma20=100.0,
-            t_ma10=120.0,
-            t_ma20=115.0,
-        )
-        second, second_branch = _calculate_raw_buy_price(
-            l_low=105.0,
-            l_ma10=110.0,
-            l_ma20=100.0,
-            t_ma10=120.0,
-            t_ma20=115.0,
-        )
-        third, third_branch = _calculate_raw_buy_price(
-            l_low=110.0,
-            l_ma10=110.0,
-            l_ma20=100.0,
-            t_ma10=120.0,
-            t_ma20=115.0,
-        )
+    def test_buy_price_uses_higher_of_t_ma10_and_two_percent_confirmation(self) -> None:
+        self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=101.0), 102.0)
+        self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=103.0), 103.0)
 
-        self.assertAlmostEqual(first, 120.75)
-        self.assertEqual(first_branch, "l_low_at_or_below_l_ma20_1_01")
-        self.assertAlmostEqual(second, 120.0)
-        self.assertEqual(second_branch, "l_low_between_ma20_1_01_and_ma10_0_99")
-        self.assertAlmostEqual(third, 126.0)
-        self.assertEqual(third_branch, "l_low_above_l_ma10_0_99")
+    def test_stop_loss_uses_higher_of_l_low_and_t_close_90pct(self) -> None:
+        self.assertAlmostEqual(_calculate_stop_loss_price(l_low=95.0, t_close=100.0), 95.0)
+        self.assertAlmostEqual(_calculate_stop_loss_price(l_low=85.0, t_close=100.0), 90.0)
 
     def _valid_frame(self) -> StockDailyFrame:
         length = 25
@@ -172,7 +169,13 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         self.lifecycle = SharpRisePullbackLeaderLifecycle()
         self.signal = {
             "signal_close": 105.0,
-            "extras": {"bug_price": 110.0, "l_low": 100.0},
+            "extras": {
+                "bug_price": 110.0,
+                "l_low": 100.0,
+                "s_date": "2026-06-01",
+                "h_date": "2026-07-01",
+                "l_date": "2026-07-10",
+            },
         }
         self.watch_item = SimpleNamespace(
             code="sh.600000",
@@ -233,11 +236,53 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         watch = self.lifecycle.update_watch_pool(context=context, raw_signals=[], market=market)
         self.assertEqual(watch.remove, {self.watch_item.code})
 
+    def test_repeated_signal_replaces_and_resets_watch(self) -> None:
+        context = self._context(trade_index=2, watch_pool={self.watch_item.code: self.watch_item})
+        repeated = self._raw_signal(
+            s_date="2026-06-01",
+            h_date="2026-07-01",
+            l_date="2026-07-10",
+            bug_price=112.0,
+        )
+
+        watch = self.lifecycle.update_watch_pool(context=context, raw_signals=[repeated])
+
+        self.assertEqual(watch.add, [repeated])
+        self.assertEqual(watch.keep, {self.watch_item.code})
+
+    def test_repeated_signal_restarts_expired_watch(self) -> None:
+        context = self._context(trade_index=5, watch_pool={self.watch_item.code: self.watch_item})
+        repeated = self._raw_signal(
+            s_date="2026-06-01",
+            h_date="2026-07-01",
+            l_date="2026-07-10",
+            bug_price=112.0,
+        )
+
+        watch = self.lifecycle.update_watch_pool(context=context, raw_signals=[repeated])
+
+        self.assertEqual(watch.add, [repeated])
+        self.assertEqual(watch.remove, {self.watch_item.code})
+
+    def test_holding_does_not_receive_new_signal(self) -> None:
+        holding = SimpleNamespace(code=self.watch_item.code)
+        context = self._context(trade_index=2, holdings={self.watch_item.code: holding})
+        new_structure = self._raw_signal(
+            s_date="2026-06-01",
+            h_date="2026-07-02",
+            l_date="2026-07-15",
+            bug_price=112.0,
+        )
+
+        watch = self.lifecycle.update_watch_pool(context=context, raw_signals=[new_structure])
+
+        self.assertEqual(watch.add, [])
+
     @patch(
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
-    def test_trailing_drawdown_is_inactive_below_8pct_profit(self, _minute_bars: object) -> None:
+    def test_trailing_drawdown_is_inactive_below_6pct_profit(self, _minute_bars: object) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
             buy_price=115.0,
@@ -259,7 +304,7 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
-    def test_trailing_drawdown_activates_after_8pct_profit(self, _minute_bars: object) -> None:
+    def test_trailing_drawdown_activates_after_6pct_profit(self, _minute_bars: object) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
             buy_price=100.0,
@@ -275,31 +320,66 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         decisions = self.lifecycle.decide_sells(context=context, market=market)
 
         self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0].reason, "profit_8pct_then_high_drawdown_4pct")
+        self.assertEqual(decisions[0].reason, "profit_6pct_then_high_drawdown_4pct")
         self.assertAlmostEqual(decisions[0].price, 105.6)
 
+    @patch("strategies.sharp_rise_pullback_leader.strategy.ENABLE_TRAILING_EXIT", False)
+    @patch("strategies.sharp_rise_pullback_leader.strategy.ENABLE_CLOSE_WEAKNESS_EXIT", True)
     @patch(
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
-    def test_structure_stop_uses_close_at_or_below_l_low(self, _minute_bars: object) -> None:
+    def test_close_weakness_exit_after_6pct_profit(
+        self,
+        _minute_bars: object,
+    ) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
             buy_price=100.0,
             quantity=100,
-            max_high_since_buy=100.0,
-            signal={"extras": {"l_low": 95.0, "highest_price_since_buy": 100.0}},
+            max_high_since_buy=106.0,
+            signal={"extras": {"l_low": 90.0, "highest_price_since_buy": 106.0}},
         )
         context = self._context(trade_index=1, holdings={"sh.600000": holding})
         market = MarketViews(
-            today_bars={"sh.600000": (100.0, 101.0, 97.0, 95.0, 1000.0, 0.0, 0.0, 100.0)}
+            today_bars={"sh.600000": (102.0, 103.0, 100.0, 101.5, 1000.0, 0.0, 0.0, 100.0)}
         )
 
         decisions = self.lifecycle.decide_sells(context=context, market=market)
 
         self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0].reason, "close_at_or_below_l_low")
-        self.assertAlmostEqual(decisions[0].price, 95.0)
+        self.assertEqual(decisions[0].reason, "profit_6pct_then_daily_return_at_or_below_1_5pct")
+        self.assertAlmostEqual(decisions[0].price, 101.5)
+
+    @patch(
+        "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
+        return_value=(),
+    )
+    def test_structure_stop_uses_close_at_or_below_frozen_stop_price(self, _minute_bars: object) -> None:
+        holding = SimpleNamespace(
+            buy_trade_index=0,
+            buy_price=100.0,
+            quantity=100,
+            max_high_since_buy=100.0,
+            signal={
+                "signal_close": 100.0,
+                "extras": {
+                    "l_low": 85.0,
+                    "stop_loss_price": 90.0,
+                    "highest_price_since_buy": 100.0,
+                },
+            },
+        )
+        context = self._context(trade_index=1, holdings={"sh.600000": holding})
+        market = MarketViews(
+            today_bars={"sh.600000": (100.0, 101.0, 89.0, 90.0, 1000.0, 0.0, 0.0, 100.0)}
+        )
+
+        decisions = self.lifecycle.decide_sells(context=context, market=market)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "close_at_or_below_stop_loss_price")
+        self.assertAlmostEqual(decisions[0].price, 90.0)
 
     @patch(
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
@@ -342,7 +422,7 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=((107.0, 108.0, 106.0, 107.0), (107.0, 109.0, 103.0, 104.0)),
     )
-    def test_five_minute_drawdown_activates_after_confirmed_8pct_high(
+    def test_five_minute_drawdown_activates_after_confirmed_6pct_high(
         self,
         _minute_bars: object,
     ) -> None:
@@ -374,6 +454,30 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
             trade_records={"buys": [], "sells": []},
             params={"run_no": 1},
         )
+
+    def _raw_signal(
+        self,
+        *,
+        s_date: str,
+        h_date: str,
+        l_date: str,
+        bug_price: float,
+    ) -> dict[str, object]:
+        return {
+            "code": self.watch_item.code,
+            "code_name": self.watch_item.code_name,
+            "signal": {
+                "signal_close": 105.0,
+                "max_watch_days": 5,
+                "extras": {
+                    "bug_price": bug_price,
+                    "l_low": 100.0,
+                    "s_date": s_date,
+                    "h_date": h_date,
+                    "l_date": l_date,
+                },
+            },
+        }
 
 
 if __name__ == "__main__":
