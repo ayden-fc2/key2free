@@ -74,6 +74,7 @@ STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ma_30",
             "is_st",
             "turnover_rate",
+            "bias_20",
         ),
         signal_history_window=200,
     ),

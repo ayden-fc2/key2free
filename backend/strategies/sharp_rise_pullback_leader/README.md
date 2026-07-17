@@ -2,6 +2,8 @@
 
 注册名：`sharp_rise_pullback_leader`
 
+策略版本：`1.0.0`
+
 策略在信号日 T 收盘后建立 `S -> H -> L -> T` 四点结构，并冻结观察买入价 `bug_price`。信号函数只能读取截至 T 日的数据；买入和卖出阶段只能读取观察日或持仓日当时已经可见的行情，不读取未来交易日数据。
 
 价格口径：
@@ -19,9 +21,12 @@ T 日必须同时满足：
 1. 排除股票名称包含 `ST` 或宽表字段 `is_st != 0` 的股票。
 2. 排除代码以 `sh.688` 开头的科创板股票。
 3. `MA10 > MA20 > MA30`。
-4. T 日换手率 `turnover_rate >= 6%`。
-5. T 日未复权收盘价 `close >= 10`。
-6. T 日前复权收盘价位于 MA10 附近：`T_MA10 * 0.95 <= T_qfq_close <= T_MA10 * 1.02`。
+4. T 日换手率位于 `8% <= turnover_rate <= 12%`，包含边界。
+5. T 日 `BIAS20 >= 10%`，其中 `BIAS20 = T_qfq_close / T_MA20 - 1`，宽表以小数保存，因此代码阈值为 `0.10`。
+6. T 日未复权收盘价 `close >= 10`。
+7. T 日前复权收盘价位于 MA10 附近：`T_MA10 * 0.95 <= T_qfq_close <= T_MA10 * 1.02`。
+
+`1.0.0` 不使用 T 日五日量比过滤，`volume_ratio_5` 不参与信号判定。
 
 ### 2. S：多头排列起点
 
@@ -35,7 +40,7 @@ T 日必须同时满足：
 在 `[S, T)` 中寻找前复权盘中最高价 `qfq_high` 最大的一日，记为 H；若最高价并列，取日期较晚的一日。
 
 - H 到 T 的交易日索引距离必须在 `3 ~ 10` 之间，包含边界。
-- S 到 H 的累计涨幅必须在 30% 到 70% 之间，包含边界：`0.30 <= H_qfq_high / S_qfq_close - 1 <= 0.70`。
+- `H_qfq_high / S_qfq_close - 1` 只作为信号诊断字段记录，不参与信号过滤。
 
 ### 4. L：回踩最低点
 
@@ -56,7 +61,7 @@ bug_price = max(T_MA10, T_qfq_close * 1.02)
 
 信号冻结字段至少包含：
 
-- T：日期、`qfq_close`、`MA10`、`MA20`、`MA30`、未复权 `close`、换手率。
+- T：日期、`qfq_close`、`MA10`、`MA20`、`MA30`、未复权 `close`、换手率、`BIAS20`。
 - S：日期、`qfq_close`、S 到 T 的交易日距离。
 - H：日期、`qfq_high`、`H_qfq_high / S_qfq_close - 1`、H 到 T 的交易日距离。
 - L：日期、`qfq_low`、`MA10`、`MA20`、H 到 L 的回撤幅度。
@@ -83,14 +88,14 @@ bug_price = max(T_MA10, T_qfq_close * 1.02)
 - 旧观察项当日到期或失效时，只要当日收盘重新满足信号函数，最新 T 信号仍可重新建立观察项。
 - 已持仓股票忽略所有新信号，不重复加入观察池，也不根据新信号修改持仓的买入价或卖出规则。
 
-真实交易仓位规则：
+`1.0.0` 采用四仓真实交易仓位：
 
-1. 最多同时持有 3 只股票；已有持仓会占用对应仓位槽位。
-2. 每次买入的目标金额为买入当日总资产的三分之一，即 `target_amount = total_asset / 3`。
-3. 实际数量同时受目标金额、可用现金和手续费约束，并按 A 股 `100` 股整数手向下取整。
-4. 同一交易日有多个候选时，继续复用回测框架的随机候选顺序；买满剩余仓位后不再买入其他候选，避免按代码顺序产生固定偏差。
+1. 最多同时持有 `4` 只股票，已有持仓占用对应仓位。
+2. 每笔目标买入金额为买入当日总资产的四分之一：`target_amount = total_asset / 4`。
+3. 实际买入金额不超过目标金额，同时受可用现金和手续费约束，并按 A 股 `100` 股整数手向下取整。
+4. 同一交易日有多个候选时继续复用回测框架的随机候选顺序；达到4仓或可用现金不足后停止成交，避免按代码顺序产生固定偏差。
 
-当日信号模块的 10 日生命周期回放不使用真实仓位上限，并继续固定每只买入 100 股；该覆盖仅用于完整展示观察池和持仓池，不改变正式回测仓位逻辑。
+当日信号模块的 10 日生命周期回放不使用正式4仓上限，并继续固定每只买入100股，用于完整展示观察池和持仓池；该覆盖不改变正式回测仓位逻辑。
 
 ## 三、卖出函数
 
@@ -125,10 +130,11 @@ daily_close_return = 当日收盘价 / 昨日收盘价 - 1
 
 ```text
 MIN_UNADJUSTED_CLOSE = 10
-MIN_TURNOVER_RATE = 6
+STRATEGY_VERSION = "1.0.0"
+MIN_TURNOVER_RATE = 8
+MAX_TURNOVER_RATE = 12
+MIN_BIAS_20 = 0.10
 MIN_MA_STACK_DISTANCE = 17
-MIN_H_GAIN_FROM_S_CLOSE = 0.30
-MAX_H_GAIN_FROM_S_CLOSE = 0.70
 HIGH_TO_T_MIN_BARS = 3
 HIGH_TO_T_MAX_BARS = 10
 MIN_HIGH_TO_LOW_DRAWDOWN = 0.07
@@ -144,8 +150,8 @@ ENABLE_TRAILING_EXIT = false
 ENABLE_CLOSE_WEAKNESS_EXIT = true
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
-MAX_HOLDINGS = 3
-POSITION_ASSET_FRACTION = 1 / 3
+MAX_HOLDINGS = 4
+POSITION_ASSET_FRACTION = 1 / 4
 BUY_LOT_SIZE = 100
 ```
 

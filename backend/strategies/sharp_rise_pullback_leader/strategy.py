@@ -18,12 +18,13 @@ from app.services.strategy_lifecycle import (
 )
 
 
+STRATEGY_VERSION = "1.0.0"
 MIN_UNADJUSTED_CLOSE = 10.0
-MIN_TURNOVER_RATE = 6.0
+MIN_TURNOVER_RATE = 8.0
+MAX_TURNOVER_RATE = 12.0
+MIN_BIAS_20 = 0.10
 SIGNAL_LOOKBACK_BARS = 200
 MIN_MA_STACK_DISTANCE = 17
-MIN_H_GAIN_FROM_S_CLOSE = 0.30
-MAX_H_GAIN_FROM_S_CLOSE = 0.70
 HIGH_TO_T_MIN_BARS = 3
 HIGH_TO_T_MAX_BARS = 10
 MIN_HIGH_TO_LOW_DRAWDOWN = 0.07
@@ -41,8 +42,8 @@ ENABLE_CLOSE_WEAKNESS_EXIT = True
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
-MAX_HOLDINGS = 3
-POSITION_ASSET_FRACTION = 1.0 / 3.0
+MAX_HOLDINGS = 4
+POSITION_ASSET_FRACTION = 1.0 / MAX_HOLDINGS
 BUY_LOT_SIZE = 100
 
 SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS: tuple[str, ...] = ()
@@ -58,6 +59,7 @@ SIGNAL_COLUMNS = (
     "ma_30",
     "is_st",
     "turnover_rate",
+    "bias_20",
 )
 
 
@@ -85,6 +87,7 @@ class SharpRisePullbackLeaderLifecycle:
             "ma_30",
             "is_st",
             "turnover_rate",
+            "bias_20",
         ):
             if column in latest.columns:
                 latest[column] = pd.to_numeric(latest[column], errors="coerce")
@@ -100,6 +103,7 @@ class SharpRisePullbackLeaderLifecycle:
             "ma_30",
             "is_st",
             "turnover_rate",
+            "bias_20",
         }
         if not required.issubset(latest.columns):
             return []
@@ -112,6 +116,8 @@ class SharpRisePullbackLeaderLifecycle:
             & (latest["is_st"].fillna(0.0) == 0.0)
             & (latest["close"] >= MIN_UNADJUSTED_CLOSE)
             & (latest["turnover_rate"] >= MIN_TURNOVER_RATE)
+            & (latest["turnover_rate"] <= MAX_TURNOVER_RATE)
+            & (latest["bias_20"] >= MIN_BIAS_20)
             & (latest["ma_10"] > latest["ma_20"])
             & (latest["ma_20"] > latest["ma_30"])
             & (latest["qfq_close"] >= latest["ma_10"] * T_CLOSE_MA10_MIN_MULTIPLE)
@@ -169,7 +175,8 @@ class SharpRisePullbackLeaderLifecycle:
         t_ma30 = _frame_float(frame, "ma_30", t_position)
         unadjusted_close = _to_positive_float(row.get("close"))
         turnover_rate = _to_float(row.get("turnover_rate"))
-        if None in (t_close, t_ma10, t_ma20, t_ma30, unadjusted_close, turnover_rate):
+        bias_20 = _to_float(row.get("bias_20"))
+        if None in (t_close, t_ma10, t_ma20, t_ma30, unadjusted_close, turnover_rate, bias_20):
             return None
         assert t_close is not None
         assert t_ma10 is not None
@@ -177,7 +184,12 @@ class SharpRisePullbackLeaderLifecycle:
         assert t_ma30 is not None
         assert unadjusted_close is not None
         assert turnover_rate is not None
-        if unadjusted_close < MIN_UNADJUSTED_CLOSE or turnover_rate < MIN_TURNOVER_RATE:
+        assert bias_20 is not None
+        if unadjusted_close < MIN_UNADJUSTED_CLOSE:
+            return None
+        if not MIN_TURNOVER_RATE <= turnover_rate <= MAX_TURNOVER_RATE:
+            return None
+        if bias_20 < MIN_BIAS_20:
             return None
         if not (
             t_ma10 * T_CLOSE_MA10_MIN_MULTIPLE
@@ -210,8 +222,6 @@ class SharpRisePullbackLeaderLifecycle:
         if s_close is None or s_close <= 0:
             return None
         h_gain_from_s_close = h_high / s_close - 1.0
-        if not MIN_H_GAIN_FROM_S_CLOSE <= h_gain_from_s_close <= MAX_H_GAIN_FROM_S_CLOSE:
-            return None
 
         l_position = _latest_extreme_index(
             frame,
@@ -314,6 +324,7 @@ class SharpRisePullbackLeaderLifecycle:
             )
         extras = {
             "pattern": "sharp_rise_pullback_leader",
+            "strategy_version": STRATEGY_VERSION,
             "t_date": trade_date.isoformat(),
             "t_qfq_close": float(t_close),
             "t_ma10": float(t_ma10),
@@ -321,6 +332,7 @@ class SharpRisePullbackLeaderLifecycle:
             "t_ma30": float(t_ma30),
             "t_unadjusted_close": float(unadjusted_close),
             "t_turnover_rate": float(turnover_rate),
+            "t_bias_20": float(bias_20),
             "s_date": s_date.isoformat(),
             "s_close": float(s_close),
             "s_to_t_bars": int(s_to_t_bars),
@@ -486,10 +498,10 @@ class SharpRisePullbackLeaderLifecycle:
         decisions: list[StrategyBuyDecision] = []
         reserved_cash = 0.0
         candidates: list[tuple[Any, float, float]] = []
-        unlimited_positions = bool(context.params.get("signal_replay_unlimited_positions"))
+        fixed_lot = bool(context.params.get("signal_replay_fixed_lot"))
         available_slots = (
             len(context.watch_pool)
-            if unlimited_positions
+            if fixed_lot
             else max(MAX_HOLDINGS - len(context.holdings), 0)
         )
         if available_slots <= 0:
@@ -541,7 +553,7 @@ class SharpRisePullbackLeaderLifecycle:
                 cash=max(context.cash - reserved_cash, 0.0),
                 total_asset=context.total_asset,
                 price=buy_price,
-                fixed_lot=unlimited_positions,
+                fixed_lot=fixed_lot,
             )
             if quantity <= 0:
                 continue

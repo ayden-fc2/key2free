@@ -8,12 +8,14 @@ from unittest.mock import patch
 import pandas as pd
 
 from app.entities.stock_data_context import StockDailyFrame
+from app.services.strategy_registry import get_strategy
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
 from strategies.sharp_rise_pullback_leader.strategy import (
     CLOSE_WEAKNESS_MAX_DAILY_RETURN,
     ENABLE_CLOSE_WEAKNESS_EXIT,
     ENABLE_TRAILING_EXIT,
     PROFIT_ACTIVATION_GAIN,
+    STRATEGY_VERSION,
     SharpRisePullbackLeaderLifecycle,
     _buy_quantity,
     _calculate_buy_price,
@@ -26,12 +28,18 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
     def setUp(self) -> None:
         self.lifecycle = SharpRisePullbackLeaderLifecycle()
 
+    def test_registry_loads_bias20_for_signal_selection(self) -> None:
+        registration = get_strategy("sharp_rise_pullback_leader")
+        self.assertIsNotNone(registration)
+        assert registration is not None
+        self.assertIn("bias_20", registration.signal_required_columns or ())
+
     def test_builds_exact_s_h_l_t_model_and_bug_price(self) -> None:
         frame = self._valid_frame()
         trade_date = frame.trade_dates[-1]
         result = self.lifecycle._select_signal_from_frame(
             code="sh.600000",
-            row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+            row={"name": "测试股票", "close": 12.0, "turnover_rate": 8.0, "bias_20": 0.10},
             frame=frame,
             trade_date=trade_date,
         )
@@ -39,18 +47,20 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         self.assertIsNotNone(result)
         extras = result["signal"]["extras"]
         self.assertEqual(extras["s_date"], frame.trade_dates[0].isoformat())
-        self.assertAlmostEqual(extras["s_close"], 90.0)
+        self.assertAlmostEqual(extras["s_close"], 80.0)
         self.assertEqual(extras["s_to_t_bars"], 24)
         self.assertEqual(extras["h_date"], frame.trade_dates[18].isoformat())
         self.assertEqual(extras["h_to_t_bars"], 6)
         self.assertEqual(extras["l_date"], frame.trade_dates[21].isoformat())
         self.assertAlmostEqual(extras["h_high"], 120.0)
-        self.assertAlmostEqual(extras["h_gain_from_s_close"], 1.0 / 3.0)
+        self.assertAlmostEqual(extras["h_gain_from_s_close"], 0.50)
         self.assertAlmostEqual(extras["l_low"], 108.0)
         self.assertAlmostEqual(extras["h_to_l_drawdown"], 0.10)
         self.assertAlmostEqual(extras["bug_price"], 114.0)
         self.assertAlmostEqual(extras["stop_loss_price"], 108.0)
         self.assertEqual(result["signal"]["max_watch_days"], 5)
+        self.assertEqual(extras["strategy_version"], "1.0.0")
+        self.assertEqual(STRATEGY_VERSION, "1.0.0")
 
     def test_rejects_t_close_outside_ma10_pullback_band(self) -> None:
         for t_close in (108.0, 117.0):
@@ -62,7 +72,7 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
 
                 result = self.lifecycle._select_signal_from_frame(
                     code="sh.600000",
-                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 8.0, "bias_20": 0.10},
                     frame=frame,
                     trade_date=frame.trade_dates[-1],
                 )
@@ -78,14 +88,14 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
 
         result = self.lifecycle._select_signal_from_frame(
             code="sh.600000",
-            row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+            row={"name": "测试股票", "close": 12.0, "turnover_rate": 8.0, "bias_20": 0.10},
             frame=frame,
             trade_date=frame.trade_dates[-1],
         )
         self.assertIsNone(result)
 
-    def test_rejects_h_gain_from_s_close_outside_30_to_70_percent(self) -> None:
-        for s_close in (93.0, 70.0):
+    def test_does_not_filter_h_gain_from_s_close(self) -> None:
+        for s_close in (90.0, 70.0):
             with self.subTest(s_close=s_close):
                 frame = self._valid_frame()
                 closes = list(frame.columns["qfq_close"])
@@ -94,12 +104,12 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
 
                 result = self.lifecycle._select_signal_from_frame(
                     code="sh.600000",
-                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 8.0, "bias_20": 0.10},
                     frame=frame,
                     trade_date=frame.trade_dates[-1],
                 )
 
-                self.assertIsNone(result)
+                self.assertIsNotNone(result)
 
     def test_signal_selection_excludes_st_and_star_market_only(self) -> None:
         frame = self._valid_frame()
@@ -125,7 +135,8 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
                     "ma_20": 112.0,
                     "ma_30": 110.0,
                     "is_st": is_st,
-                    "turnover_rate": 6.0,
+                    "turnover_rate": 8.0,
+                    "bias_20": 0.10,
                 }
             )
 
@@ -144,6 +155,40 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         signals = self.lifecycle.select_signals(trade_date=trade_date, view=FakeView())
         self.assertEqual([signal["code"] for signal in signals], ["sz.000001"])
 
+    def test_rejects_t_day_bias20_and_turnover_outside_new_baseline(self) -> None:
+        invalid_rows = (
+            {"turnover_rate": 7.99, "bias_20": 0.10},
+            {"turnover_rate": 12.01, "bias_20": 0.10},
+            {"turnover_rate": 8.0, "bias_20": 0.0999},
+        )
+        for row_values in invalid_rows:
+            with self.subTest(row_values=row_values):
+                frame = self._valid_frame()
+                result = self.lifecycle._select_signal_from_frame(
+                    code="sh.600000",
+                    row={"name": "test", "close": 12.0, **row_values},
+                    frame=frame,
+                    trade_date=frame.trade_dates[-1],
+                )
+                self.assertIsNone(result)
+
+    def test_accepts_t_day_bias20_and_turnover_boundaries(self) -> None:
+        for turnover_rate in (8.0, 12.0):
+            with self.subTest(turnover_rate=turnover_rate):
+                frame = self._valid_frame()
+                result = self.lifecycle._select_signal_from_frame(
+                    code="sh.600000",
+                    row={
+                        "name": "test",
+                        "close": 12.0,
+                        "turnover_rate": turnover_rate,
+                        "bias_20": 0.10,
+                    },
+                    frame=frame,
+                    trade_date=frame.trade_dates[-1],
+                )
+                self.assertIsNotNone(result)
+
     def test_buy_price_uses_higher_of_t_ma10_and_two_percent_confirmation(self) -> None:
         self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=101.0), 102.0)
         self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=103.0), 103.0)
@@ -156,10 +201,10 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         length = 25
         dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(length)]
         highs = [116.0] * length
-        highs[0] = 92.0
+        highs[0] = 82.0
         highs[18] = 120.0
         lows = [113.0] * length
-        lows[0] = 89.0
+        lows[0] = 78.0
         lows[18] = 115.0
         lows[19] = 112.0
         lows[20] = 110.0
@@ -168,7 +213,7 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         lows[23] = 110.0
         lows[24] = 110.0
         closes = [114.0] * length
-        closes[0] = 90.0
+        closes[0] = 80.0
         closes[24] = 111.0
         ma10 = [112.0] * length
         ma20 = [110.0] * length
@@ -231,18 +276,18 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertAlmostEqual(decisions[0].price, 110.0)
-        self.assertEqual(decisions[0].quantity, 300)
-        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 100_000.0 / 3.0)
+        self.assertEqual(decisions[0].quantity, 200)
+        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 100_000.0 / 4.0)
         self.assertAlmostEqual(decisions[0].signal["extras"]["highest_price_since_buy"], 110.0)
 
-    def test_position_uses_one_third_total_asset_in_board_lots(self) -> None:
+    def test_position_uses_one_quarter_total_asset_in_board_lots(self) -> None:
         self.assertEqual(
             _buy_quantity(cash=500_000.0, total_asset=500_000.0, price=12.0),
-            13_800,
+            10_400,
         )
         self.assertEqual(
             _buy_quantity(cash=500_000.0, total_asset=500_000.0, price=110.0),
-            1_500,
+            1_100,
         )
         self.assertEqual(
             _buy_quantity(cash=100_000.0, total_asset=500_000.0, price=110.0),
@@ -260,10 +305,10 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
             100,
         )
 
-    def test_does_not_buy_when_three_positions_are_already_held(self) -> None:
+    def test_does_not_buy_when_four_positions_are_already_held(self) -> None:
         holdings = {
             f"sh.60000{index}": SimpleNamespace(code=f"sh.60000{index}")
-            for index in range(1, 4)
+            for index in range(1, 5)
         }
         context = self._context(
             trade_index=1,
@@ -274,7 +319,27 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
             today_bars={self.watch_item.code: (105.0, 111.0, 104.0, 109.0, 1000.0, 0.0, 0.0, 104.0)}
         )
 
-        self.assertEqual(self.lifecycle.decide_buys(context=context, market=market), [])
+        decisions = self.lifecycle.decide_buys(context=context, market=market)
+        self.assertEqual(decisions, [])
+
+    def test_signal_replay_ignores_four_position_limit(self) -> None:
+        holdings = {
+            f"sh.60000{index}": SimpleNamespace(code=f"sh.60000{index}")
+            for index in range(1, 5)
+        }
+        context = self._context(
+            trade_index=1,
+            holdings=holdings,
+            watch_pool={self.watch_item.code: self.watch_item},
+        )
+        context.params["signal_replay_fixed_lot"] = True
+        market = MarketViews(
+            today_bars={self.watch_item.code: (105.0, 111.0, 104.0, 109.0, 1000.0, 0.0, 0.0, 104.0)}
+        )
+
+        decisions = self.lifecycle.decide_buys(context=context, market=market)
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].quantity, 100)
 
     def test_l_low_invalidation_prevents_buy_and_removes_watch(self) -> None:
         context = self._context(trade_index=1, watch_pool={self.watch_item.code: self.watch_item})

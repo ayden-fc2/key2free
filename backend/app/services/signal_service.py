@@ -275,7 +275,7 @@ class SignalService:
                 trading_clocks=trading_clocks,
             )
             params["run_no"] = 1
-            params["signal_replay_unlimited_positions"] = True
+            params["signal_replay_fixed_lot"] = True
 
             context = StrategyContext(
                 trade_date=day,
