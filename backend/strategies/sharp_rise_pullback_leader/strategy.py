@@ -31,9 +31,11 @@ BUY_L_MA20_BOUNDARY = 1.01
 BUY_L_MA10_BOUNDARY = 0.99
 T_CLOSE_MA10_MAX_MULTIPLE = 1.05
 WATCH_MAX_DAYS = 5
+TRAILING_ACTIVATION_GAIN = 0.08
+TRAILING_ACTIVATION_MULTIPLE = 1.0 + TRAILING_ACTIVATION_GAIN
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
-POSITION_FRACTION = 0.33
+MAX_BUY_AMOUNT = 2_000.0
 
 SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS: tuple[str, ...] = ()
 
@@ -256,13 +258,17 @@ class SharpRisePullbackLeaderLifecycle:
             "bug_price": float(bug_price),
             "entry_trigger_price": float(bug_price),
             "watch_max_days": WATCH_MAX_DAYS,
+            "trailing_activation_gain": TRAILING_ACTIVATION_GAIN,
             "trailing_drawdown": TRAILING_DRAWDOWN,
-            "position_fraction": POSITION_FRACTION,
+            "max_buy_amount": MAX_BUY_AMOUNT,
             "entry_rule": (
                 "observe T+1 through T+5; invalidate if low<=L low; buy at bug_price only when the "
                 "observation-day range covers it; remove a full-day gap above bug_price"
             ),
-            "exit_rule": "close<=L low at close; otherwise sell on a 4% drawdown from the confirmed holding high",
+            "exit_rule": (
+                "close<=L low at close; otherwise, after confirmed holding high reaches 108% of "
+                "buy price, sell on a 4% drawdown from the confirmed holding high"
+            ),
         }
         signal_payload = {
             "triggered": True,
@@ -278,12 +284,12 @@ class SharpRisePullbackLeaderLifecycle:
                     "description": "持仓日收盘价小于等于 L 日前复权最低价时，按当日收盘价卖出。",
                 },
                 {
-                    "name": "持仓最高价回撤止盈",
+                    "name": "浮盈 8% 后最高价回撤止盈",
                     "rule_type": "dynamic",
                     "timing": "盘中",
-                    "trigger_price": "买入后已确认最高价 × 0.96",
+                    "trigger_price": "已确认最高价达到买入价 × 1.08 后，最高价 × 0.96",
                     "sell_price": "回撤 4% 触发价；跳空低于触发价时按当时开盘价",
-                    "description": "不设置最低浮盈门槛，买入后价格从已确认持仓最高价回撤达到 4% 时卖出。",
+                    "description": "买入后已确认最高价达到买入价的 108% 才激活；此后回撤达到 4% 时卖出。",
                 },
             ],
             "max_watch_days": WATCH_MAX_DAYS,
@@ -299,7 +305,7 @@ class SharpRisePullbackLeaderLifecycle:
                 ),
                 "sell": [
                     f"结构止损：持仓日收盘价小于等于 L_low {l_low:.3f}，按收盘价卖出。",
-                    "动态回撤：从买入后已确认最高价回撤达到 4% 时卖出，无最低浮盈门槛。",
+                    "动态止盈：买入后已确认最高价累计上涨达到 8% 后，冲高回落 4% 时卖出。",
                 ],
             },
             "extras": extras,
@@ -340,14 +346,16 @@ class SharpRisePullbackLeaderLifecycle:
                 getattr(holding, "signal", {}),
                 "highest_price_since_buy",
             )
+            buy_price = _to_positive_float(getattr(holding, "buy_price", None))
             if known_high is None:
-                known_high = _to_positive_float(getattr(holding, "buy_price", None))
-            if known_high is None:
+                known_high = buy_price
+            if known_high is None or buy_price is None:
                 continue
 
             trailing_price, updated_high = _trailing_exit_for_day(
                 code=code,
                 trade_date=context.trade_date,
+                buy_price=buy_price,
                 known_high=known_high,
                 daily_bar=bar,
             )
@@ -357,7 +365,7 @@ class SharpRisePullbackLeaderLifecycle:
                         code=code,
                         price=trailing_price,
                         quantity=int(holding.quantity),
-                        reason="confirmed_high_drawdown_4pct",
+                        reason="profit_8pct_then_high_drawdown_4pct",
                     )
                 )
                 continue
@@ -434,7 +442,6 @@ class SharpRisePullbackLeaderLifecycle:
             quantity = _buy_quantity(
                 cash=max(context.cash - reserved_cash, 0.0),
                 price=buy_price,
-                max_amount=max(context.total_asset * POSITION_FRACTION, 0.0),
             )
             if quantity <= 0:
                 continue
@@ -599,18 +606,24 @@ def _trailing_exit_for_day(
     *,
     code: str,
     trade_date: date,
+    buy_price: float,
     known_high: float,
     daily_bar: tuple[float, ...],
 ) -> tuple[float | None, float]:
+    activation_price = buy_price * TRAILING_ACTIVATION_MULTIPLE
     minute_bars = _load_qfq_5min_bars(code, trade_date)
     if minute_bars:
         running_high = known_high
         for open_price, high, low, _ in minute_bars:
-            stop_price = running_high * TRAILING_REMAINING_MULTIPLE
-            if open_price <= stop_price:
-                return (open_price, running_high)
-            if low <= stop_price <= high:
-                return (stop_price, running_high)
+            if running_high >= activation_price:
+                stop_price = running_high * TRAILING_REMAINING_MULTIPLE
+                if open_price <= stop_price:
+                    return (open_price, running_high)
+            running_high = max(running_high, open_price)
+            if running_high >= activation_price:
+                stop_price = running_high * TRAILING_REMAINING_MULTIPLE
+                if low <= stop_price:
+                    return (stop_price, running_high)
             running_high = max(running_high, high)
         return (None, running_high)
 
@@ -619,12 +632,16 @@ def _trailing_exit_for_day(
     today_low = _bar_low(daily_bar)
     if today_open is None or today_high is None or today_low is None:
         return (None, known_high)
-    stop_price = known_high * TRAILING_REMAINING_MULTIPLE
-    if today_open <= stop_price:
-        return (today_open, known_high)
-    if today_low <= stop_price <= today_high:
-        return (stop_price, known_high)
-    return (None, max(known_high, today_high))
+    if known_high >= activation_price:
+        stop_price = known_high * TRAILING_REMAINING_MULTIPLE
+        if today_open <= stop_price:
+            return (today_open, known_high)
+    running_high = max(known_high, today_open)
+    if running_high >= activation_price:
+        stop_price = running_high * TRAILING_REMAINING_MULTIPLE
+        if today_low <= stop_price:
+            return (stop_price, running_high)
+    return (None, max(running_high, today_high))
 
 
 @lru_cache(maxsize=4096)
@@ -761,12 +778,11 @@ def _is_tradeable_bar(bar: tuple[float, ...] | None) -> bool:
     )
 
 
-def _buy_quantity(*, cash: float, price: float, max_amount: float) -> int:
+def _buy_quantity(*, cash: float, price: float) -> int:
     if cash <= 0 or price <= 0:
         return 0
-    amount = min(cash, max_amount)
-    lots = int(amount // (price * 100 * 1.0005))
-    return lots * 100 if lots > 0 else 0
+    amount = min(cash / 1.0005, MAX_BUY_AMOUNT)
+    return max(int(amount // price), 0)
 
 
 def _randomized_candidates(

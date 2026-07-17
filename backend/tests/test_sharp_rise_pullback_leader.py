@@ -11,6 +11,7 @@ from app.entities.stock_data_context import StockDailyFrame
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
 from strategies.sharp_rise_pullback_leader.strategy import (
     SharpRisePullbackLeaderLifecycle,
+    _buy_quantity,
     _calculate_raw_buy_price,
     _trailing_exit_for_day,
 )
@@ -195,8 +196,14 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertAlmostEqual(decisions[0].price, 110.0)
-        self.assertGreater(decisions[0].quantity, 0)
+        self.assertEqual(decisions[0].quantity, 18)
+        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 2_000.0)
         self.assertAlmostEqual(decisions[0].signal["extras"]["highest_price_since_buy"], 110.0)
+
+    def test_research_position_uses_integer_shares_below_2000_yuan(self) -> None:
+        self.assertEqual(_buy_quantity(cash=100_000.0, price=12.0), 166)
+        self.assertEqual(_buy_quantity(cash=100_000.0, price=110.0), 18)
+        self.assertEqual(_buy_quantity(cash=100_000.0, price=2_001.0), 0)
 
     def test_l_low_invalidation_prevents_buy_and_removes_watch(self) -> None:
         context = self._context(trade_index=1, watch_pool={self.watch_item.code: self.watch_item})
@@ -230,7 +237,7 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
-    def test_trailing_drawdown_has_no_profit_activation_threshold(self, _minute_bars: object) -> None:
+    def test_trailing_drawdown_is_inactive_below_8pct_profit(self, _minute_bars: object) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
             buy_price=115.0,
@@ -245,9 +252,31 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
 
         decisions = self.lifecycle.decide_sells(context=context, market=market)
 
+        self.assertEqual(decisions, [])
+        self.assertAlmostEqual(holding.signal["extras"]["highest_price_since_buy"], 121.0)
+
+    @patch(
+        "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
+        return_value=(),
+    )
+    def test_trailing_drawdown_activates_after_8pct_profit(self, _minute_bars: object) -> None:
+        holding = SimpleNamespace(
+            buy_trade_index=0,
+            buy_price=100.0,
+            quantity=100,
+            max_high_since_buy=110.0,
+            signal={"extras": {"l_low": 90.0, "highest_price_since_buy": 110.0}},
+        )
+        context = self._context(trade_index=1, holdings={"sh.600000": holding})
+        market = MarketViews(
+            today_bars={"sh.600000": (109.0, 111.0, 105.0, 107.0, 1000.0, 0.0, 0.0, 108.0)}
+        )
+
+        decisions = self.lifecycle.decide_sells(context=context, market=market)
+
         self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0].reason, "confirmed_high_drawdown_4pct")
-        self.assertAlmostEqual(decisions[0].price, 115.2)
+        self.assertEqual(decisions[0].reason, "profit_8pct_then_high_drawdown_4pct")
+        self.assertAlmostEqual(decisions[0].price, 105.6)
 
     @patch(
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
@@ -302,11 +331,31 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         price, high = _trailing_exit_for_day(
             code="sh.600000",
             trade_date=date(2026, 7, 15),
+            buy_price=100.0,
             known_high=100.0,
             daily_bar=(100.0, 110.0, 97.0, 108.0, 1000.0, 0.0, 0.0, 100.0),
         )
         self.assertIsNone(price)
         self.assertAlmostEqual(high, 110.0)
+
+    @patch(
+        "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
+        return_value=((107.0, 108.0, 106.0, 107.0), (107.0, 109.0, 103.0, 104.0)),
+    )
+    def test_five_minute_drawdown_activates_after_confirmed_8pct_high(
+        self,
+        _minute_bars: object,
+    ) -> None:
+        price, high = _trailing_exit_for_day(
+            code="sh.600000",
+            trade_date=date(2026, 7, 15),
+            buy_price=100.0,
+            known_high=107.0,
+            daily_bar=(107.0, 109.0, 103.0, 104.0, 1000.0, 0.0, 0.0, 106.0),
+        )
+
+        self.assertAlmostEqual(price or 0.0, 103.68)
+        self.assertAlmostEqual(high, 108.0)
 
     def _context(
         self,
