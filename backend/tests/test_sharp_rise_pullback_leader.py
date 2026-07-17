@@ -209,14 +209,14 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertAlmostEqual(decisions[0].price, 110.0)
-        self.assertEqual(decisions[0].quantity, 18)
-        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 2_000.0)
+        self.assertEqual(decisions[0].quantity, 100)
+        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 20_000.0)
         self.assertAlmostEqual(decisions[0].signal["extras"]["highest_price_since_buy"], 110.0)
 
-    def test_research_position_uses_integer_shares_below_2000_yuan(self) -> None:
-        self.assertEqual(_buy_quantity(cash=100_000.0, price=12.0), 166)
-        self.assertEqual(_buy_quantity(cash=100_000.0, price=110.0), 18)
-        self.assertEqual(_buy_quantity(cash=100_000.0, price=2_001.0), 0)
+    def test_research_position_uses_board_lots_below_20000_yuan(self) -> None:
+        self.assertEqual(_buy_quantity(cash=500_000.0, price=12.0), 1_600)
+        self.assertEqual(_buy_quantity(cash=500_000.0, price=110.0), 100)
+        self.assertEqual(_buy_quantity(cash=500_000.0, price=201.0), 0)
 
     def test_l_low_invalidation_prevents_buy_and_removes_watch(self) -> None:
         context = self._context(trade_index=1, watch_pool={self.watch_item.code: self.watch_item})

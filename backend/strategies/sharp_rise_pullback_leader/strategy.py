@@ -39,7 +39,8 @@ ENABLE_CLOSE_WEAKNESS_EXIT = True
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
-MAX_BUY_AMOUNT = 2_000.0
+MAX_BUY_AMOUNT = 20_000.0
+BUY_LOT_SIZE = 100
 
 SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS: tuple[str, ...] = ()
 
@@ -335,6 +336,7 @@ class SharpRisePullbackLeaderLifecycle:
             "enable_trailing_exit": ENABLE_TRAILING_EXIT,
             "enable_close_weakness_exit": ENABLE_CLOSE_WEAKNESS_EXIT,
             "max_buy_amount": MAX_BUY_AMOUNT,
+            "buy_lot_size": BUY_LOT_SIZE,
             "entry_rule": (
                 "observe T+1 through T+5; invalidate if low<=L low; buy at bug_price only when the "
                 "observation-day range covers it; remove a full-day gap above bug_price"
@@ -871,7 +873,8 @@ def _buy_quantity(*, cash: float, price: float) -> int:
     if cash <= 0 or price <= 0:
         return 0
     amount = min(cash / 1.0005, MAX_BUY_AMOUNT)
-    return max(int(amount // price), 0)
+    lot_cost = price * BUY_LOT_SIZE
+    return max(int(amount // lot_cost) * BUY_LOT_SIZE, 0)
 
 
 def _randomized_candidates(
