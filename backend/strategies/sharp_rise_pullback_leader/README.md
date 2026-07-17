@@ -93,10 +93,10 @@ bug_price = max(T_MA10, T_qfq_close * 1.02)
 信号日冻结止损价：
 
 ```text
-stop_loss_price = max(L_low, T_qfq_close * 0.90)
+stop_loss_price = max(L_low, T_qfq_close * 0.92)
 ```
 
-若持仓日收盘价 `qfq_close <= stop_loss_price`，按当日前复权收盘价卖出。该规则保留 L 结构低点止损，同时确保止损线不低于 T 日收盘价的 90%。观察池在买入前仍使用 `L_low` 判断结构失效，不使用持仓止损价。
+若持仓日收盘价 `qfq_close <= stop_loss_price`，按当日前复权收盘价卖出。该规则保留 L 结构低点止损，同时确保止损线不低于 T 日收盘价的 92%。观察池在买入前仍使用 `L_low` 判断结构失效，不使用持仓止损价。
 
 ### 2. 浮盈达到 6% 后收盘走弱卖出
 
@@ -127,7 +127,7 @@ L_MA10_MAX_MULTIPLE = 1.02
 T_CLOSE_MA10_MIN_MULTIPLE = 0.95
 T_CLOSE_MA10_MAX_MULTIPLE = 1.02
 BUY_T_CLOSE_CONFIRMATION_MULTIPLE = 1.02
-T_CLOSE_STOP_MULTIPLE = 0.90
+T_CLOSE_STOP_MULTIPLE = 0.92
 WATCH_MAX_DAYS = 5
 PROFIT_ACTIVATION_GAIN = 0.06
 ENABLE_TRAILING_EXIT = false

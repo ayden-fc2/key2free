@@ -129,9 +129,9 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=101.0), 102.0)
         self.assertAlmostEqual(_calculate_buy_price(t_close=100.0, t_ma10=103.0), 103.0)
 
-    def test_stop_loss_uses_higher_of_l_low_and_t_close_90pct(self) -> None:
+    def test_stop_loss_uses_higher_of_l_low_and_t_close_92pct(self) -> None:
         self.assertAlmostEqual(_calculate_stop_loss_price(l_low=95.0, t_close=100.0), 95.0)
-        self.assertAlmostEqual(_calculate_stop_loss_price(l_low=85.0, t_close=100.0), 90.0)
+        self.assertAlmostEqual(_calculate_stop_loss_price(l_low=85.0, t_close=100.0), 92.0)
 
     def _valid_frame(self) -> StockDailyFrame:
         length = 25

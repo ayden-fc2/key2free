@@ -30,7 +30,7 @@ L_MA10_MAX_MULTIPLE = 1.02
 T_CLOSE_MA10_MIN_MULTIPLE = 0.95
 T_CLOSE_MA10_MAX_MULTIPLE = 1.02
 BUY_T_CLOSE_CONFIRMATION_MULTIPLE = 1.02
-T_CLOSE_STOP_MULTIPLE = 0.90
+T_CLOSE_STOP_MULTIPLE = 0.92
 WATCH_MAX_DAYS = 5
 PROFIT_ACTIVATION_GAIN = 0.06
 PROFIT_ACTIVATION_MULTIPLE = 1.0 + PROFIT_ACTIVATION_GAIN
@@ -248,14 +248,14 @@ class SharpRisePullbackLeaderLifecycle:
                 "timing": "收盘",
                 "trigger_price": float(stop_loss_price),
                 "sell_price": "当日前复权收盘价",
-                "description": "持仓日收盘价小于等于 max(L_low, T_close × 0.90) 时，按当日收盘价卖出。",
+                "description": "持仓日收盘价小于等于 max(L_low, T_close × 0.92) 时，按当日收盘价卖出。",
             }
         ]
         display_sell_rules = [
             f"收盘止损：持仓日收盘价小于等于 {stop_loss_price:.3f}"
-            "（L_low 与 T_close × 0.90 取高），按收盘价卖出。"
+            "（L_low 与 T_close × 0.92 取高），按收盘价卖出。"
         ]
-        exit_rule_parts = ["close<=max(L low, T close*0.90) at close"]
+        exit_rule_parts = ["close<=max(L low, T close*0.92) at close"]
         if ENABLE_TRAILING_EXIT:
             sell_rules.append(
                 {
