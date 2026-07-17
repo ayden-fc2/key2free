@@ -22,6 +22,8 @@ MIN_UNADJUSTED_CLOSE = 10.0
 MIN_TURNOVER_RATE = 6.0
 SIGNAL_LOOKBACK_BARS = 200
 MIN_MA_STACK_DISTANCE = 17
+MIN_H_GAIN_FROM_S_CLOSE = 0.30
+MAX_H_GAIN_FROM_S_CLOSE = 0.70
 HIGH_TO_T_MIN_BARS = 3
 HIGH_TO_T_MAX_BARS = 10
 MIN_HIGH_TO_LOW_DRAWDOWN = 0.07
@@ -39,7 +41,8 @@ ENABLE_CLOSE_WEAKNESS_EXIT = True
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
-MAX_BUY_AMOUNT = 20_000.0
+MAX_HOLDINGS = 3
+POSITION_ASSET_FRACTION = 1.0 / 3.0
 BUY_LOT_SIZE = 100
 
 SHARP_RISE_PULLBACK_LEADER_REQUIRED_COLUMNS: tuple[str, ...] = ()
@@ -203,6 +206,12 @@ class SharpRisePullbackLeaderLifecycle:
         h_high = _frame_float(frame, "qfq_high", h_position)
         if h_high is None or h_high <= 0:
             return None
+        s_close = _frame_float(frame, "qfq_close", s_position)
+        if s_close is None or s_close <= 0:
+            return None
+        h_gain_from_s_close = h_high / s_close - 1.0
+        if not MIN_H_GAIN_FROM_S_CLOSE <= h_gain_from_s_close <= MAX_H_GAIN_FROM_S_CLOSE:
+            return None
 
         l_position = _latest_extreme_index(
             frame,
@@ -313,9 +322,11 @@ class SharpRisePullbackLeaderLifecycle:
             "t_unadjusted_close": float(unadjusted_close),
             "t_turnover_rate": float(turnover_rate),
             "s_date": s_date.isoformat(),
+            "s_close": float(s_close),
             "s_to_t_bars": int(s_to_t_bars),
             "h_date": h_date.isoformat(),
             "h_high": float(h_high),
+            "h_gain_from_s_close": float(h_gain_from_s_close),
             "h_to_t_bars": int(h_to_t_bars),
             "l_date": l_date.isoformat(),
             "l_low": float(l_low),
@@ -335,7 +346,8 @@ class SharpRisePullbackLeaderLifecycle:
             "close_weakness_max_daily_return": CLOSE_WEAKNESS_MAX_DAILY_RETURN,
             "enable_trailing_exit": ENABLE_TRAILING_EXIT,
             "enable_close_weakness_exit": ENABLE_CLOSE_WEAKNESS_EXIT,
-            "max_buy_amount": MAX_BUY_AMOUNT,
+            "max_holdings": MAX_HOLDINGS,
+            "position_asset_fraction": POSITION_ASSET_FRACTION,
             "buy_lot_size": BUY_LOT_SIZE,
             "entry_rule": (
                 "observe T+1 through T+5; invalidate if low<=L low; buy at bug_price only when the "
@@ -474,6 +486,14 @@ class SharpRisePullbackLeaderLifecycle:
         decisions: list[StrategyBuyDecision] = []
         reserved_cash = 0.0
         candidates: list[tuple[Any, float, float]] = []
+        unlimited_positions = bool(context.params.get("signal_replay_unlimited_positions"))
+        available_slots = (
+            len(context.watch_pool)
+            if unlimited_positions
+            else max(MAX_HOLDINGS - len(context.holdings), 0)
+        )
+        if available_slots <= 0:
+            return decisions
 
         for item in context.watch_pool.values():
             if item.code in context.holdings:
@@ -509,6 +529,8 @@ class SharpRisePullbackLeaderLifecycle:
             candidates.append((item, bug_price, entry_known_high))
 
         for item, buy_price, entry_known_high in _randomized_candidates(candidates, context=context):
+            if len(decisions) >= available_slots:
+                break
             signal = _with_entry_fields(
                 item.signal,
                 watch_trade_days=context.trade_index - item.added_trade_index,
@@ -517,7 +539,9 @@ class SharpRisePullbackLeaderLifecycle:
             )
             quantity = _buy_quantity(
                 cash=max(context.cash - reserved_cash, 0.0),
+                total_asset=context.total_asset,
                 price=buy_price,
+                fixed_lot=unlimited_positions,
             )
             if quantity <= 0:
                 continue
@@ -869,10 +893,18 @@ def _is_tradeable_bar(bar: tuple[float, ...] | None) -> bool:
     )
 
 
-def _buy_quantity(*, cash: float, price: float) -> int:
-    if cash <= 0 or price <= 0:
+def _buy_quantity(
+    *,
+    cash: float,
+    total_asset: float,
+    price: float,
+    fixed_lot: bool = False,
+) -> int:
+    if cash <= 0 or total_asset <= 0 or price <= 0:
         return 0
-    amount = min(cash / 1.0005, MAX_BUY_AMOUNT)
+    if fixed_lot:
+        return BUY_LOT_SIZE if cash >= price * BUY_LOT_SIZE * 1.0005 else 0
+    amount = min(cash / 1.0005, total_asset * POSITION_ASSET_FRACTION)
     lot_cost = price * BUY_LOT_SIZE
     return max(int(amount // lot_cost) * BUY_LOT_SIZE, 0)
 

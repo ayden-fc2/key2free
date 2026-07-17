@@ -39,11 +39,13 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         self.assertIsNotNone(result)
         extras = result["signal"]["extras"]
         self.assertEqual(extras["s_date"], frame.trade_dates[0].isoformat())
+        self.assertAlmostEqual(extras["s_close"], 90.0)
         self.assertEqual(extras["s_to_t_bars"], 24)
         self.assertEqual(extras["h_date"], frame.trade_dates[18].isoformat())
         self.assertEqual(extras["h_to_t_bars"], 6)
         self.assertEqual(extras["l_date"], frame.trade_dates[21].isoformat())
         self.assertAlmostEqual(extras["h_high"], 120.0)
+        self.assertAlmostEqual(extras["h_gain_from_s_close"], 1.0 / 3.0)
         self.assertAlmostEqual(extras["l_low"], 108.0)
         self.assertAlmostEqual(extras["h_to_l_drawdown"], 0.10)
         self.assertAlmostEqual(extras["bug_price"], 114.0)
@@ -81,6 +83,23 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
             trade_date=frame.trade_dates[-1],
         )
         self.assertIsNone(result)
+
+    def test_rejects_h_gain_from_s_close_outside_30_to_70_percent(self) -> None:
+        for s_close in (93.0, 70.0):
+            with self.subTest(s_close=s_close):
+                frame = self._valid_frame()
+                closes = list(frame.columns["qfq_close"])
+                closes[0] = s_close
+                frame.columns["qfq_close"] = closes
+
+                result = self.lifecycle._select_signal_from_frame(
+                    code="sh.600000",
+                    row={"name": "测试股票", "close": 12.0, "turnover_rate": 6.0},
+                    frame=frame,
+                    trade_date=frame.trade_dates[-1],
+                )
+
+                self.assertIsNone(result)
 
     def test_signal_selection_excludes_st_and_star_market_only(self) -> None:
         frame = self._valid_frame()
@@ -137,8 +156,10 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         length = 25
         dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(length)]
         highs = [116.0] * length
+        highs[0] = 92.0
         highs[18] = 120.0
         lows = [113.0] * length
+        lows[0] = 89.0
         lows[18] = 115.0
         lows[19] = 112.0
         lows[20] = 110.0
@@ -147,6 +168,7 @@ class SharpRisePullbackLeaderSignalTests(unittest.TestCase):
         lows[23] = 110.0
         lows[24] = 110.0
         closes = [114.0] * length
+        closes[0] = 90.0
         closes[24] = 111.0
         ma10 = [112.0] * length
         ma20 = [110.0] * length
@@ -209,14 +231,50 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
 
         self.assertEqual(len(decisions), 1)
         self.assertAlmostEqual(decisions[0].price, 110.0)
-        self.assertEqual(decisions[0].quantity, 100)
-        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 20_000.0)
+        self.assertEqual(decisions[0].quantity, 300)
+        self.assertLessEqual(decisions[0].price * decisions[0].quantity, 100_000.0 / 3.0)
         self.assertAlmostEqual(decisions[0].signal["extras"]["highest_price_since_buy"], 110.0)
 
-    def test_research_position_uses_board_lots_below_20000_yuan(self) -> None:
-        self.assertEqual(_buy_quantity(cash=500_000.0, price=12.0), 1_600)
-        self.assertEqual(_buy_quantity(cash=500_000.0, price=110.0), 100)
-        self.assertEqual(_buy_quantity(cash=500_000.0, price=201.0), 0)
+    def test_position_uses_one_third_total_asset_in_board_lots(self) -> None:
+        self.assertEqual(
+            _buy_quantity(cash=500_000.0, total_asset=500_000.0, price=12.0),
+            13_800,
+        )
+        self.assertEqual(
+            _buy_quantity(cash=500_000.0, total_asset=500_000.0, price=110.0),
+            1_500,
+        )
+        self.assertEqual(
+            _buy_quantity(cash=100_000.0, total_asset=500_000.0, price=110.0),
+            900,
+        )
+
+    def test_signal_replay_position_override_uses_one_lot(self) -> None:
+        self.assertEqual(
+            _buy_quantity(
+                cash=500_000.0,
+                total_asset=500_000.0,
+                price=110.0,
+                fixed_lot=True,
+            ),
+            100,
+        )
+
+    def test_does_not_buy_when_three_positions_are_already_held(self) -> None:
+        holdings = {
+            f"sh.60000{index}": SimpleNamespace(code=f"sh.60000{index}")
+            for index in range(1, 4)
+        }
+        context = self._context(
+            trade_index=1,
+            holdings=holdings,
+            watch_pool={self.watch_item.code: self.watch_item},
+        )
+        market = MarketViews(
+            today_bars={self.watch_item.code: (105.0, 111.0, 104.0, 109.0, 1000.0, 0.0, 0.0, 104.0)}
+        )
+
+        self.assertEqual(self.lifecycle.decide_buys(context=context, market=market), [])
 
     def test_l_low_invalidation_prevents_buy_and_removes_watch(self) -> None:
         context = self._context(trade_index=1, watch_pool={self.watch_item.code: self.watch_item})

@@ -35,6 +35,7 @@ T 日必须同时满足：
 在 `[S, T)` 中寻找前复权盘中最高价 `qfq_high` 最大的一日，记为 H；若最高价并列，取日期较晚的一日。
 
 - H 到 T 的交易日索引距离必须在 `3 ~ 10` 之间，包含边界。
+- S 到 H 的累计涨幅必须在 30% 到 70% 之间，包含边界：`0.30 <= H_qfq_high / S_qfq_close - 1 <= 0.70`。
 
 ### 4. L：回踩最低点
 
@@ -56,8 +57,8 @@ bug_price = max(T_MA10, T_qfq_close * 1.02)
 信号冻结字段至少包含：
 
 - T：日期、`qfq_close`、`MA10`、`MA20`、`MA30`、未复权 `close`、换手率。
-- S：日期、S 到 T 的交易日距离。
-- H：日期、`qfq_high`、H 到 T 的交易日距离。
+- S：日期、`qfq_close`、S 到 T 的交易日距离。
+- H：日期、`qfq_high`、`H_qfq_high / S_qfq_close - 1`、H 到 T 的交易日距离。
 - L：日期、`qfq_low`、`MA10`、`MA20`、H 到 L 的回撤幅度。
 - `bug_price`、`entry_trigger_price`、`stop_loss_price`、`max_watch_days = 5`。
 
@@ -82,7 +83,14 @@ bug_price = max(T_MA10, T_qfq_close * 1.02)
 - 旧观察项当日到期或失效时，只要当日收盘重新满足信号函数，最新 T 信号仍可重新建立观察项。
 - 已持仓股票忽略所有新信号，不重复加入观察池，也不根据新信号修改持仓的买入价或卖出规则。
 
-当前采用研究回测仓位模式：每笔买入金额不超过 `20000` 元，并在该金额及可用现金范围内按 A 股 `100` 股整数手向下取整。若一手成本超过 `20000` 元，则该候选不买入。配合 `500000` 元回测本金，理论上最多可同时容纳约 25 只满额持仓；实际最后一笔还会受到手续费和股票价格整手取整影响。买卖手续费仍由回测框架正常计算，仓位配置不参与信号筛选。
+真实交易仓位规则：
+
+1. 最多同时持有 3 只股票；已有持仓会占用对应仓位槽位。
+2. 每次买入的目标金额为买入当日总资产的三分之一，即 `target_amount = total_asset / 3`。
+3. 实际数量同时受目标金额、可用现金和手续费约束，并按 A 股 `100` 股整数手向下取整。
+4. 同一交易日有多个候选时，继续复用回测框架的随机候选顺序；买满剩余仓位后不再买入其他候选，避免按代码顺序产生固定偏差。
+
+当日信号模块的 10 日生命周期回放不使用真实仓位上限，并继续固定每只买入 100 股；该覆盖仅用于完整展示观察池和持仓池，不改变正式回测仓位逻辑。
 
 ## 三、卖出函数
 
@@ -119,6 +127,8 @@ daily_close_return = 当日收盘价 / 昨日收盘价 - 1
 MIN_UNADJUSTED_CLOSE = 10
 MIN_TURNOVER_RATE = 6
 MIN_MA_STACK_DISTANCE = 17
+MIN_H_GAIN_FROM_S_CLOSE = 0.30
+MAX_H_GAIN_FROM_S_CLOSE = 0.70
 HIGH_TO_T_MIN_BARS = 3
 HIGH_TO_T_MAX_BARS = 10
 MIN_HIGH_TO_LOW_DRAWDOWN = 0.07
@@ -134,14 +144,15 @@ ENABLE_TRAILING_EXIT = false
 ENABLE_CLOSE_WEAKNESS_EXIT = true
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
-MAX_BUY_AMOUNT = 20000
+MAX_HOLDINGS = 3
+POSITION_ASSET_FRACTION = 1 / 3
 BUY_LOT_SIZE = 100
 ```
 
 ## 五、无未来函数约束
 
 1. 信号选择在 T 日收盘后运行，只使用 `trade_date <= T` 的宽表记录。
-2. S、H、L 均从截至 T 日可见的历史窗口中确定，不读取 T+1 或更晚数据。
+2. S、H、L 及 S 收盘到 H 最高价的累计涨幅均从截至 T 日可见的历史窗口中确定，不读取 T+1 或更晚数据。
 3. T+1 至 T+5 的买入判断只使用当日可观察的前复权开盘、最高和最低价，以及信号日冻结的 `L_low` 和 `bug_price`。
 4. `stop_loss_price` 在 T 日收盘后由当时已知的 `L_low` 和 `T_qfq_close` 冻结；结构止损只在持仓日收盘后使用当日收盘价确认。
 5. 收盘走弱退出只在累计浮盈达到 6% 后激活，使用已经确认的持仓最高价、当日收盘价和昨日收盘价，不读取未来行情。
