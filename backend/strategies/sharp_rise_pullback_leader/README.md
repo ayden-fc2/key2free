@@ -98,22 +98,20 @@ stop_loss_price = max(L_low, T_qfq_close * 0.90)
 
 若持仓日收盘价 `qfq_close <= stop_loss_price`，按当日前复权收盘价卖出。该规则保留 L 结构低点止损，同时确保止损线不低于 T 日收盘价的 90%。观察池在买入前仍使用 `L_low` 判断结构失效，不使用持仓止损价。
 
-### 2. 浮盈达到 6% 后，最高价回撤 4% 卖出
+### 2. 浮盈达到 6% 后收盘走弱卖出
 
 买入后持续记录已经确认的持仓最高价：
 
 ```text
 activation_price = 买入价 * 1.06
-trailing_stop = 持仓最高价 * 0.96
+daily_close_return = 当日收盘价 / 昨日收盘价 - 1
 ```
 
-只有买入后的已确认最高价 `>= activation_price`，即累计浮盈达到 6%，才激活回撤止盈。激活后，价格从已确认的持仓最高价回撤达到 4% 时卖出。浮盈尚未达到 6% 时，不执行最高价回撤卖出。
+买入后的已确认最高价 `>= activation_price` 后，若 `daily_close_return <= 1.5%`，按当日前复权收盘价卖出。累计浮盈尚未达到 6% 时，不执行收盘走弱退出。
 
-优先使用 5 分钟线按时间顺序推进持仓最高价和止盈价。每根 5 分钟 K 线的开盘价先发生，可以安全用于更新最高价和激活止盈；该 K 线的盘中最高、最低价先后未知，因此盘中最高价只在该 K 线结束后确认，不假设同一根 K 线内先冲高再回落。若缺少 5 分钟线，日线开盘价可用于当日激活，盘中最高价留到下一交易日生效。
+累计浮盈是否达到 6% 使用买入后已经确认的最高价判断；收盘涨幅使用当日 `qfq_close` 与昨日 `qfq_close` 计算。两项数据在当日收盘时均已确定，因此按当日收盘价卖出不依赖未知盘中顺序。
 
-正常覆盖止盈价时按 `trailing_stop` 卖出；若开盘或后续 5 分钟 K 线直接跳空到止盈价下方，则按该时点开盘价卖出，避免以无法成交的更高价格进行乐观撮合。
-
-当前启用累计浮盈达到 6% 后的回撤止盈，不启用收盘走弱退出。
+当前启用累计浮盈达到 6% 后的收盘走弱退出，不启用盘中最高价回撤退出。
 
 ## 四、核心参数
 
@@ -132,8 +130,8 @@ BUY_T_CLOSE_CONFIRMATION_MULTIPLE = 1.02
 T_CLOSE_STOP_MULTIPLE = 0.90
 WATCH_MAX_DAYS = 5
 PROFIT_ACTIVATION_GAIN = 0.06
-ENABLE_TRAILING_EXIT = true
-ENABLE_CLOSE_WEAKNESS_EXIT = false
+ENABLE_TRAILING_EXIT = false
+ENABLE_CLOSE_WEAKNESS_EXIT = true
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 MAX_BUY_AMOUNT = 2000
@@ -145,4 +143,4 @@ MAX_BUY_AMOUNT = 2000
 2. S、H、L 均从截至 T 日可见的历史窗口中确定，不读取 T+1 或更晚数据。
 3. T+1 至 T+5 的买入判断只使用当日可观察的前复权开盘、最高和最低价，以及信号日冻结的 `L_low` 和 `bug_price`。
 4. `stop_loss_price` 在 T 日收盘后由当时已知的 `L_low` 和 `T_qfq_close` 冻结；结构止损只在持仓日收盘后使用当日收盘价确认。
-5. 动态回撤只使用买入后已经出现的价格；累计浮盈达到 6% 后才激活。5 分钟线按时间升序处理，日线回退逻辑不使用当日未知先后顺序构造止盈成交。
+5. 收盘走弱退出只在累计浮盈达到 6% 后激活，使用已经确认的持仓最高价、当日收盘价和昨日收盘价，不读取未来行情。

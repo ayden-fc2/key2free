@@ -10,6 +10,10 @@ import pandas as pd
 from app.entities.stock_data_context import StockDailyFrame
 from app.services.strategy_lifecycle import MarketViews, StrategyContext
 from strategies.sharp_rise_pullback_leader.strategy import (
+    CLOSE_WEAKNESS_MAX_DAILY_RETURN,
+    ENABLE_CLOSE_WEAKNESS_EXIT,
+    ENABLE_TRAILING_EXIT,
+    PROFIT_ACTIVATION_GAIN,
     SharpRisePullbackLeaderLifecycle,
     _buy_quantity,
     _calculate_buy_price,
@@ -185,6 +189,12 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
             signal=self.signal,
         )
 
+    def test_default_profit_exit_uses_close_weakness_only(self) -> None:
+        self.assertFalse(ENABLE_TRAILING_EXIT)
+        self.assertTrue(ENABLE_CLOSE_WEAKNESS_EXIT)
+        self.assertAlmostEqual(PROFIT_ACTIVATION_GAIN, 0.06)
+        self.assertAlmostEqual(CLOSE_WEAKNESS_MAX_DAILY_RETURN, 0.015)
+
     @patch(
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
@@ -282,6 +292,7 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
+    @patch("strategies.sharp_rise_pullback_leader.strategy.ENABLE_TRAILING_EXIT", True)
     def test_trailing_drawdown_is_inactive_below_6pct_profit(self, _minute_bars: object) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
@@ -304,6 +315,7 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         "strategies.sharp_rise_pullback_leader.strategy._load_qfq_5min_bars",
         return_value=(),
     )
+    @patch("strategies.sharp_rise_pullback_leader.strategy.ENABLE_TRAILING_EXIT", True)
     def test_trailing_drawdown_activates_after_6pct_profit(self, _minute_bars: object) -> None:
         holding = SimpleNamespace(
             buy_trade_index=0,
@@ -320,7 +332,11 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         decisions = self.lifecycle.decide_sells(context=context, market=market)
 
         self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0].reason, "profit_6pct_then_high_drawdown_4pct")
+        activation_percent = int(round(PROFIT_ACTIVATION_GAIN * 100))
+        self.assertEqual(
+            decisions[0].reason,
+            f"profit_{activation_percent}pct_then_high_drawdown_4pct",
+        )
         self.assertAlmostEqual(decisions[0].price, 105.6)
 
     @patch("strategies.sharp_rise_pullback_leader.strategy.ENABLE_TRAILING_EXIT", False)
@@ -337,8 +353,13 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
             buy_trade_index=0,
             buy_price=100.0,
             quantity=100,
-            max_high_since_buy=106.0,
-            signal={"extras": {"l_low": 90.0, "highest_price_since_buy": 106.0}},
+            max_high_since_buy=100.0 * (1.0 + PROFIT_ACTIVATION_GAIN),
+            signal={
+                "extras": {
+                    "l_low": 90.0,
+                    "highest_price_since_buy": 100.0 * (1.0 + PROFIT_ACTIVATION_GAIN),
+                }
+            },
         )
         context = self._context(trade_index=1, holdings={"sh.600000": holding})
         market = MarketViews(
@@ -348,7 +369,11 @@ class SharpRisePullbackLeaderLifecycleTests(unittest.TestCase):
         decisions = self.lifecycle.decide_sells(context=context, market=market)
 
         self.assertEqual(len(decisions), 1)
-        self.assertEqual(decisions[0].reason, "profit_6pct_then_daily_return_at_or_below_1_5pct")
+        activation_percent = int(round(PROFIT_ACTIVATION_GAIN * 100))
+        self.assertEqual(
+            decisions[0].reason,
+            f"profit_{activation_percent}pct_then_daily_return_at_or_below_1_5pct",
+        )
         self.assertAlmostEqual(decisions[0].price, 101.5)
 
     @patch(

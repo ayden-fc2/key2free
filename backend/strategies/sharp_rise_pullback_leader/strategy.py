@@ -34,8 +34,8 @@ T_CLOSE_STOP_MULTIPLE = 0.90
 WATCH_MAX_DAYS = 5
 PROFIT_ACTIVATION_GAIN = 0.06
 PROFIT_ACTIVATION_MULTIPLE = 1.0 + PROFIT_ACTIVATION_GAIN
-ENABLE_TRAILING_EXIT = True
-ENABLE_CLOSE_WEAKNESS_EXIT = False
+ENABLE_TRAILING_EXIT = False
+ENABLE_CLOSE_WEAKNESS_EXIT = True
 CLOSE_WEAKNESS_MAX_DAILY_RETURN = 0.015
 TRAILING_DRAWDOWN = 0.04
 TRAILING_REMAINING_MULTIPLE = 1.0 - TRAILING_DRAWDOWN
@@ -239,6 +239,69 @@ class SharpRisePullbackLeaderLifecycle:
             return None
 
         code_name = None if pd.isna(row.get("name")) else str(row.get("name"))
+        activation_percent = _profit_activation_percent()
+        activation_multiple = 1.0 + PROFIT_ACTIVATION_GAIN
+        sell_rules = [
+            {
+                "name": "结构与T日价格约束收盘止损",
+                "rule_type": "static",
+                "timing": "收盘",
+                "trigger_price": float(stop_loss_price),
+                "sell_price": "当日前复权收盘价",
+                "description": "持仓日收盘价小于等于 max(L_low, T_close × 0.90) 时，按当日收盘价卖出。",
+            }
+        ]
+        display_sell_rules = [
+            f"收盘止损：持仓日收盘价小于等于 {stop_loss_price:.3f}"
+            "（L_low 与 T_close × 0.90 取高），按收盘价卖出。"
+        ]
+        exit_rule_parts = ["close<=max(L low, T close*0.90) at close"]
+        if ENABLE_TRAILING_EXIT:
+            sell_rules.append(
+                {
+                    "name": f"浮盈 {activation_percent}% 后最高价回撤止盈",
+                    "rule_type": "dynamic",
+                    "timing": "盘中",
+                    "trigger_price": (
+                        f"已确认最高价达到买入价 × {activation_multiple:.2f} 后，最高价 × 0.96"
+                    ),
+                    "sell_price": "回撤 4% 触发价；跳空低于触发价时按当时开盘价",
+                    "description": (
+                        f"买入后已确认最高价达到买入价的 {activation_multiple:.0%} 才激活；"
+                        "此后回撤达到 4% 时卖出。"
+                    ),
+                }
+            )
+            display_sell_rules.append(
+                f"动态止盈：买入后已确认最高价累计上涨达到 {activation_percent}% 后，"
+                "冲高回落 4% 时卖出。"
+            )
+            exit_rule_parts.append(
+                f"after confirmed high reaches {activation_multiple:.2f} of buy price, "
+                "sell on a 4% drawdown"
+            )
+        if ENABLE_CLOSE_WEAKNESS_EXIT:
+            sell_rules.append(
+                {
+                    "name": f"浮盈 {activation_percent}% 后收盘走弱退出",
+                    "rule_type": "dynamic",
+                    "timing": "收盘",
+                    "trigger_price": "当日收盘涨幅 <= 1.5%",
+                    "sell_price": "当日前复权收盘价",
+                    "description": (
+                        f"已确认最高价达到买入价的 {activation_multiple:.0%} 后，"
+                        "若当日收盘价相对昨收涨幅不超过 1.5%，按收盘价卖出。"
+                    ),
+                }
+            )
+            display_sell_rules.append(
+                f"收盘走弱：累计浮盈达到 {activation_percent}% 后，当日收盘涨幅不超过 1.5%，"
+                "按收盘价卖出。"
+            )
+            exit_rule_parts.append(
+                f"after confirmed high reaches {activation_multiple:.2f} of buy price, "
+                "sell at close when daily close return<=1.5%"
+            )
         extras = {
             "pattern": "sharp_rise_pullback_leader",
             "t_date": trade_date.isoformat(),
@@ -276,33 +339,13 @@ class SharpRisePullbackLeaderLifecycle:
                 "observe T+1 through T+5; invalidate if low<=L low; buy at bug_price only when the "
                 "observation-day range covers it; remove a full-day gap above bug_price"
             ),
-            "exit_rule": (
-                "close<=max(L low, T close*0.90) at close; otherwise, after confirmed holding high "
-                "reaches 106% of buy price, sell on a 4% drawdown from the confirmed holding high"
-            ),
+            "exit_rule": "; otherwise, ".join(exit_rule_parts),
         }
         signal_payload = {
             "triggered": True,
             "signal_close": float(t_close),
             "entry_trigger_price": float(bug_price),
-            "sell_rules": [
-                {
-                    "name": "结构与T日价格约束收盘止损",
-                    "rule_type": "static",
-                    "timing": "收盘",
-                    "trigger_price": float(stop_loss_price),
-                    "sell_price": "当日前复权收盘价",
-                    "description": "持仓日收盘价小于等于 max(L_low, T_close × 0.90) 时，按当日收盘价卖出。",
-                },
-                {
-                    "name": "浮盈 6% 后最高价回撤止盈",
-                    "rule_type": "dynamic",
-                    "timing": "盘中",
-                    "trigger_price": "已确认最高价达到买入价 × 1.06 后，最高价 × 0.96",
-                    "sell_price": "回撤 4% 触发价；跳空低于触发价时按当时开盘价",
-                    "description": "买入后已确认最高价达到买入价的 106% 才激活；此后回撤达到 4% 时卖出。",
-                },
-            ],
+            "sell_rules": sell_rules,
             "max_watch_days": WATCH_MAX_DAYS,
             "display": {
                 "title": "龙头冲高回踩策略",
@@ -314,11 +357,7 @@ class SharpRisePullbackLeaderLifecycle:
                     f"观察日最低价小于等于 L_low {l_low:.3f}，或全天持续位于买入价上方且未回踩，"
                     "则收盘后移出观察池。"
                 ),
-                "sell": [
-                    f"收盘止损：持仓日收盘价小于等于 {stop_loss_price:.3f}"
-                    "（L_low 与 T_close × 0.90 取高），按收盘价卖出。",
-                    "动态止盈：买入后已确认最高价累计上涨达到 6% 后，冲高回落 4% 时卖出。",
-                ],
+                "sell": display_sell_rules,
             },
             "extras": extras,
         }
@@ -378,7 +417,7 @@ class SharpRisePullbackLeaderLifecycle:
                         code=code,
                         price=trailing_price,
                         quantity=int(holding.quantity),
-                        reason="profit_6pct_then_high_drawdown_4pct",
+                        reason=f"profit_{_profit_activation_percent()}pct_then_high_drawdown_4pct",
                     )
                 )
                 continue
@@ -408,7 +447,10 @@ class SharpRisePullbackLeaderLifecycle:
                             code=code,
                             price=today_close,
                             quantity=int(holding.quantity),
-                            reason="profit_6pct_then_daily_return_at_or_below_1_5pct",
+                            reason=(
+                                f"profit_{_profit_activation_percent()}pct_then_"
+                                "daily_return_at_or_below_1_5pct"
+                            ),
                         )
                     )
                     continue
@@ -565,6 +607,10 @@ def _latest_extreme_index(
 
 def _calculate_buy_price(*, t_close: float, t_ma10: float) -> float:
     return max(t_ma10, t_close * BUY_T_CLOSE_CONFIRMATION_MULTIPLE)
+
+
+def _profit_activation_percent() -> int:
+    return int(round(PROFIT_ACTIVATION_GAIN * 100))
 
 
 def _calculate_stop_loss_price(*, l_low: float, t_close: float) -> float:
